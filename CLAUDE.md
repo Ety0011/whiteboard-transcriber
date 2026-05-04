@@ -89,8 +89,8 @@ WhiteboardTranscriber/
 
 ```bash
 swift build                         # compile the package
-swift test                          # run all unit tests
-swift test --filter RegistrationTests  # run a single test suite
+xcodebuild test -scheme WhiteboardTranscriber -destination 'platform=macOS'  # run tests
+xcodebuild test -scheme WhiteboardTranscriber -only-testing:ChangeDetectionTests  # single suite
 python Scripts/convert_yolo.py      # export YOLOv11n → Models/yolo11n_layout.mlpackage
 python Scripts/convert_trocr.py     # export TrOCR-small → Models/trocr_small.mlpackage
 ```
@@ -101,6 +101,7 @@ python Scripts/convert_trocr.py     # export TrOCR-small → Models/trocr_small.
 - Use `async/await` and `TaskGroup` for concurrency — no raw GCD unless interfacing directly with AVFoundation or Metal command queues
 - Metal kernels live in `Shaders/`; their Swift wrappers live in the matching `Sources/` module
 - All `MTLBuffer` allocations use `.storageModeShared` (unified memory — no CPU↔GPU copies)
+- `CVPixelBuffer` and `MTLBuffer` are not `Sendable` — wrap in `@unchecked Sendable` containers when crossing actor boundaries
 - Use `VNSequenceRequestHandler` (not `VNImageRequestHandler`) for streaming Vision requests — it enables temporal smoothing
 - Each stage must be testable in isolation using fixture images — no integration-only code
 - Keep functions short and single-purpose; prefer composition over inheritance
