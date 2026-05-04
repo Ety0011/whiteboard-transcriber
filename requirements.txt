@@ -1,0 +1,14 @@
+ruff
+opencv-python
+numpy
+Pillow
+scipy
+scikit-learn
+paddlepaddle
+paddleocr
+pyclipper
+pypdfium2
+python-bidi
+imagesize
+shapely
+ultralytics
