@@ -1,10 +1,21 @@
 """Tests for Stage 1 — Spatial Registration (src/registration.py).
 
-All tests use synthetic fixture images so no camera is required.
+SAM2 model loading is mocked in all tests so no model download or GPU is
+required. Tests are split into two groups:
+
+1. Geometric tests — call ``Registrar._mask_to_corners`` and ``_sort_corners``
+   directly. No mocking needed; these are pure NumPy/OpenCV functions.
+
+2. Pipeline tests — instantiate ``Registrar`` via ``_make_registrar()``
+   (which patches ``SAM.__init__``) and drive ``process()`` by either
+   pre-populating the corner cache or patching ``_detect_corners``.
 """
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
+import cv2
 import numpy as np
 import pytest
 
@@ -12,121 +23,197 @@ from src.registration import Registrar
 
 
 # ---------------------------------------------------------------------------
-# Output shape / dtype
+# Helpers
 # ---------------------------------------------------------------------------
 
 
-def test_output_shape_blank(blank_board: np.ndarray) -> None:
-    """process() always returns an image of the canonical output size."""
-    result = Registrar().process(blank_board)
-    assert result.shape == (720, 1280, 3)
+def _make_registrar(**kwargs) -> Registrar:
+    """Return a Registrar with SAM model loading patched out."""
+    with patch("src.registration.SAM"):
+        return Registrar(**kwargs)
 
 
-def test_output_dtype_blank(blank_board: np.ndarray) -> None:
-    """process() output is uint8 BGR."""
-    result = Registrar().process(blank_board)
-    assert result.dtype == np.uint8
+def _make_quad_mask(
+    h: int, w: int, corners: np.ndarray
+) -> np.ndarray:
+    """Return a binary uint8 mask with a filled quadrilateral at *corners*."""
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillPoly(mask, [corners.astype(np.int32)], 1)
+    return mask
 
 
 # ---------------------------------------------------------------------------
-# Board detection on a synthetic perspective frame
+# Geometric tests — _mask_to_corners (no mocking required)
 # ---------------------------------------------------------------------------
 
 
-def test_warp_on_synthetic_board(
+def test_mask_to_corners_synthetic() -> None:
+    """Clean quad mask → exactly 4 corners returned."""
+    corners = np.array([[150, 80], [1100, 50], [1130, 640], [120, 660]], np.int32)
+    mask = _make_quad_mask(720, 1280, corners)
+    result = Registrar._mask_to_corners(mask)
+    assert result is not None
+    assert result.shape == (4, 2)
+    assert result.dtype == np.float32
+
+
+def test_mask_to_corners_empty_mask() -> None:
+    """All-zero mask → None (no contour to extract)."""
+    mask = np.zeros((100, 100), dtype=np.uint8)
+    assert Registrar._mask_to_corners(mask) is None
+
+
+def test_mask_to_corners_single_pixel() -> None:
+    """A single-pixel mask has no meaningful polygon → None."""
+    mask = np.zeros((100, 100), dtype=np.uint8)
+    mask[50, 50] = 1
+    assert Registrar._mask_to_corners(mask) is None
+
+
+def test_sort_corners_order() -> None:
+    """_sort_corners returns TL, TR, BR, BL regardless of input order."""
+    pts = np.array(
+        [[1100, 50], [120, 660], [150, 80], [1130, 640]], dtype=np.float32
+    )
+    rect = Registrar._sort_corners(pts)
+    tl, tr, br, bl = rect
+    assert tl[0] < tr[0]  # TL is left of TR
+    assert bl[0] < br[0]  # BL is left of BR
+    assert tl[1] < bl[1]  # TL is above BL
+    assert tr[1] < br[1]  # TR is above BR
+
+
+# ---------------------------------------------------------------------------
+# Pipeline tests — output shape / dtype / fallback
+# ---------------------------------------------------------------------------
+
+
+def test_output_shape_no_detection(blank_board: np.ndarray) -> None:
+    """With no board detected the fallback resize still returns output_size."""
+    r = _make_registrar()
+    with patch.object(r, "_detect_corners", return_value=None):
+        assert r.process(blank_board).shape == (720, 1280, 3)
+
+
+def test_output_dtype_no_detection(blank_board: np.ndarray) -> None:
+    """Output dtype is always uint8."""
+    r = _make_registrar()
+    with patch.object(r, "_detect_corners", return_value=None):
+        assert r.process(blank_board).dtype == np.uint8
+
+
+def test_output_shape_with_known_corners(
     synthetic_board_frame: tuple[np.ndarray, np.ndarray],
 ) -> None:
-    """process() detects the synthetic board, updates the homography cache,
-    and returns an image at the canonical resolution."""
-    frame, _ = synthetic_board_frame
-    r = Registrar()
-    result = r.process(frame)
-
-    assert result.shape == (720, 1280, 3)
-    assert result.dtype == np.uint8
-    assert r._homography is not None, "Homography should be cached after detection"
-    assert r._cached_corners is not None
+    """With pre-set corners, warp produces the canonical output shape."""
+    frame, corners = synthetic_board_frame
+    r = _make_registrar()
+    sorted_c = Registrar._sort_corners(corners)
+    r._cached_corners = sorted_c
+    r._homography = r._compute_homography(sorted_c)
+    # Suppress detection so the pre-set homography is used as-is
+    with patch.object(r, "_detect_corners", return_value=None):
+        assert r.process(frame).shape == (720, 1280, 3)
 
 
 def test_warp_output_is_mostly_light(
     synthetic_board_frame: tuple[np.ndarray, np.ndarray],
 ) -> None:
-    """After warping a frame whose board is off-white, the output should be
-    predominantly light (mean brightness > 128)."""
-    frame, _ = synthetic_board_frame
-    result = Registrar().process(frame)
-    assert result.mean() > 128, "Warped board should be predominantly bright"
+    """Warping a frame whose board is off-white should produce a bright output."""
+    frame, corners = synthetic_board_frame
+    r = _make_registrar()
+    sorted_c = Registrar._sort_corners(corners)
+    r._cached_corners = sorted_c
+    r._homography = r._compute_homography(sorted_c)
+    with patch.object(r, "_detect_corners", return_value=None):
+        assert r.process(frame).mean() > 128
 
 
 # ---------------------------------------------------------------------------
-# Homography caching
+# Pipeline tests — detection flow via patched _detect_corners
 # ---------------------------------------------------------------------------
+
+
+def test_homography_set_after_detection(
+    synthetic_board_frame: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """When _detect_corners returns corners, the homography cache is populated."""
+    frame, corners = synthetic_board_frame
+    r = _make_registrar()
+    with patch.object(r, "_detect_corners", return_value=corners):
+        r.process(frame)
+    assert r._homography is not None
+    assert r._cached_corners is not None
 
 
 def test_homography_cached_on_second_call(
     synthetic_board_frame: tuple[np.ndarray, np.ndarray],
 ) -> None:
-    """The cached corners object must be identical (same id) after a second
-    call with the same frame — no recomputation should occur."""
-    frame, _ = synthetic_board_frame
-    r = Registrar()
-
-    r.process(frame)
-    corners_after_first = r._cached_corners
-
-    r.process(frame)
-    corners_after_second = r._cached_corners
-
-    # Same object in memory → no recompute
-    assert corners_after_first is corners_after_second
+    """_cached_corners must be the same object on consecutive calls with the
+    same corners (no recompute if nothing shifted)."""
+    frame, corners = synthetic_board_frame
+    r = _make_registrar(recompute_every=1)  # detect every call for this test
+    with patch.object(r, "_detect_corners", return_value=corners.copy()):
+        r.process(frame)
+        first = r._cached_corners
+        r.process(frame)
+        second = r._cached_corners
+    assert first is second
 
 
 def test_cache_invalidation_on_shifted_corners(
     synthetic_board_frame: tuple[np.ndarray, np.ndarray],
 ) -> None:
-    """When we manually shift the cached corners by > threshold, the next
-    call must recompute and produce a new homography array."""
-    frame, _ = synthetic_board_frame
-    r = Registrar(cache_threshold=20.0)
+    """Corners shifted > threshold must trigger a new homography object."""
+    frame, corners = synthetic_board_frame
+    r = _make_registrar(recompute_every=1)
+    with patch.object(r, "_detect_corners", return_value=corners.copy()):
+        r.process(frame)
+    original_H = r._homography
 
-    r.process(frame)
-    original_homography = r._homography
-
-    # Shift cached corners far enough to exceed the threshold
-    assert r._cached_corners is not None
-    r._cached_corners = r._cached_corners + 50.0  # +50 px shift
-
-    r.process(frame)
-    new_homography = r._homography
-
-    assert new_homography is not original_homography, (
-        "Homography must be recomputed when cached corners shift beyond threshold"
-    )
+    shifted = corners.copy() + 50.0  # well beyond 20 px threshold
+    with patch.object(r, "_detect_corners", return_value=shifted):
+        r.process(frame)
+    assert r._homography is not original_H
 
 
-# ---------------------------------------------------------------------------
-# Debug mode
-# ---------------------------------------------------------------------------
+def test_recompute_interval_respected(
+    synthetic_board_frame: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """_detect_corners is called only on the first frame and then every
+    recompute_every frames, not on every single call."""
+    frame, corners = synthetic_board_frame
+    r = _make_registrar(recompute_every=5)
+
+    call_count = 0
+
+    def counting_detect(f: np.ndarray):
+        nonlocal call_count
+        call_count += 1
+        return corners.copy()
+
+    with patch.object(r, "_detect_corners", side_effect=counting_detect):
+        for _ in range(11):  # 11 calls: detect on call 1, 6, 11
+            r.process(frame)
+
+    assert call_count == 3
 
 
 def test_debug_mode_no_crash(
     synthetic_board_frame: tuple[np.ndarray, np.ndarray],
 ) -> None:
-    """Registrar(debug=True).process() completes without exception and
-    returns the canonical output shape."""
-    frame, _ = synthetic_board_frame
-    result = Registrar(debug=True).process(frame)
+    """debug=True completes without exception and returns the canonical shape."""
+    frame, corners = synthetic_board_frame
+    r = _make_registrar(debug=True)
+    with patch.object(r, "_detect_corners", return_value=corners):
+        result = r.process(frame)
     assert result.shape == (720, 1280, 3)
 
 
-# ---------------------------------------------------------------------------
-# Fallback when no board is detected
-# ---------------------------------------------------------------------------
-
-
 def test_fallback_returns_output_size_when_no_board() -> None:
-    """A featureless gray frame has no detectable board quad. process() must
-    still return an image at the canonical size (resized fallback)."""
+    """Detection returning None falls back to resize, still correct shape."""
     plain_gray = np.full((720, 1280, 3), 128, dtype=np.uint8)
-    result = Registrar().process(plain_gray)
+    r = _make_registrar()
+    with patch.object(r, "_detect_corners", return_value=None):
+        result = r.process(plain_gray)
     assert result.shape == (720, 1280, 3)
