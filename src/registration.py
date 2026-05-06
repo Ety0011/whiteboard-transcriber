@@ -181,6 +181,9 @@ class Registrar:
 
         # SAM2 may return multiple candidate masks — take the largest area.
         masks = results[0].masks.data.cpu().numpy()  # (N, H, W) float
+        if masks.shape[0] == 0:
+            logger.debug("SAM2 returned empty mask tensor")
+            return None
         areas = masks.sum(axis=(1, 2))
         best = (masks[areas.argmax()] > 0.5).astype(np.uint8)
 
