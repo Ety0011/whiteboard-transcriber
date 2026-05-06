@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -62,7 +63,8 @@ class Registrar:
         self._recompute_every = recompute_every
         self.debug = debug
 
-        self._sam = SAM("sam2.1_t.pt")
+        _model = Path(__file__).parent.parent / "models" / "sam2.1_t.pt"
+        self._sam = SAM(str(_model))
         # Start counter at recompute_every so detection fires on the first call.
         self._calls_since_detect: int = recompute_every
 
