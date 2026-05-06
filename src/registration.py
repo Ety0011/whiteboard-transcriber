@@ -22,6 +22,7 @@ Typical usage::
 from __future__ import annotations
 
 import logging
+import threading
 
 import cv2
 import numpy as np
@@ -67,6 +68,17 @@ class Registrar:
 
         self._homography: np.ndarray | None = None
         self._cached_corners: np.ndarray | None = None  # (4, 2) float32, TL/TR/BR/BL
+        self._lock = threading.Lock()  # guards _homography and _cached_corners
+
+        self._detecting: bool = False
+        self._pending_frame: np.ndarray | None = None
+        self._detect_event = threading.Event()
+        self._detect_thread = threading.Thread(
+            target=self._detection_loop,
+            daemon=True,
+            name="sam2-detect",
+        )
+        self._detect_thread.start()
 
     # ------------------------------------------------------------------
     # Public
@@ -74,6 +86,9 @@ class Registrar:
 
     def process(self, frame: np.ndarray) -> np.ndarray:
         """Warp *frame* to remove perspective distortion.
+
+        SAM2 detection is fired asynchronously on a background thread every
+        ``recompute_every`` calls; this method never blocks on inference.
 
         Args:
             frame: BGR uint8 image captured from the camera.
@@ -83,29 +98,59 @@ class Registrar:
             Falls back to a centred resize if no board has ever been detected.
         """
         self._calls_since_detect += 1
-        should_detect = (
-            self._homography is None
-            or self._calls_since_detect >= self._recompute_every
-        )
 
-        if should_detect:
+        if self._calls_since_detect >= self._recompute_every and not self._detecting:
             self._calls_since_detect = 0
-            corners = self._detect_corners(frame)
-            if corners is not None:
-                sorted_corners = self._sort_corners(corners)
-                if self._cached_corners is None or self._corners_shifted(sorted_corners):
-                    self._homography = self._compute_homography(sorted_corners)
-                    self._cached_corners = sorted_corners
-                    logger.debug("Homography updated — corners: %s", sorted_corners)
+            self._pending_frame = frame
+            self._detecting = True
+            self._detect_event.set()
 
-        if self.debug and self._cached_corners is not None:
-            frame = self._draw_debug(frame.copy(), self._cached_corners)
+        with self._lock:
+            homography = self._homography
+            cached_corners = self._cached_corners
 
-        if self._homography is None:
+        if self.debug and cached_corners is not None:
+            frame = self._draw_debug(frame.copy(), cached_corners)
+
+        if homography is None:
             logger.debug("No board detected yet — returning resized frame")
             return cv2.resize(frame, self._output_size)
 
-        return cv2.warpPerspective(frame, self._homography, self._output_size)
+        return cv2.warpPerspective(frame, homography, self._output_size)
+
+    # ------------------------------------------------------------------
+    # Background detection thread
+    # ------------------------------------------------------------------
+
+    def _detection_loop(self) -> None:
+        """Daemon thread: blocks on _detect_event, runs SAM2, updates homography."""
+        while True:
+            self._detect_event.wait()
+            self._detect_event.clear()
+
+            frame = self._pending_frame
+            if frame is None:
+                self._detecting = False
+                continue
+
+            try:
+                corners = self._detect_corners(frame)
+                if corners is not None:
+                    sorted_corners = self._sort_corners(corners)
+                    with self._lock:
+                        if (
+                            self._cached_corners is None
+                            or self._corners_shifted(sorted_corners)
+                        ):
+                            self._homography = self._compute_homography(sorted_corners)
+                            self._cached_corners = sorted_corners
+                            logger.debug(
+                                "Homography updated — corners: %s", sorted_corners
+                            )
+            except Exception:
+                logger.exception("SAM2 detection failed")
+            finally:
+                self._detecting = False
 
     # ------------------------------------------------------------------
     # Detection
