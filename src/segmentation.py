@@ -72,7 +72,7 @@ class Segmenter:
         self,
         model_path: Path | None = None,
         threshold: float = 0.5,
-        dilation_px: int = 12,
+        dilation_px: int = 0,
     ) -> None:
         """
         Args:
@@ -155,7 +155,7 @@ class Segmenter:
         # selfie_segmenter_landscape outputs one mask where high confidence = person.
         # Index 0 is used whether the model returns 1 or 2 masks, because empirically
         # the landscape model's single output represents person probability directly.
-        return np.array(masks[0].numpy_view())
+        return np.array(masks[0].numpy_view()).squeeze()
 
 
 # ---------------------------------------------------------------------------
