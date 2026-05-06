@@ -11,8 +11,9 @@ Usage::
 
 Keyboard controls:
     q  — quit
-    d  — toggle Stage 1 debug overlay (detected board corners + quad)
-    s  — toggle Stage 2 person-mask overlay (semi-transparent red)
+    d  — toggle Stage 1 corner overlay: shows raw camera frame with detected
+         quad drawn on it so you can verify corner positions before warping
+    s  — toggle Stage 2 person-mask overlay (semi-transparent red, warped view)
 """
 
 from __future__ import annotations
@@ -23,37 +24,64 @@ import sys
 import cv2
 import numpy as np
 
-from src.capture import process as start_camera
-from src.registration import Registrar
-from src.segmentation import Segmenter
+from capture import process as start_camera
+from registration import Registrar
+from segmentation import Segmenter
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+_LABELS = ["TL", "TR", "BR", "BL"]
+
+
+def _video_fps(source: int | str) -> float:
+    """Return the native FPS of *source*, or 30.0 if it cannot be determined."""
+    cap = cv2.VideoCapture(source)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    cap.release()
+    return fps if fps > 0 else 30.0
+
 
 def _apply_mask_overlay(frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """Blend a semi-transparent red highlight over *frame* where *mask* is 1.
-
-    Args:
-        frame: BGR uint8 image to annotate.
-        mask: Binary uint8 mask (H, W), values 0 or 1.
-
-    Returns:
-        New BGR image with red overlay applied.
-    """
+    """Blend a semi-transparent red highlight over *frame* where *mask* is 1."""
     overlay = frame.copy()
-    overlay[mask == 1] = (0, 0, 220)  # red in BGR
+    overlay[mask == 1] = (0, 0, 220)
     return cv2.addWeighted(frame, 0.65, overlay, 0.35, 0)
 
 
-def main(source: int | str = 0) -> None:
-    """Run the Stage 0 + 1 + 2 preview loop.
+def _draw_corners_on_raw(frame: np.ndarray, registrar: Registrar) -> np.ndarray:
+    """Return a copy of the raw camera *frame* with the detected quad drawn on it."""
+    out = frame.copy()
+    corners = registrar._cached_corners  # (4,2) float32, TL/TR/BR/BL
 
-    Args:
-        source: Camera device index or path to a video file.
-    """
+    if corners is None:
+        cv2.putText(
+            out, "No board detected", (40, 60),
+            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 220), 2,
+        )
+        return out
+
+    pts = corners.astype(np.int32)
+    cv2.polylines(
+        out, [pts.reshape(-1, 1, 2)], isClosed=True, color=(0, 0, 220), thickness=3
+    )
+    for i, (x, y) in enumerate(pts):
+        cv2.circle(out, (int(x), int(y)), 12, (0, 200, 0), -1)
+        cv2.putText(
+            out, _LABELS[i],
+            (int(x) + 14, int(y) - 10),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2,
+        )
+    return out
+
+
+def main(source: int | str = 0) -> None:
+    """Run the Stage 0 + 1 + 2 preview loop."""
+    fps = _video_fps(source)
+    wait_ms = max(1, int(1000 / fps))
+
     frame_queue = start_camera(source)
-    registrar = Registrar(debug=False)
+    registrar = Registrar()
 
     print("Initialising MediaPipe segmenter (first load may take a moment)…")
     segmenter = Segmenter()
@@ -63,24 +91,28 @@ def main(source: int | str = 0) -> None:
 
     print(
         "Stage 1+2 preview running.\n"
-        "  d — toggle board-corner overlay\n"
+        "  d — toggle corner overlay (raw camera view with detected quad)\n"
         "  s — toggle person-mask overlay\n"
         "  q — quit"
     )
 
     while True:
-        frame = frame_queue.get()  # blocks until a frame is available
+        frame = frame_queue.get()
+        if frame is None:
+            logger.info("End of stream — exiting")
+            break
 
-        registrar.debug = show_corners
         warped = registrar.process(frame)
 
-        mask = segmenter.process(warped)
+        if show_corners:
+            display = _draw_corners_on_raw(frame, registrar)
+        else:
+            mask = segmenter.process(warped)
+            display = _apply_mask_overlay(warped, mask) if show_mask else warped
 
-        display = _apply_mask_overlay(warped, mask) if show_mask else warped
+        cv2.imshow("Stage 1+2", display)
 
-        cv2.imshow("Stage 1+2 — Warped Board / Person Mask", display)
-
-        key = cv2.waitKey(1) & 0xFF
+        key = cv2.waitKey(wait_ms) & 0xFF
         if key == ord("q"):
             break
         if key == ord("d"):
