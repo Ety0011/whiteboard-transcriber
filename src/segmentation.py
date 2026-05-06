@@ -152,11 +152,10 @@ class Segmenter:
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         result = self._segmenter.segment(mp_image)
         masks = result.confidence_masks
-        if len(masks) >= 2:
-            # Landscape selfie segmenter: index 0 = background, 1 = person
-            return np.array(masks[1].numpy_view())
-        # Fallback for single-output models: invert the background confidence
-        return 1.0 - np.array(masks[0].numpy_view())
+        # selfie_segmenter_landscape outputs one mask where high confidence = person.
+        # Index 0 is used whether the model returns 1 or 2 masks, because empirically
+        # the landscape model's single output represents person probability directly.
+        return np.array(masks[0].numpy_view())
 
 
 # ---------------------------------------------------------------------------
