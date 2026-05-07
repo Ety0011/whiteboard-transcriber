@@ -134,5 +134,5 @@ def main(source: int | str = 0) -> None:
 
 if __name__ == "__main__":
     raw = sys.argv[1] if len(sys.argv) > 1 else "0"
-    src: int | str = int(raw) if raw.isdigit() else raw
+    src = int(raw) if raw.isdigit() else raw
     main(src)
