@@ -33,7 +33,7 @@ from src.registration import Registrar
 
 def _make_registrar(**kwargs) -> Registrar:
     """Return a Registrar with both SAM model loads patched out."""
-    with patch("src.registration.SAM"):
+    with patch("src.registration.SAM"), patch("src.registration.SAM3SemanticPredictor"):
         return Registrar(**kwargs)
 
 
@@ -230,17 +230,14 @@ def test_fallback_returns_output_size_when_no_board() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_detect_corners_uses_center_point_prompt(blank_board: np.ndarray) -> None:
-    """_detect_corners must call SAM 3 with a centre-point prompt."""
+def test_detect_corners_uses_text_prompt(blank_board: np.ndarray) -> None:
+    """_detect_corners must use set_image() then query text=['whiteboard']."""
     r = _make_registrar()
     mock_result = MagicMock()
     mock_result.masks = None
     r._sam.return_value = [mock_result]
     r._detect_corners(blank_board)
-    h, w = blank_board.shape[:2]
-    r._sam.assert_called_once_with(
-        blank_board, points=[[w // 2, h // 2]], labels=[1], imgsz=1036, verbose=False
-    )
+    r._sam.assert_called_once_with(blank_board, text=["whiteboard"])
 
 
 def test_detect_corners_stores_last_mask(blank_board: np.ndarray) -> None:

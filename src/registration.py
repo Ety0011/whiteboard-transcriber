@@ -30,6 +30,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from ultralytics import SAM
+from ultralytics.models.sam import SAM3SemanticPredictor
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,16 @@ class Registrar:
         self._iou_threshold = iou_threshold
 
         _model = Path(__file__).parent.parent / "models" / sam_model
-        self._sam = SAM(str(_model))
+        self._sam: SAM3SemanticPredictor = SAM3SemanticPredictor(
+            overrides=dict(
+                model=str(_model),
+                task="segment",
+                mode="predict",
+                imgsz=644,   # nearest multiple of SAM 3's stride-14 above default 640
+                save=False,
+                verbose=False,
+            )
+        )
 
         _tracker = Path(__file__).parent.parent / "models" / tracker_model
         self._sam_tracker = SAM(str(_tracker))
@@ -214,6 +224,9 @@ class Registrar:
     def _detect_corners(self, frame: np.ndarray) -> np.ndarray | None:
         """Run SAM 3 with a text prompt and return the board quad.
 
+        Uses SAM3SemanticPredictor with the concept prompt "whiteboard" so
+        detection is location-independent — no point prompts needed.
+
         Stores the best segmentation mask in ``self._last_mask`` so the
         detection loop can promote it to ``_ref_mask`` after a successful
         homography update.
@@ -224,23 +237,19 @@ class Registrar:
         Returns:
             Corner array of shape ``(4, 2)`` as float32, or ``None``.
         """
-        h, w = frame.shape[:2]
-        results = self._sam(
-            frame, points=[[w // 2, h // 2]], labels=[1], imgsz=1036, verbose=False
-        )
+        results = self._sam(frame, text=["whiteboard"])
 
         if not results or results[0].masks is None:
-            logger.debug("SAM 3 returned no masks")
+            logger.debug("SAM 3 returned no masks for 'whiteboard'")
             return None
 
-        # SAM 3 may return multiple candidate masks — take the largest area.
-        masks = results[0].masks.data.cpu().numpy()  # (N, H, W) float
+        masks = results[0].masks.data.cpu().numpy()
         if masks.shape[0] == 0:
             logger.debug("SAM 3 returned empty mask tensor")
             return None
+
         areas = masks.sum(axis=(1, 2))
         best = (masks[areas.argmax()] > 0.5).astype(np.uint8)
-
         self._last_mask = best
         return self._mask_to_corners(best)
 
