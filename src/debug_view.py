@@ -1,7 +1,8 @@
-"""Dev tool — Stage 0 + Stage 1 + Stage 2 live preview.
+"""Dev tool — Stage 0 + Stage 1 + Stage 2 + Stage 3 live preview.
 
-Opens the camera (or a video file), runs perspective registration and
-person segmentation, and shows the results in a cv2.imshow window.
+Opens the camera (or a video file), runs perspective registration,
+person segmentation, and surface reconstruction, showing the results
+in cv2.imshow windows.
 
 Usage::
 
@@ -14,6 +15,7 @@ Keyboard controls:
     d  — toggle Stage 1 corner overlay: shows raw camera frame with detected
          quad drawn on it so you can verify corner positions before warping
     s  — toggle Stage 2 person-mask overlay (semi-transparent red, warped view)
+    b  — toggle Stage 3 background composite (separate window, side-by-side)
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ import sys
 import cv2
 import numpy as np
 
+from background import BackgroundReconstructor
 from capture import process as start_camera
 from registration import Registrar
 from segmentation import Segmenter
@@ -80,23 +83,26 @@ def _draw_corners(frame: np.ndarray, registrar: Registrar) -> np.ndarray:
 
 
 def main(source: int | str = 0) -> None:
-    """Run the Stage 0 + 1 + 2 preview loop."""
+    """Run the Stage 0 + 1 + 2 + 3 preview loop."""
     fps = _video_fps(source)
     wait_ms = max(1, int(1000 / fps))
 
     frame_queue = start_camera(source)
     registrar = Registrar()
 
-    print("Initialising MediaPipe segmenter (first load may take a moment)…")
+    print("Initialising MediaPipe segmenter (first load may take a moment)...")
     segmenter = Segmenter()
+    reconstructor = BackgroundReconstructor()
 
     show_corners = True
     show_mask = True
+    show_bg = True
 
     print(
-        "Stage 1+2 preview running.\n"
+        "Stage 1+2+3 preview running.\n"
         "  d — toggle detected board corners\n"
         "  s — toggle person-mask overlay\n"
+        "  b — toggle Stage 3 background composite (separate window)\n"
         "  q — quit"
     )
 
@@ -106,7 +112,7 @@ def main(source: int | str = 0) -> None:
             logger.info("End of stream — exiting")
             break
 
-        registrar.process(frame)
+        warped = registrar.process(frame)
 
         display = frame.copy()
 
@@ -119,6 +125,14 @@ def main(source: int | str = 0) -> None:
 
         cv2.imshow("Stage 1+2", display)
 
+        if show_bg:
+            bg_mask = segmenter.process(warped)
+            composite = reconstructor.process(warped, bg_mask)
+            thumb_w, thumb_h = 640, 360
+            left = cv2.resize(warped, (thumb_w, thumb_h))
+            right = cv2.resize(composite, (thumb_w, thumb_h))
+            cv2.imshow("Stage 3", np.hstack([left, right]))
+
         key = cv2.waitKey(wait_ms) & 0xFF
         if key == ord("q"):
             break
@@ -128,6 +142,11 @@ def main(source: int | str = 0) -> None:
         if key == ord("s"):
             show_mask = not show_mask
             logger.info("Mask overlay: %s", "ON" if show_mask else "OFF")
+        if key == ord("b"):
+            show_bg = not show_bg
+            if not show_bg:
+                cv2.destroyWindow("Stage 3")
+            logger.info("Background composite: %s", "ON" if show_bg else "OFF")
 
     cv2.destroyAllWindows()
 
