@@ -44,20 +44,29 @@ def process(source: int | str = 0) -> queue.Queue:
 
 
 def _camera_loop(source: int | str, frame_queue: queue.Queue) -> None:
-    """Capture loop — runs in daemon thread until the camera fails or closes."""
+    """Capture loop — runs in daemon thread until the camera fails or closes.
+
+    For video files the loop sleeps between reads so frames are consumed at the
+    file's native frame rate rather than instantly. For live cameras cap.read()
+    already blocks at the hardware rate so no additional sleep is needed.
+
+    A ``None`` sentinel is placed in the queue when the loop exits so that
+    consumers can detect end-of-stream without polling.
+    """
     cap = cv2.VideoCapture(source)
     if not cap.isOpened():
         logger.error("Cannot open camera source %r", source)
+        frame_queue.put(None)
         return
 
+    fps = cap.get(cv2.CAP_PROP_FPS)
     logger.info(
         "Camera opened: %.0fx%.0f @ %.0f fps",
         cap.get(cv2.CAP_PROP_FRAME_WIDTH),
         cap.get(cv2.CAP_PROP_FRAME_HEIGHT),
-        cap.get(cv2.CAP_PROP_FPS),
+        fps,
     )
 
-    fps = cap.get(cv2.CAP_PROP_FPS)
     # Throttle only for video files; live cameras block naturally in cap.read().
     frame_interval = (1.0 / fps) if (isinstance(source, str) and fps > 0) else 0.0
 

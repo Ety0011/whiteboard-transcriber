@@ -239,7 +239,7 @@ def test_detect_corners_uses_center_point_prompt(blank_board: np.ndarray) -> Non
     r._detect_corners(blank_board)
     h, w = blank_board.shape[:2]
     r._sam.assert_called_once_with(
-        blank_board, points=[[w // 2, h // 2]], labels=[1], verbose=False
+        blank_board, points=[[w // 2, h // 2]], labels=[1], imgsz=1036, verbose=False
     )
 
 

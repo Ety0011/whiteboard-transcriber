@@ -1,5 +1,6 @@
 .venv/
 models/
+videos/
 __pycache__/
 *.pyc
 output/*.md
