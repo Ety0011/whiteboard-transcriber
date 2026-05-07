@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 
 import cv2
 import numpy as np
@@ -56,11 +57,16 @@ def _camera_loop(source: int | str, frame_queue: queue.Queue) -> None:
         cap.get(cv2.CAP_PROP_FPS),
     )
 
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    # Throttle only for video files; live cameras block naturally in cap.read().
+    frame_interval = (1.0 / fps) if (isinstance(source, str) and fps > 0) else 0.0
+
     try:
         while True:
+            t0 = time.monotonic()
             ret, frame = cap.read()
             if not ret:
-                logger.warning("Frame read failed — stopping camera thread")
+                logger.info("End of stream for source %r", source)
                 break
             # Drain the stale frame (if any) then publish the latest
             try:
@@ -68,6 +74,10 @@ def _camera_loop(source: int | str, frame_queue: queue.Queue) -> None:
             except queue.Empty:
                 pass
             frame_queue.put(frame)
+            if frame_interval > 0:
+                elapsed = time.monotonic() - t0
+                time.sleep(max(0.0, frame_interval - elapsed))
     finally:
         cap.release()
+        frame_queue.put(None)  # sentinel: signals end-of-stream to consumers
         logger.info("Camera released")

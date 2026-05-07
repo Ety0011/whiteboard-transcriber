@@ -21,8 +21,8 @@ import sys
 
 import cv2
 
-from src.capture import process as start_camera
-from src.registration import Registrar
+from capture import process as start_camera
+from registration import Registrar
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -41,6 +41,10 @@ def main(source: int | str = 0) -> None:
 
     while True:
         frame = frame_queue.get()  # blocks until a frame is available
+        if frame is None:
+            logger.info("End of stream — exiting")
+            break
+
         warped = registrar.process(frame)
 
         cv2.imshow("Stage 1 — Warped Board", warped)
