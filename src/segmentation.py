@@ -72,7 +72,7 @@ class Segmenter:
         self,
         model_path: Path | None = None,
         threshold: float = 0.5,
-        dilation_px: int = 0,
+        dilation_px: int = 10,
     ) -> None:
         """
         Args:

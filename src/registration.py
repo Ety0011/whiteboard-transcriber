@@ -34,6 +34,7 @@ from ultralytics.models.sam import SAM3SemanticPredictor
 
 logger = logging.getLogger(__name__)
 
+# TODO: no reason to not make it general
 OUTPUT_SIZE: tuple[int, int] = (1280, 720)
 
 
@@ -46,6 +47,8 @@ class Registrar:
     cost minimal.
     """
 
+    # TODO: detection is not smart enough, it triggers when just one corner is outs
+    # only when all corners move it means whiteboard actually moved, otherwise its noise
     def __init__(
         self,
         output_size: tuple[int, int] = OUTPUT_SIZE,
@@ -85,7 +88,7 @@ class Registrar:
                 model=str(_model),
                 task="segment",
                 mode="predict",
-                imgsz=644,   # nearest multiple of SAM 3's stride-14 above default 640
+                imgsz=644,  # nearest multiple of SAM 3's stride-14 above default 640
                 save=False,
                 verbose=False,
             )
