@@ -59,13 +59,23 @@ def _draw_corners(frame: np.ndarray, registrar: Registrar) -> np.ndarray:
 
     if registrar._detecting:
         cv2.putText(
-            frame, "Detecting board...", (40, 60),
-            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 180, 220), 2,
+            frame,
+            "Detecting board...",
+            (40, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.2,
+            (0, 180, 220),
+            2,
         )
     elif corners is None:
         cv2.putText(
-            frame, "No board detected", (40, 60),
-            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 180, 220), 2,
+            frame,
+            "No board detected",
+            (40, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.2,
+            (0, 180, 220),
+            2,
         )
 
     if corners is None:

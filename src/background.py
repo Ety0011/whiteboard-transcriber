@@ -89,6 +89,27 @@ class BackgroundReconstructor:
         return composite
 
 
+class _ProgressiveBackgroundReconstructor:
+    """Alternative to MOG2: simple progressive last-seen buffer.
+
+    Every frame, board-visible pixels (mask==0) overwrite the buffer;
+    person-occluded pixels (mask==1) are left unchanged, preserving the
+    last known board content beneath them. Simpler and adapts instantly
+    to new writing, but takes raw noisy pixels with no temporal averaging.
+    """
+
+    def __init__(self) -> None:
+        self._background: np.ndarray | None = None
+
+    def process(self, frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        if self._background is None:
+            self._background = frame.copy()
+        self._background[mask == 0] = frame[mask == 0]
+        composite = frame.copy()
+        composite[mask == 1] = self._background[mask == 1]
+        return composite
+
+
 # ---------------------------------------------------------------------------
 # Module-level convenience
 # ---------------------------------------------------------------------------
