@@ -19,9 +19,11 @@ University project (1-month timeline). Prioritizes **accuracy over speed** — a
 - **Language:** Python 3.11+
 - **Computer vision:** OpenCV (`cv2`)
 - **Person segmentation:** MediaPipe Selfie Segmentation
-- **Layout detection:** DocLayout-YOLO or YOLOv11n (Ultralytics)
-- **OCR (primary):** EasyOCR
-- **OCR (fallback):** TrOCR-small-handwritten (HuggingFace Transformers)
+- **Text region detection:** CRAFT (`craft-text-detector`)
+- **Change detection:** DINOv2-small (`facebook/dinov2-small`, HuggingFace Transformers)
+- **OCR:** TrOCR-small-handwritten (`microsoft/trocr-small-handwritten`, HuggingFace Transformers)
+- **Equation OCR:** pix2tex (stubbed — `NotImplementedError`)
+- **Similarity:** scikit-learn `cosine_similarity`
 - **Concurrency:** `threading` + `queue.Queue`
 - **Testing:** pytest
 - **Package management:** pip + requirements.txt
@@ -44,10 +46,10 @@ whiteboard-transcriber/
 │   ├── registration.py        # Stage 1: perspective correction
 │   ├── segmentation.py        # Stage 2: person mask (MediaPipe)
 │   ├── background.py          # Stage 3: MOG2 surface reconstruction
-│   ├── change_detection.py    # Stage 4: diff, threshold, dedup
-│   ├── layout.py              # Stage 5: YOLO layout classification
-│   ├── recognition.py         # Stage 6: OCR, diagrams, tables
-│   ├── assembly.py            # Stage 7: Markdown emitter
+│   ├── region_detection.py    # Stage 4: CRAFT text regions + spatial IDs
+│   ├── change_detection.py    # Stage 5: DINOv2 embeddings, state machine
+│   ├── recognition.py         # Stage 6: TrOCR (primary), pix2tex stub
+│   ├── assembly.py            # Stage 7: Markdown emitter, MUTATION/CLEARANCE
 │   ├── pipeline.py            # Orchestrates stages 1–7
 │   └── utils.py               # Config, logging, hash table
 ├── models/                    # Downloaded model weights (.gitignore'd)
@@ -66,7 +68,7 @@ whiteboard-transcriber/
 
 ```bash
 python -m pytest                              # run all tests
-python -m pytest tests/test_change_detection.py  # single test file
+python -m pytest tests/test_region_detection.py  # single test file
 python src/main.py                            # run the pipeline (requires webcam)
 python src/main.py --input video.mp4          # run on a video file (for testing)
 ```
@@ -80,12 +82,12 @@ python src/main.py --input video.mp4          # run on a video file (for testing
 | 1. Registration | Perspective warp to flat board | OpenCV |
 | 2. Segmentation | Person mask | MediaPipe |
 | 3. Background | Clean board composite via MOG2 | OpenCV |
-| 4. Change Detection | Diff + dedup hash | OpenCV + NumPy |
-| 5. Layout | Region classification (text/diagram/table) | Ultralytics YOLO |
-| 6. Recognition | OCR + diagram vectorization + table extraction | EasyOCR, TrOCR, OpenCV |
-| 7. Assembly | Markdown output with spatial layout | Python stdlib |
+| 4. Region Detection | CRAFT text bounding boxes + spatial IDs | craft-text-detector |
+| 5. Change Detection | DINOv2 CLS cosine similarity, state machine (IDENTICAL / MUTATION / CLEARANCE) | transformers, scikit-learn |
+| 6. Recognition | TrOCR (primary text), pix2tex stub (equations) | transformers, pix2tex |
+| 7. Assembly | Spatial Markdown, update/clearance tracking, atomic write | Python stdlib |
 
-Stage 4 is a gate: if nothing changed, stages 5–7 are skipped.
+Stage 5 is the gate: only MUTATION regions pass to stages 6–7.
 
 ## Coding Rules
 
@@ -109,8 +111,11 @@ Stage 4 is a gate: if nothing changed, stages 5–7 are skipped.
 
 ## Warnings
 
-- **EasyOCR is slow to initialize** (~3–5 seconds loading models). Create the `Reader` once at startup, not per frame.
-- **TrOCR is a fallback only.** At ~200–400 ms per line on CPU, routing all text through it will make the pipeline unusably slow. Only invoke for EasyOCR lines with confidence < 0.65.
+- **DINOv2 first load is slow** (~3–5 s, downloads ~80 MB on first run). Initialize once at startup.
+- **CRAFT outputs character-level heatmaps.** Use `craft_text_detector.get_prediction` then `craft_text_detector.get_boxes` — do not call the raw model forward pass directly.
+- **TrOCR is now the primary OCR** (not a fallback). At ~200–400 ms per crop on CPU, batch regions where possible. Load `TrOCRProcessor` + `VisionEncoderDecoderModel` once at startup.
+- **pix2tex is stubbed.** Any `RegionType.EQUATION` call raises `NotImplementedError`. Do not silently route equations to TrOCR.
+- **DINOv2 cosine similarity thresholds (0.95 / 0.2):** tune with fixture images before hardcoding.
 - **MediaPipe expects RGB input.** Always `cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)` before calling `segmenter.process()`. Forgetting this produces garbage masks silently.
 - **MOG2 background model needs person masking.** Feed the subtractor a frame where person pixels are replaced with white/board color, otherwise people standing still corrupt the background model.
 - **`Queue(maxsize=1)` drops frames intentionally.** Use `put_nowait()` with a try/except or `get()` the old frame first. This is correct behavior, not a bug.

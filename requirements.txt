@@ -1,11 +1,11 @@
 opencv-python>=4.9.0
 opencv-contrib-python>=4.9.0
 mediapipe>=0.10.0
-easyocr>=1.7.0
-ultralytics>=8.3.237
+craft-text-detector>=0.4.2
 transformers>=4.40.0
 torch>=2.2.0
 Pillow>=10.0.0
 numpy>=1.26.0
-imagehash>=4.3.0
+scikit-learn>=1.4.0
+pix2tex>=0.1.2
 pytest>=8.0.0
