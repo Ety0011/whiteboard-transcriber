@@ -45,7 +45,7 @@ class Registrar:
     def __init__(
         self,
         output_size: tuple[int, int] = (1920, 1080),
-        cache_threshold: float = 20.0,
+        cache_threshold: float = 50.0,
         recompute_interval: float = 5.0,
         sam_model: str = "sam3.1_multiplex.pt",
     ) -> None:
@@ -144,7 +144,7 @@ class Registrar:
                 if corners is not None:
                     sorted_corners = self._sort_corners(corners)
                     with self._lock:
-                        if self._cached_corners is None or self._all_corners_shifted(
+                        if self._cached_corners is None or self._are_corners_shifted(
                             sorted_corners
                         ):
                             self._homography = self._compute_homography(sorted_corners)
@@ -241,16 +241,42 @@ class Registrar:
         )
         return cv2.getPerspectiveTransform(corners, dst)
 
-    def _all_corners_shifted(self, sorted_corners: np.ndarray) -> bool:
-        """Return True only when every corner moved more than ``cache_threshold`` px.
+    def _are_corners_shifted(self, sorted_corners: np.ndarray) -> bool:
+        """Return True if 2-3 corners shift, or 1 corner shifts and improves ratio.
 
-        Requiring all four corners to shift filters out single-corner noise
-        (e.g. SAM 3 mis-detecting one edge) without masking a real board move.
+        Prevents updates during occlusion via area guard and ensures the board
+        converges toward a rectangular shape using an absolute diagonal ratio.
         """
         if self._cached_corners is None:
             return True
+
+        def get_area(p):
+            return 0.5 * np.abs(
+                np.dot(p[:, 0], np.roll(p[:, 1], 1))
+                - np.dot(p[:, 1], np.roll(p[:, 0], 1))
+            )
+
+        def get_ratio(p):
+            return np.linalg.norm(p[0] - p[2]) / (np.linalg.norm(p[1] - p[3]) + 1e-6)
+
+        # 1. Geometry Metrics
+        new_a, old_a = get_area(sorted_corners), get_area(self._cached_corners)
+        new_r, old_r = get_ratio(sorted_corners), get_ratio(self._cached_corners)
+
+        # Area Guard: Ignore if the professor occludes corners (shrinking)
+        if new_a < old_a * 0.98:
+            return False
+
+        # 2. Movement Logic
         dists = np.linalg.norm(sorted_corners - self._cached_corners, axis=1)
-        return bool(np.all(dists > self._cache_threshold))
+        count = np.count_nonzero(dists > self._cache_threshold)
+
+        # If exactly one corner shifts, only accept if it makes the board more symmetric
+        if count == 1:
+            return abs(new_r - 1.0) < abs(old_r - 1.0)
+
+        # Accept multiple corners change
+        return True
 
 
 # ---------------------------------------------------------------------------
