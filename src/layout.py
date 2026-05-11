@@ -71,6 +71,7 @@ def _inference_worker(
     """
     engine = LayoutDetection(
         model_name="PP-DocLayout_plus-L",
+        engine="transformers",
         layout_nms=True,
         layout_merge_bboxes_mode="large",
         layout_unclip_ratio=1.05,
@@ -237,6 +238,7 @@ class LayoutDetector:
         """
         engine = LayoutDetection(
             model_name="PP-DocLayout_plus-L",
+            engine="transformers",
             layout_nms=True,
             layout_merge_bboxes_mode="large",
             layout_unclip_ratio=1.05,
