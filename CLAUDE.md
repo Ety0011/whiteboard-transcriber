@@ -39,9 +39,10 @@ whiteboard-transcriber/
 │   ├── segmentation.py        # Stage 2: person mask (MediaPipe)
 │   ├── background.py          # Stage 3: MOG2 surface reconstruction
 │   ├── layout.py              # Stage 4: PP-DocLayout region detection
-│   ├── change_detection.py    # Stage 5: DINOv2 embedding comparison
-│   ├── recognition.py         # Stage 6: PP-OCRv5 + Markdown output on changed regions
-│   ├── pipeline.py            # Orchestrates stages 1–6, merges Markdown fragments to file
+│   ├── text_detection.py      # Stage 5: PP-OCRv5 text line detection within regions
+│   ├── change_detection.py    # Stage 6: DINOv2 embedding comparison per text line
+│   ├── recognition.py         # Stage 7: PP-OCRv5 recognition on changed lines only
+│   ├── pipeline.py            # Orchestrates stages 1–7, merges Markdown fragments to file
 │   └── utils.py               # Config, logging, helpers
 ├── models/                    # Downloaded model weights (.gitignore'd)
 ├── tests/
@@ -66,38 +67,39 @@ python src/main.py --input video.mp4          # run on a video file (for testing
 
 ## Architecture Overview
 
-6-stage pipeline. All stages run sequentially in a processing thread. Camera runs in a separate daemon thread with a `Queue(maxsize=1)` for back-pressure (latest frame only).
+7-stage pipeline. All stages run sequentially in a processing thread. Camera runs in a separate daemon thread with a `Queue(maxsize=1)` for back-pressure (latest frame only).
 
 | Stage | What | Library |
 |-------|------|---------|
 | 1. Registration | Perspective warp to flat board | OpenCV |
 | 2. Segmentation | Person mask | MediaPipe |
 | 3. Background | Clean board composite via MOG2 | OpenCV |
-| 4. Layout | Region detection (text/table/diagram/formula) | PaddleOCR (PP-DocLayout) |
-| 5. Change Detection | DINOv2 embedding per region, cosine similarity gate | PyTorch (DINOv2-base) |
-| 6. Recognition | OCR + Markdown on changed regions only | PaddleOCR (PP-StructureV3) |
+| 4. Layout | Region detection (text/table/figure/formula) | PaddleOCR (`RT-DETR-H_layout_17cls`) |
+| 5. Text Detection | Text line bounding boxes within each region | PaddleOCR (`PP-OCRv5_det_server`) |
+| 6. Change Detection | DINOv2 embedding per text line, cosine similarity gate | PyTorch (DINOv2-base) |
+| 7. Recognition | OCR on changed lines only, emit Markdown | PaddleOCR (PP-OCRv5 recognition) |
 
-PP-StructureV3 (stage 6) outputs Markdown directly. `pipeline.py` merges per-region fragments and writes the final file — no separate assembly stage needed.
+`pipeline.py` merges per-line Markdown fragments and writes the final file.
 
-### Change Detection Design (Stage 5)
+### Change Detection Design (Stage 6)
 
-The change detection gate sits **after** layout detection, not before. This enables per-region change tracking instead of whole-frame diffing.
+The change detection gate operates at **text line level**, not region level. This means a growing region (professor adds a new line) only re-OCRs the new/changed lines — existing lines are skipped.
 
 **How it works:**
-1. Stage 4 produces a list of detected regions (bounding boxes + class labels).
-2. Each region is cropped and passed through DINOv2-base to produce a 768-dim embedding vector.
-3. Each embedding is compared (cosine similarity) against the stored embedding for the spatially nearest region from the previous cycle.
-4. If `cosine_similarity > threshold` (start with 0.92, tune empirically), the region is considered unchanged — skip OCR.
-5. Changed regions proceed to Stage 6. Their new embeddings replace the stored ones.
+1. Stage 5 produces text line bounding boxes within each region.
+2. Each line crop is passed through DINOv2-base to produce a 768-dim embedding vector.
+3. Each embedding is compared (cosine similarity) against the stored embedding for the matching line from the previous cycle.
+4. Lines are matched across frames by IoU of bounding boxes. A line with no IoU match is always treated as new.
+5. If `cosine_similarity > threshold` (start with 0.92, tune empirically), the line is unchanged — skip OCR.
+6. Changed or new lines proceed to Stage 7. Their embeddings replace the stored ones.
 
-**Region matching across frames:**
-Regions are matched by IoU (intersection over union) of bounding boxes between consecutive frames, not by index order. A new region with no IoU match to any previous region is always treated as changed.
+**Why line-level, not region-level:**
+A region grows as the professor writes. Region-level diffing would re-OCR the entire region every cycle. Line-level diffing only re-OCRs the new line at the bottom — existing lines are cached.
 
 **Why DINOv2 over pixel hashing:**
 - Robust to lighting changes, camera micro-movements, shadows
 - Semantic: minor pixel noise doesn't trigger false changes
 - Erasing and rewriting genuinely shifts the embedding
-- DINOv2-base runs ~20–40ms per crop on CPU for small region crops
 
 ## Coding Rules
 
@@ -121,7 +123,8 @@ Regions are matched by IoU (intersection over union) of bounding boxes between c
 
 ## Warnings
 
-- **PaddleOCR is slow to initialize** (~3–5 seconds loading models). Create the `PaddleOCR` instance once at startup, not per frame.
+- **PP-OCRv5 detection returns polygons**, not rectangles. Convert to axis-aligned bboxes using min/max of the 4 point coordinates before storing or cropping.
+- **PaddleOCR is slow to initialize** (~3–5 seconds loading models). Create all PaddleOCR instances once at startup, not per frame.
 - **DINOv2 model loading takes a few seconds.** Load once at startup. Use `torch.no_grad()` for all inference — you never train.
 - **MediaPipe expects RGB input.** Always `cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)` before calling `segmenter.process()`. Forgetting this produces garbage masks silently.
 - **DINOv2 expects RGB input, normalized.** Convert from BGR, resize to 224×224 (or multiple of 14), normalize with ImageNet mean/std. Don't feed it raw OpenCV arrays.
