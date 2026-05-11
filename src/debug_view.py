@@ -1,8 +1,8 @@
-"""Dev tool — Stage 0 + Stage 1 + Stage 2 + Stage 3 + Stage 4 live preview.
+"""Dev tool — Stage 0 + Stage 1 + Stage 2 + Stage 3 + Stage 4 + Stage 5 live preview.
 
 Opens the camera (or a video file), runs perspective registration,
-person segmentation, surface reconstruction, and layout detection, showing
-the results in cv2.imshow windows.
+person segmentation, surface reconstruction, layout detection, and text line
+detection, showing the results in cv2.imshow windows.
 
 Usage::
 
@@ -17,6 +17,7 @@ Keyboard controls:
     s  — toggle Stage 2 person-mask overlay (semi-transparent red, warped view)
     b  — toggle Stage 3 background composite (separate window, side-by-side)
     l  — toggle Stage 4 layout bounding boxes on the Stage 3 composite
+    t  — toggle Stage 5 text line bounding boxes within each layout region
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from capture import process as start_camera
 from layout import LayoutDetector, Region
 from registration import Registrar
 from segmentation import Segmenter
+from text_detection import RegionWithLines, TextDetector
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -65,6 +67,19 @@ def _apply_mask_overlay(frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
     overlay = frame.copy()
     overlay[mask == 1] = (0, 0, 220)
     return cv2.addWeighted(frame, 0.65, overlay, 0.35, 0)
+
+
+def _draw_text_lines(frame: np.ndarray, regions: list[RegionWithLines]) -> np.ndarray:
+    """Draw text line bounding boxes on *frame* in board-composite coordinates."""
+    out = frame.copy()
+    for r in regions:
+        rx1, ry1, _, _ = r.bbox
+        for line in r.lines:
+            lx1, ly1, lx2, ly2 = line.bbox
+            cv2.rectangle(
+                out, (rx1 + lx1, ry1 + ly1), (rx1 + lx2, ry1 + ly2), (255, 150, 0), 1
+            )
+    return out
 
 
 def _draw_layout(frame: np.ndarray, regions: list[Region]) -> np.ndarray:
@@ -150,18 +165,22 @@ def main(source: int | str = 0) -> None:
     reconstructor = BackgroundReconstructor()
     print("Initialising PP-DocLayout model (first load may take a moment)...")
     layout_detector = LayoutDetector()
+    print("Initialising PP-OCRv5_server_det model (first load may take a moment)...")
+    text_detector = TextDetector()
 
     show_corners = True
     show_mask = True
     show_bg = True
     show_layout = True
+    show_text_lines = True
 
     print(
-        "Stage 1+2+3+4 preview running.\n"
+        "Stage 1+2+3+4+5 preview running.\n"
         "  d — toggle detected board corners\n"
         "  s — toggle person-mask overlay\n"
         "  b — toggle Stage 3 background composite (separate window)\n"
         "  l — toggle Stage 4 layout bounding boxes\n"
+        "  t — toggle Stage 5 text line bounding boxes\n"
         "  q — quit"
     )
 
@@ -187,9 +206,12 @@ def main(source: int | str = 0) -> None:
         if show_bg:
             bg_mask = segmenter.process(warped)
             composite = reconstructor.process(warped, bg_mask)
+            regions = layout_detector.process(composite)
             if show_layout:
-                regions = layout_detector.process(composite)
                 composite = _draw_layout(composite, regions)
+            if show_text_lines and regions:
+                regions_with_lines = text_detector.process(regions)
+                composite = _draw_text_lines(composite, regions_with_lines)
             cv2.imshow("Stage 3+4", composite)
 
         key = cv2.waitKey(wait_ms) & 0xFF
@@ -209,6 +231,9 @@ def main(source: int | str = 0) -> None:
         if key == ord("l"):
             show_layout = not show_layout
             logger.info("Layout overlay: %s", "ON" if show_layout else "OFF")
+        if key == ord("t"):
+            show_text_lines = not show_text_lines
+            logger.info("Text line overlay: %s", "ON" if show_text_lines else "OFF")
 
     cv2.destroyAllWindows()
 
