@@ -76,7 +76,12 @@ class BackgroundReconstructor:
             BGR uint8 composite image showing the board surface without people.
         """
         masked_frame = frame.copy()
-        masked_frame[mask == 1] = (255, 255, 255)
+        board_pixels = masked_frame[mask == 0]
+        if board_pixels.size > 0:
+            fill_color = np.median(board_pixels, axis=0).astype(np.uint8)
+        else:
+            fill_color = np.array([255, 255, 255], dtype=np.uint8)
+        masked_frame[mask == 1] = fill_color
 
         self._subtractor.apply(masked_frame, learningRate=self._learning_rate)
 
