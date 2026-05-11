@@ -190,10 +190,7 @@ def main(source: int | str = 0) -> None:
             if show_layout:
                 regions = layout_detector.process(composite)
                 composite = _draw_layout(composite, regions)
-            thumb_w, thumb_h = 640, 360
-            left = cv2.resize(warped, (thumb_w, thumb_h))
-            right = cv2.resize(composite, (thumb_w, thumb_h))
-            cv2.imshow("Stage 3+4", np.hstack([left, right]))
+            cv2.imshow("Stage 3+4", composite)
 
         key = cv2.waitKey(wait_ms) & 0xFF
         if key == ord("q"):

@@ -34,8 +34,10 @@ _WHITEBOARD_LABELS = {
     "paragraph_title",
     "table",
     "image",
+    "figure",
+    "figure_table_title",
     "formula",
-    "content",
+    "formula_number",
     "algorithm",
     "chart",
 }
@@ -55,6 +57,7 @@ class Region:
 # Child-process helpers (module-level so they are picklable)
 # ---------------------------------------------------------------------------
 
+
 def _inference_worker(
     img_queue: mp.Queue,
     result_queue: mp.Queue,
@@ -66,13 +69,19 @@ def _inference_worker(
     Reads images from img_queue, runs inference, puts serialisable box dicts
     into result_queue. Runs until it receives None as a sentinel.
     """
-    engine = LayoutDetection()
+    engine = LayoutDetection(
+        model_name="PP-DocLayout_plus-L",
+        layout_nms=True,
+        layout_merge_bboxes_mode="large",
+        layout_unclip_ratio=1.05,
+        threshold=confidence_threshold,
+    )
     while True:
         image: np.ndarray = img_queue.get()
         if image is None:
             break
         try:
-            raw = engine.predict(image)
+            raw = engine.predict(image, layout_nms=True)
             boxes = _filter_boxes(raw, confidence_threshold, image.shape)
         except Exception:
             boxes = []
@@ -105,8 +114,7 @@ def _filter_boxes(
         y1 = max(0, int(coord[1]))
         x2 = min(w, int(coord[2]))
         y2 = min(h, int(coord[3]))
-        out.append({"label": label, "confidence": confidence,
-                    "bbox": (x1, y1, x2, y2)})
+        out.append({"label": label, "confidence": confidence, "bbox": (x1, y1, x2, y2)})
     return out
 
 
@@ -116,14 +124,21 @@ def _build_regions(box_dicts: list[dict], image: np.ndarray) -> list[Region]:
     for d in box_dicts:
         x1, y1, x2, y2 = d["bbox"]
         crop = image[y1:y2, x1:x2].copy()
-        regions.append(Region(bbox=(x1, y1, x2, y2), label=d["label"],
-                              confidence=d["confidence"], crop=crop))
+        regions.append(
+            Region(
+                bbox=(x1, y1, x2, y2),
+                label=d["label"],
+                confidence=d["confidence"],
+                crop=crop,
+            )
+        )
     return regions
 
 
 # ---------------------------------------------------------------------------
 # LayoutDetector
 # ---------------------------------------------------------------------------
+
 
 class LayoutDetector:
     """Runs PP-DocLayout in a child process so the main GIL is never blocked.
@@ -135,7 +150,7 @@ class LayoutDetector:
 
     def __init__(
         self,
-        confidence_threshold: float = 0.5,
+        confidence_threshold: float = 0.4,
         recompute_interval: float = 2.0,
     ) -> None:
         """Start the child process and load PP-DocLayout inside it.
@@ -163,7 +178,8 @@ class LayoutDetector:
         self._worker.start()
         log.info(
             "LayoutDetector initialised (threshold=%.2f, interval=%.1fs)",
-            confidence_threshold, recompute_interval,
+            confidence_threshold,
+            recompute_interval,
         )
 
     # ------------------------------------------------------------------
@@ -194,7 +210,10 @@ class LayoutDetector:
 
         # Submit a new image if the child is idle and interval has elapsed.
         now = time.monotonic()
-        if not self._detecting and (now - self._last_detect_time) >= self._recompute_interval:
+        if (
+            not self._detecting
+            and (now - self._last_detect_time) >= self._recompute_interval
+        ):
             try:
                 img_copy = image.copy()
                 self._img_queue.put_nowait(img_copy)
@@ -216,8 +235,14 @@ class LayoutDetector:
         Used by unit tests to verify filtering logic without going through
         the child process. Monkeypatching LayoutDetection affects this path.
         """
-        engine = LayoutDetection()
-        raw = engine.predict(image)
+        engine = LayoutDetection(
+            model_name="PP-DocLayout_plus-L",
+            layout_nms=True,
+            layout_merge_bboxes_mode="large",
+            layout_unclip_ratio=1.05,
+            threshold=self._confidence_threshold,
+        )
+        raw = engine.predict(image, layout_nms=True)
         box_dicts = _filter_boxes(raw, self._confidence_threshold, image.shape)
         return _build_regions(box_dicts, image)
 
@@ -230,7 +255,7 @@ _global_detector: LayoutDetector | None = None
 
 
 def init(
-    confidence_threshold: float = 0.5,
+    confidence_threshold: float = 0.4,
     recompute_interval: float = 2.0,
 ) -> None:
     """Start the child process and load PP-DocLayout. Call once at startup.
