@@ -6,8 +6,13 @@ enriched with detected text line bounding boxes (in region-crop coordinates).
 Model: PaddleOCR PP-OCRv5_server_det via TextDetection.
 Load once at startup via init() or the first call to process() — never per frame.
 
-Detection runs synchronously. Region crops are small, so per-crop latency is
-acceptable within the pipeline cycle. No child process needed here.
+Inference runs in a dedicated child process (multiprocessing.Process), not a
+thread. PaddlePaddle holds the Python GIL during inference, which would block
+cv2.waitKey on the main thread if run in a thread. The child process has its
+own GIL and never contends with the main process.
+
+process() is non-blocking: it submits the region list, polls the result queue,
+and immediately returns the last cached result.
 
 Non-text regions (figure, table) are skipped — their lines list is empty.
 """
@@ -16,6 +21,8 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import multiprocessing as mp
+from multiprocessing.queues import Empty
 
 import numpy as np
 from paddleocr import TextDetection
@@ -40,6 +47,119 @@ class RegionWithLines(Region):
     """A layout region enriched with detected text line bounding boxes."""
 
     lines: list[TextLine] = dataclasses.field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Child-process helpers (module-level so they are picklable)
+# ---------------------------------------------------------------------------
+
+
+def _inference_worker(
+    regions_queue: mp.Queue,
+    result_queue: mp.Queue,
+) -> None:
+    """Entry point for the child process.
+
+    Owns TextDetection entirely — the main process never touches it.
+    Reads region lists from regions_queue, runs inference on each crop,
+    puts serialisable polygon lists into result_queue. Runs until it
+    receives None as a sentinel.
+    """
+    engine = TextDetection(model_name="PP-OCRv5_server_det")
+    while True:
+        items = regions_queue.get()
+        if items is None:
+            break
+        try:
+            poly_lists = _detect_in_worker(engine, items)
+        except Exception:
+            poly_lists = [[] for _ in items]
+        result_queue.put(poly_lists)
+
+
+def _detect_in_worker(engine, items: list[dict]) -> list[list]:
+    """Run text detection on each region crop. Called inside the child process.
+
+    Args:
+        engine: TextDetection instance owned by the child process.
+        items: List of {"label": str, "crop": np.ndarray} dicts, one per region.
+
+    Returns:
+        List (one per region) of polygon lists. Each polygon is a list of
+        [x, y] pairs as plain Python floats. Skipped or failed regions get [].
+    """
+    results = []
+    for item in items:
+        if item["label"] in _SKIP_LABELS:
+            results.append([])
+            continue
+        try:
+            raw = engine.predict(item["crop"])
+            polys = _extract_polys(raw)
+        except Exception:
+            polys = []
+        results.append(polys)
+    return results
+
+
+def _extract_polys(raw_results: list) -> list[list]:
+    """Extract polygon point lists from raw TextDetection output.
+
+    Converts to plain Python floats so results are safely picklable
+    across the process boundary (numpy arrays also pickle but are heavier).
+
+    Args:
+        raw_results: Raw output from TextDetection.predict().
+
+    Returns:
+        List of polygons; each polygon is a list of [x, y] float pairs.
+    """
+    if not raw_results:
+        return []
+    polys = []
+    for result in raw_results:
+        for poly in result.get("dt_polys", []):
+            polys.append([[float(pt[0]), float(pt[1])] for pt in poly])
+    return polys
+
+
+def _build_regions_with_lines(
+    poly_lists: list[list],
+    regions: list[Region],
+) -> list[RegionWithLines]:
+    """Reconstruct RegionWithLines objects in the parent process.
+
+    Combines polygon data returned by the child process with the original
+    Region crops (which live in the parent process) to produce TextLine crops.
+
+    Args:
+        poly_lists: List of polygon lists per region (from child process).
+        regions: Original Region objects from Stage 4, ordered identically.
+
+    Returns:
+        Regions enriched with TextLine objects in crop coordinates.
+    """
+    results = []
+    for region, polys in zip(regions, poly_lists):
+        h, w = region.crop.shape[:2]
+        lines = []
+        for poly in polys:
+            x1, y1, x2, y2 = _polygon_to_bbox(poly, h, w)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            lines.append(
+                TextLine(bbox=(x1, y1, x2, y2), crop=region.crop[y1:y2, x1:x2].copy())
+            )
+        results.append(
+            RegionWithLines(
+                bbox=region.bbox,
+                label=region.label,
+                confidence=region.confidence,
+                crop=region.crop,
+                lines=lines,
+            )
+        )
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -74,31 +194,27 @@ def _polygon_to_bbox(
 def _parse_lines(raw_results: list, crop: np.ndarray) -> list[TextLine]:
     """Parse TextDetection.predict() output into TextLine objects.
 
-    Expected format: list of dicts with key "dt_polys" containing a list of
-    polygon point arrays (each polygon is a list of [x, y] pairs).
+    Used by _run_detection() on the synchronous test path. Converts polygons
+    to axis-aligned bboxes, skips degenerate results, crops the image.
 
     Args:
         raw_results: Raw output from TextDetection.predict().
-        crop: The region crop the detection was run on (used for bounds + slicing).
+        crop: The region crop the detection was run on.
 
     Returns:
         List of TextLine objects in crop coordinates.
     """
-    if not raw_results:
-        return []
+    polys = _extract_polys(raw_results)
     h, w = crop.shape[:2]
-    lines: list[TextLine] = []
-    for result in raw_results:
-        polys = result.get("dt_polys", [])
-        for poly in polys:
-            x1, y1, x2, y2 = _polygon_to_bbox(poly, h, w)
-            if x2 <= x1 or y2 <= y1:
-                log.debug(
-                    "Skipping degenerate text line bbox (%d,%d,%d,%d)", x1, y1, x2, y2
-                )
-                continue
-            line_crop = crop[y1:y2, x1:x2].copy()
-            lines.append(TextLine(bbox=(x1, y1, x2, y2), crop=line_crop))
+    lines = []
+    for poly in polys:
+        x1, y1, x2, y2 = _polygon_to_bbox(poly, h, w)
+        if x2 <= x1 or y2 <= y1:
+            log.debug(
+                "Skipping degenerate text line bbox (%d,%d,%d,%d)", x1, y1, x2, y2
+            )
+            continue
+        lines.append(TextLine(bbox=(x1, y1, x2, y2), crop=crop[y1:y2, x1:x2].copy()))
     return lines
 
 
@@ -108,56 +224,79 @@ def _parse_lines(raw_results: list, crop: np.ndarray) -> list[TextLine]:
 
 
 class TextDetector:
-    """Runs PP-OCRv5_det_server on region crops from Stage 4.
+    """Runs PP-OCRv5_server_det in a child process so the main GIL is never blocked.
 
-    Loaded once at startup. process() is synchronous — crops are small and
-    per-crop latency fits comfortably in the pipeline cycle.
+    Same external pattern as Stage 4 LayoutDetector:
+    - process() never blocks — returns cached regions immediately.
+    - A new detection is submitted whenever the child is idle.
     """
 
     def __init__(self) -> None:
-        """Load PP-OCRv5_server_det. This takes a few seconds on first call."""
-        self._engine = TextDetection(model_name="PP-OCRv5_server_det")
+        """Start the child process and load PP-OCRv5_server_det inside it."""
+        self._cached_results: list[RegionWithLines] = []
+        self._detecting = False
+        self._pending_regions: list[Region] | None = None
+
+        self._regions_queue: mp.Queue = mp.Queue(maxsize=1)
+        self._result_queue: mp.Queue = mp.Queue(maxsize=1)
+        self._worker = mp.Process(
+            target=_inference_worker,
+            args=(self._regions_queue, self._result_queue),
+            daemon=True,
+            name="text-detect",
+        )
+        self._worker.start()
         log.info("TextDetector initialised (model=PP-OCRv5_server_det)")
 
-    def process(self, regions: list[Region]) -> list[RegionWithLines]:
-        """Detect text lines within each region crop.
+    # ------------------------------------------------------------------
+    # Public
+    # ------------------------------------------------------------------
 
-        Skips figure and table regions (returns empty lines list for those).
+    def process(self, regions: list[Region]) -> list[RegionWithLines]:
+        """Submit *regions* to the child process and return the last cached result.
+
+        Never blocks. Polls the result queue on every call; submits a new
+        region list when the child is idle.
 
         Args:
             regions: Layout regions from Stage 4.
 
         Returns:
-            Same regions as RegionWithLines, each with a lines list populated.
+            Last cached list of RegionWithLines (empty until first detection).
         """
-        results: list[RegionWithLines] = []
-        for region in regions:
-            if region.label in _SKIP_LABELS:
-                lines: list[TextLine] = []
-                log.debug("Skipping text detection for label=%r", region.label)
-            else:
-                lines = self._run_detection(region.crop)
-                log.debug(
-                    "Detected %d line(s) in region label=%r bbox=%s",
-                    len(lines),
-                    region.label,
-                    region.bbox,
+        # Poll for completed result from child process (non-blocking).
+        try:
+            poly_lists = self._result_queue.get_nowait()
+            if self._pending_regions is not None:
+                self._cached_results = _build_regions_with_lines(
+                    poly_lists, self._pending_regions
                 )
-            results.append(
-                RegionWithLines(
-                    bbox=region.bbox,
-                    label=region.label,
-                    confidence=region.confidence,
-                    crop=region.crop,
-                    lines=lines,
-                )
-            )
-        return results
+            self._detecting = False
+            log.debug("Text detection result: %d regions", len(self._cached_results))
+        except Empty:
+            pass
+
+        # Submit new work if child is idle.
+        if not self._detecting:
+            try:
+                items = [{"label": r.label, "crop": r.crop} for r in regions]
+                self._regions_queue.put_nowait(items)
+                self._pending_regions = list(regions)
+                self._detecting = True
+            except Exception:
+                pass  # queue still full — skip this cycle
+
+        return list(self._cached_results)
+
+    # ------------------------------------------------------------------
+    # Synchronous path — for tests only, not called in production
+    # ------------------------------------------------------------------
 
     def _run_detection(self, crop: np.ndarray) -> list[TextLine]:
-        """Run text line detection synchronously on a single region crop.
+        """Run inference synchronously in the calling process.
 
-        Used directly by unit tests (monkeypatch TextDetection before calling).
+        Used by unit tests to verify filtering logic without going through
+        the child process. Monkeypatching TextDetection affects this path.
 
         Args:
             crop: BGR uint8 numpy array — a single region crop from Stage 4.
@@ -165,7 +304,8 @@ class TextDetector:
         Returns:
             List of detected TextLine objects in crop coordinates.
         """
-        raw = self._engine.predict(crop)
+        engine = TextDetection(model_name="PP-OCRv5_server_det")
+        raw = engine.predict(crop)
         return _parse_lines(raw, crop)
 
 
@@ -177,11 +317,7 @@ _global_detector: TextDetector | None = None
 
 
 def init() -> None:
-    """Load PP-OCRv5_server_det. Call once at startup before process().
-
-    Subsequent calls are no-ops only if the singleton already exists; calling
-    again replaces it (useful for testing with different model configs).
-    """
+    """Start the child process and load PP-OCRv5_server_det. Call once at startup."""
     global _global_detector
     _global_detector = TextDetector()
 
@@ -195,7 +331,7 @@ def process(regions: list[Region]) -> list[RegionWithLines]:
         regions: Layout regions from Stage 4.
 
     Returns:
-        Same regions as RegionWithLines with lines populated.
+        Last cached list of RegionWithLines (empty until first detection).
     """
     global _global_detector
     if _global_detector is None:

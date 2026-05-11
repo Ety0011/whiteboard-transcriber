@@ -7,9 +7,19 @@ photos) live in tests/fixtures/.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import cv2
 import numpy as np
 import pytest
+
+# src/ modules use bare imports (e.g. `from layout import Region`) because
+# debug_view.py is run with cwd=src/. Add src/ to sys.path so those bare
+# imports resolve when pytest runs from the project root.
+_src = str(Path(__file__).parent.parent / "src")
+if _src not in sys.path:
+    sys.path.insert(0, _src)
 
 
 @pytest.fixture()
