@@ -31,6 +31,7 @@ from ultralytics.models.sam import SAM3SemanticPredictor
 
 logger = logging.getLogger(__name__)
 
+
 class Registrar:
     """Stateful perspective-correction stage backed by SAM 3 board detection.
 
@@ -45,7 +46,7 @@ class Registrar:
         self,
         output_size: tuple[int, int] = (1920, 1080),
         cache_threshold: float = 20.0,
-        recompute_interval: float = 10.0,
+        recompute_interval: float = 5.0,
         sam_model: str = "sam3.1_multiplex.pt",
     ) -> None:
         """

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 
 import cv2
 import numpy as np
@@ -167,51 +168,24 @@ def main(source: int | str = 0) -> None:
 
     while True:
         frame = frame_queue.get()
-        if frame is None:
-            logger.info("End of stream — exiting")
-            break
-
         warped = registrar.process(frame)
 
-        display = frame.copy()
+        t0 = time.perf_counter()
+        bg_mask = segmenter.process(warped)
+        composite = reconstructor.process(warped, bg_mask)
+        print(f"seg+mog: {time.perf_counter() - t0:.3f}s", end="  ")
 
-        if show_mask:
-            mask = segmenter.process(frame)
-            display = _apply_mask_overlay(display, mask)
+        t1 = time.perf_counter()
+        regions = layout_detector.process(composite)
+        composite = _draw_layout(composite, regions)
+        print(f"layout_draw: {time.perf_counter() - t1:.3f}s", end="  ")
 
-        if show_corners:
-            display = _draw_corners(display, registrar)
-
-        cv2.imshow("Stage 1+2", display)
-
-        if show_bg:
-            bg_mask = segmenter.process(warped)
-            composite = reconstructor.process(warped, bg_mask)
-            if show_layout:
-                regions = layout_detector.process(composite)
-                composite = _draw_layout(composite, regions)
-            thumb_w, thumb_h = 640, 360
-            left = cv2.resize(warped, (thumb_w, thumb_h))
-            right = cv2.resize(composite, (thumb_w, thumb_h))
-            cv2.imshow("Stage 3+4", np.hstack([left, right]))
-
-        key = cv2.waitKey(wait_ms) & 0xFF
-        if key == ord("q"):
-            break
-        if key == ord("d"):
-            show_corners = not show_corners
-            logger.info("Corner overlay: %s", "ON" if show_corners else "OFF")
-        if key == ord("s"):
-            show_mask = not show_mask
-            logger.info("Mask overlay: %s", "ON" if show_mask else "OFF")
-        if key == ord("b"):
-            show_bg = not show_bg
-            if not show_bg:
-                cv2.destroyWindow("Stage 3+4")
-            logger.info("Background composite: %s", "ON" if show_bg else "OFF")
-        if key == ord("l"):
-            show_layout = not show_layout
-            logger.info("Layout overlay: %s", "ON" if show_layout else "OFF")
+        t2 = time.perf_counter()
+        cv2.imshow("Stage 3+4", frame)
+        print(f"imshow: {time.perf_counter() - t2:.4f}s", end="  ")
+        t3 = time.perf_counter()
+        cv2.waitKey(wait_ms)
+        print(f"waitkey: {time.perf_counter() - t3:.4f}s")
 
     cv2.destroyAllWindows()
 

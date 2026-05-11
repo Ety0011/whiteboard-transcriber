@@ -2,26 +2,20 @@
 
 This file provides guidance to Claude Code when working with code in this repository.
 
-## Project Status
-
-This repository is **pivoting from a Swift/Metal design to a Python implementation**. The original Swift scaffold has been abandoned. The architecture specification (`docs/architecture.md`) describes the Python pipeline. Ignore any Swift, Metal, or CoreML references in the repo — they are legacy artifacts.
-
 ## What
 
-Real-time whiteboard-to-Markdown transcription system. Captures a camera feed, removes people, reconstructs the board surface, detects changes, classifies layout regions, runs OCR, and emits a continuously-updated Markdown document.
+Real-time whiteboard-to-Markdown transcription system. Captures a camera feed, removes people, reconstructs the board surface, detects layout regions, identifies which regions changed, runs OCR on changed regions only, and emits a continuously-updated Markdown document.
 
-## Why
-
-University project (1-month timeline). Prioritizes **accuracy over speed** — a 1–2 second processing cycle is fine because whiteboard content changes every 5–10 seconds. Cross-platform (not Apple-specific). All processing on-device.
+University project (1-month timeline). Prioritizes **accuracy over speed** — a 1–2 second processing cycle is fine because whiteboard content changes every 5–10 seconds. Cross-platform. All processing on-device.
 
 ## Tech Stack
 
 - **Language:** Python 3.11+
 - **Computer vision:** OpenCV (`cv2`)
 - **Person segmentation:** MediaPipe Selfie Segmentation
-- **Layout detection:** DocLayout-YOLO or YOLOv11n (Ultralytics)
-- **OCR (primary):** EasyOCR
-- **OCR (fallback):** TrOCR-small-handwritten (HuggingFace Transformers)
+- **Layout detection:** PaddleOCR PP-DocLayout (via `paddleocr`)
+- **OCR:** PaddleOCR PP-OCRv5 (via `paddleocr`)
+- **Change detection:** DINOv2-base (ViT-B/14, 86M params) — per-region embedding similarity
 - **Concurrency:** `threading` + `queue.Queue`
 - **Testing:** pytest
 - **Package management:** pip + requirements.txt
@@ -44,12 +38,11 @@ whiteboard-transcriber/
 │   ├── registration.py        # Stage 1: perspective correction
 │   ├── segmentation.py        # Stage 2: person mask (MediaPipe)
 │   ├── background.py          # Stage 3: MOG2 surface reconstruction
-│   ├── change_detection.py    # Stage 4: diff, threshold, dedup
-│   ├── layout.py              # Stage 5: YOLO layout classification
-│   ├── recognition.py         # Stage 6: OCR, diagrams, tables
-│   ├── assembly.py            # Stage 7: Markdown emitter
-│   ├── pipeline.py            # Orchestrates stages 1–7
-│   └── utils.py               # Config, logging, hash table
+│   ├── layout.py              # Stage 4: PP-DocLayout region detection
+│   ├── change_detection.py    # Stage 5: DINOv2 embedding comparison
+│   ├── recognition.py         # Stage 6: PP-OCRv5 + Markdown output on changed regions
+│   ├── pipeline.py            # Orchestrates stages 1–6, merges Markdown fragments to file
+│   └── utils.py               # Config, logging, helpers
 ├── models/                    # Downloaded model weights (.gitignore'd)
 ├── tests/
 │   ├── fixtures/              # Test images of whiteboards
@@ -73,19 +66,38 @@ python src/main.py --input video.mp4          # run on a video file (for testing
 
 ## Architecture Overview
 
-7-stage pipeline, same logical design as the architecture doc. All stages run sequentially in a processing thread. Camera runs in a separate daemon thread with a `Queue(maxsize=1)` for back-pressure (latest frame only).
+6-stage pipeline. All stages run sequentially in a processing thread. Camera runs in a separate daemon thread with a `Queue(maxsize=1)` for back-pressure (latest frame only).
 
 | Stage | What | Library |
 |-------|------|---------|
 | 1. Registration | Perspective warp to flat board | OpenCV |
 | 2. Segmentation | Person mask | MediaPipe |
 | 3. Background | Clean board composite via MOG2 | OpenCV |
-| 4. Change Detection | Diff + dedup hash | OpenCV + NumPy |
-| 5. Layout | Region classification (text/diagram/table) | Ultralytics YOLO |
-| 6. Recognition | OCR + diagram vectorization + table extraction | EasyOCR, TrOCR, OpenCV |
-| 7. Assembly | Markdown output with spatial layout | Python stdlib |
+| 4. Layout | Region detection (text/table/diagram/formula) | PaddleOCR (PP-DocLayout) |
+| 5. Change Detection | DINOv2 embedding per region, cosine similarity gate | PyTorch (DINOv2-base) |
+| 6. Recognition | OCR + Markdown on changed regions only | PaddleOCR (PP-StructureV3) |
 
-Stage 4 is a gate: if nothing changed, stages 5–7 are skipped.
+PP-StructureV3 (stage 6) outputs Markdown directly. `pipeline.py` merges per-region fragments and writes the final file — no separate assembly stage needed.
+
+### Change Detection Design (Stage 5)
+
+The change detection gate sits **after** layout detection, not before. This enables per-region change tracking instead of whole-frame diffing.
+
+**How it works:**
+1. Stage 4 produces a list of detected regions (bounding boxes + class labels).
+2. Each region is cropped and passed through DINOv2-base to produce a 768-dim embedding vector.
+3. Each embedding is compared (cosine similarity) against the stored embedding for the spatially nearest region from the previous cycle.
+4. If `cosine_similarity > threshold` (start with 0.92, tune empirically), the region is considered unchanged — skip OCR.
+5. Changed regions proceed to Stage 6. Their new embeddings replace the stored ones.
+
+**Region matching across frames:**
+Regions are matched by IoU (intersection over union) of bounding boxes between consecutive frames, not by index order. A new region with no IoU match to any previous region is always treated as changed.
+
+**Why DINOv2 over pixel hashing:**
+- Robust to lighting changes, camera micro-movements, shadows
+- Semantic: minor pixel noise doesn't trigger false changes
+- Erasing and rewriting genuinely shifts the embedding
+- DINOv2-base runs ~20–40ms per crop on CPU for small region crops
 
 ## Coding Rules
 
@@ -109,12 +121,14 @@ Stage 4 is a gate: if nothing changed, stages 5–7 are skipped.
 
 ## Warnings
 
-- **EasyOCR is slow to initialize** (~3–5 seconds loading models). Create the `Reader` once at startup, not per frame.
-- **TrOCR is a fallback only.** At ~200–400 ms per line on CPU, routing all text through it will make the pipeline unusably slow. Only invoke for EasyOCR lines with confidence < 0.65.
+- **PaddleOCR is slow to initialize** (~3–5 seconds loading models). Create the `PaddleOCR` instance once at startup, not per frame.
+- **DINOv2 model loading takes a few seconds.** Load once at startup. Use `torch.no_grad()` for all inference — you never train.
 - **MediaPipe expects RGB input.** Always `cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)` before calling `segmenter.process()`. Forgetting this produces garbage masks silently.
+- **DINOv2 expects RGB input, normalized.** Convert from BGR, resize to 224×224 (or multiple of 14), normalize with ImageNet mean/std. Don't feed it raw OpenCV arrays.
 - **MOG2 background model needs person masking.** Feed the subtractor a frame where person pixels are replaced with white/board color, otherwise people standing still corrupt the background model.
 - **`Queue(maxsize=1)` drops frames intentionally.** Use `put_nowait()` with a try/except or `get()` the old frame first. This is correct behavior, not a bug.
-- **Model files are large.** Do not commit them to git. Add `models/` to `.gitignore`. EasyOCR and TrOCR download weights automatically on first run.
+- **Model files are large.** Do not commit them to git. Add `models/` to `.gitignore`. PaddleOCR and DINOv2 download weights automatically on first run.
+- **PaddlePaddle is a separate ML framework from PyTorch.** Both will be installed. PaddleOCR uses PaddlePaddle; DINOv2 uses PyTorch. This is intentional — they don't conflict but the install is large.
 
 ## Architecture Reference
 
