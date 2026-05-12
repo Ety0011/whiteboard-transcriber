@@ -39,6 +39,7 @@ class TextLine:
     """A detected text line within a layout region."""
 
     bbox: tuple[int, int, int, int]  # x1, y1, x2, y2 in region-crop coordinates
+    confidence: float  # Added: Actual detection score
     crop: np.ndarray  # BGR uint8
 
 
@@ -116,11 +117,15 @@ def _extract_polys(raw_results: list) -> list[list]:
     """
     if not raw_results:
         return []
-    polys = []
+    results = []
     for result in raw_results:
-        for poly in result.get("dt_polys", []):
-            polys.append([[float(pt[0]), float(pt[1])] for pt in poly])
-    return polys
+        polys = result.get("dt_polys", [])
+        scores = result.get("dt_scores", [])
+        for poly, score in zip(polys, scores):
+            results.append(
+                ([[float(pt[0]), float(pt[1])] for pt in poly], float(score))
+            )
+    return results
 
 
 def _build_regions_with_lines(
@@ -140,15 +145,19 @@ def _build_regions_with_lines(
         Regions enriched with TextLine objects in crop coordinates.
     """
     results = []
-    for region, polys in zip(regions, poly_lists):
+    for region, detections in zip(regions, poly_lists):
         h, w = region.crop.shape[:2]
         lines = []
-        for poly in polys:
+        for poly, score in detections:
             x1, y1, x2, y2 = _polygon_to_bbox(poly, h, w)
             if x2 <= x1 or y2 <= y1:
                 continue
             lines.append(
-                TextLine(bbox=(x1, y1, x2, y2), crop=region.crop[y1:y2, x1:x2].copy())
+                TextLine(
+                    bbox=(x1, y1, x2, y2),
+                    confidence=score,
+                    crop=region.crop[y1:y2, x1:x2].copy(),
+                )
             )
         results.append(
             RegionWithLines(
@@ -204,17 +213,18 @@ def _parse_lines(raw_results: list, crop: np.ndarray) -> list[TextLine]:
     Returns:
         List of TextLine objects in crop coordinates.
     """
-    polys = _extract_polys(raw_results)
+    detections = _extract_polys(raw_results)
     h, w = crop.shape[:2]
     lines = []
-    for poly in polys:
+    for poly, score in detections:
         x1, y1, x2, y2 = _polygon_to_bbox(poly, h, w)
         if x2 <= x1 or y2 <= y1:
-            log.debug(
-                "Skipping degenerate text line bbox (%d,%d,%d,%d)", x1, y1, x2, y2
-            )
             continue
-        lines.append(TextLine(bbox=(x1, y1, x2, y2), crop=crop[y1:y2, x1:x2].copy()))
+        lines.append(
+            TextLine(
+                bbox=(x1, y1, x2, y2), confidence=score, crop=crop[y1:y2, x1:x2].copy()
+            )
+        )
     return lines
 
 

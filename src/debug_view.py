@@ -34,6 +34,7 @@ from layout import LayoutDetector, Region
 from registration import Registrar
 from segmentation import Segmenter
 from text_detection import RegionWithLines, TextDetector
+from tracker import Detection, RegionState, RegionTracker
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -52,6 +53,15 @@ _LAYOUT_COLOURS: dict[str, tuple[int, int, int]] = {
     "chart": (220, 100, 0),
 }
 _LAYOUT_DEFAULT_COLOUR: tuple[int, int, int] = (180, 180, 180)
+
+# --- Stage 5 State Colours ---
+_STATE_COLOURS = {
+    RegionState.NEW: (255, 255, 0),
+    RegionState.GROWING: (0, 165, 255),
+    RegionState.STABLE: (0, 255, 0),
+    RegionState.OCR_DONE: (0, 128, 0),
+    RegionState.ERASED: (0, 0, 255),
+}
 
 
 def _video_fps(source: int | str) -> float:
@@ -79,6 +89,30 @@ def _draw_text_lines(frame: np.ndarray, regions: list[RegionWithLines]) -> np.nd
             cv2.rectangle(
                 out, (rx1 + lx1, ry1 + ly1), (rx1 + lx2, ry1 + ly2), (255, 150, 0), 1
             )
+    return out
+
+
+# --- Stage 5 Drawing Helper ---
+def _draw_tracker(frame: np.ndarray, regions: list) -> np.ndarray:
+    """Draw persistent tracked regions with IDs and States."""
+    out = frame.copy()
+    for reg in regions:
+        x1, y1, x2, y2 = reg.bbox
+        color = _STATE_COLOURS.get(reg.state, (255, 255, 255))
+        cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
+        label = f"ID:{reg.id} {reg.state.value} {reg.confidence:.2f}"
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+        cv2.rectangle(out, (x1, y1), (x1 + tw + 4, y1 + th + 6), color, -1)
+        cv2.putText(
+            out,
+            label,
+            (x1 + 2, y1 + th + 2),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.4,
+            (0, 0, 0),
+            1,
+            cv2.LINE_AA,
+        )
     return out
 
 
@@ -168,11 +202,16 @@ def main(source: int | str = 0) -> None:
     print("Initialising PP-OCRv5_server_det model (first load may take a moment)...")
     text_detector = TextDetector()
 
+    # --- Stage 5 Tracker Instance ---
+    region_tracker = RegionTracker()
+    region_tracker.load_dino()
+
     show_corners = True
     show_mask = True
     show_bg = True
     show_layout = True
     show_text_lines = True
+    show_tracker = True
 
     print(
         "Stage 1+2+3+4+5 preview running.\n"
@@ -181,6 +220,7 @@ def main(source: int | str = 0) -> None:
         "  b — toggle Stage 3 background composite (separate window)\n"
         "  l — toggle Stage 4 layout bounding boxes\n"
         "  t — toggle Stage 5 text line bounding boxes\n"
+        "  r — toggle Stage 5 region tracker\n"
         "  q — quit"
     )
 
@@ -207,11 +247,31 @@ def main(source: int | str = 0) -> None:
             bg_mask = segmenter.process(warped)
             composite = reconstructor.process(warped, bg_mask)
             regions = layout_detector.process(composite)
+
+            # --- Stage 5: Prepare detections for tracker ---
+            all_detections = []
+            regions_with_lines = text_detector.process(regions)
+            for r in regions_with_lines:
+                rx1, ry1, _, _ = r.bbox
+                for line in r.lines:
+                    lx1, ly1, lx2, ly2 = line.bbox
+                    # Map to global composite coordinates
+                    global_bbox = (rx1 + lx1, ry1 + ly1, rx1 + lx2, ry1 + ly2)
+                    all_detections.append(
+                        Detection(bbox=global_bbox, confidence=line.confidence)
+                    )
+
+            # Update Tracker
+            tracker_result = region_tracker.process(all_detections, composite)
+
             if show_layout:
                 composite = _draw_layout(composite, regions)
-            if show_text_lines and regions:
-                regions_with_lines = text_detector.process(regions)
+            if show_text_lines:
                 composite = _draw_text_lines(composite, regions_with_lines)
+            # --- Stage 5 Visualization ---
+            if show_tracker:
+                composite = _draw_tracker(composite, tracker_result.regions)
+
             cv2.imshow("Stage 3+4", composite)
 
         key = cv2.waitKey(wait_ms) & 0xFF
@@ -234,6 +294,10 @@ def main(source: int | str = 0) -> None:
         if key == ord("t"):
             show_text_lines = not show_text_lines
             logger.info("Text line overlay: %s", "ON" if show_text_lines else "OFF")
+        # --- Stage 5 Toggle Control ---
+        if key == ord("r"):
+            show_tracker = not show_tracker
+            logger.info("Tracker overlay: %s", "ON" if show_tracker else "OFF")
 
     cv2.destroyAllWindows()
 
