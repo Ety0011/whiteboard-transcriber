@@ -183,29 +183,28 @@ class RegionTracker:
     frame. DINOv2-base detects content change on OCR_DONE regions.
 
     Args:
-        stable_frames_threshold: Consecutive matched frames without significant
-            bbox shift required before GROWING → STABLE.
-        missing_frames_threshold: Consecutive unmatched frames before ERASED.
-        new_to_growing_frames: Consecutive matched frames required for NEW → GROWING.
+        stable_time_threshold: Duration (seconds) without significant bbox shift
+            required before GROWING → STABLE.
+        missing_time_threshold: Duration (seconds) without matches before ERASED.
+        new_to_growing_time: Duration (seconds) of presence required for NEW → GROWING.
         match_threshold: Minimum combined score to match a detection to a region.
         significant_shift_iou: Raw detection IoU below this resets stable_frames.
         content_change_threshold: DINOv2 cosine similarity below this triggers
             OCR_DONE → GROWING.
     """
 
-    # TODO: use time for thresholds
     def __init__(
         self,
-        stable_frames_threshold: int = 100,
-        missing_frames_threshold: int = 100,
-        new_to_growing_frames: int = 3,
+        stable_time_threshold: float = 5.0,
+        missing_time_threshold: float = 5.0,
+        new_to_growing_time: float = 0.5,
         match_threshold: float = 0.4,
         significant_shift_iou: float = 0.85,
         content_change_threshold: float = 0.92,
     ) -> None:
-        self._stable_frames_threshold = stable_frames_threshold
-        self._missing_frames_threshold = missing_frames_threshold
-        self._new_to_growing_frames = new_to_growing_frames
+        self._stable_time_threshold = stable_time_threshold
+        self._missing_time_threshold = missing_time_threshold
+        self._new_to_growing_time = new_to_growing_time
         self._match_threshold = match_threshold
         self._significant_shift_iou = significant_shift_iou
         self._content_change_threshold = content_change_threshold
@@ -355,13 +354,12 @@ class RegionTracker:
 
             # State transitions
             if reg.state == RegionState.NEW:
-                if reg._consecutive_visible >= self._new_to_growing_frames:
+                if now - reg.first_seen >= self._new_to_growing_time:
                     reg.state = RegionState.GROWING
                     reg.last_modified = now
 
-            # TODO: adjusting regions are flagged as stable, is this ok?
             elif reg.state == RegionState.GROWING:
-                if reg.stable_frames > self._stable_frames_threshold:
+                if now - reg.last_modified >= self._stable_time_threshold:
                     reg.state = RegionState.STABLE
                     reg.last_modified = now
 
@@ -429,10 +427,9 @@ class RegionTracker:
             if reg.state == RegionState.STABLE and reg.last_modified == now:
                 newly_stable.append(reg)
 
-            # TODO: not enough to just wait, check with DINO if actually erased
             if (
                 reg.state != RegionState.ERASED
-                and reg.missing_frames > self._missing_frames_threshold
+                and now - reg.last_seen > self._missing_time_threshold
             ):
                 reg.state = RegionState.ERASED
                 reg.last_modified = now
@@ -457,9 +454,9 @@ _global_tracker: RegionTracker | None = None
 
 
 def init(
-    stable_frames_threshold: int = 20,
-    missing_frames_threshold: int = 20,
-    new_to_growing_frames: int = 3,
+    stable_time_threshold: float = 2.0,
+    missing_time_threshold: float = 2.0,
+    new_to_growing_time: float = 0.5,
     match_threshold: float = 0.4,
     significant_shift_iou: float = 0.85,
     content_change_threshold: float = 0.92,
@@ -467,18 +464,18 @@ def init(
     """Create the module-level tracker singleton and load DINOv2. Call once at startup.
 
     Args:
-        stable_frames_threshold: Frames before GROWING → STABLE.
-        missing_frames_threshold: Frames before ERASED.
-        new_to_growing_frames: Consecutive frames before NEW → GROWING.
+        stable_time_threshold: Seconds before GROWING → STABLE.
+        missing_time_threshold: Seconds before ERASED.
+        new_to_growing_time: Seconds before NEW → GROWING.
         match_threshold: Minimum score to match a detection to a region.
         significant_shift_iou: Raw IoU below which stable_frames resets.
         content_change_threshold: DINOv2 cosine below which OCR_DONE → GROWING.
     """
     global _global_tracker
     _global_tracker = RegionTracker(
-        stable_frames_threshold=stable_frames_threshold,
-        missing_frames_threshold=missing_frames_threshold,
-        new_to_growing_frames=new_to_growing_frames,
+        stable_time_threshold=stable_time_threshold,
+        missing_time_threshold=missing_time_threshold,
+        new_to_growing_time=new_to_growing_time,
         match_threshold=match_threshold,
         significant_shift_iou=significant_shift_iou,
         content_change_threshold=content_change_threshold,
@@ -488,9 +485,6 @@ def init(
 
 def process(detections: list[Detection], frame: np.ndarray) -> TrackerResult:
     """Run one tracking cycle using the module-level singleton.
-
-    Lazily initialises with default settings (and logs a warning) if init()
-    was not called first.
 
     Args:
         detections: Raw text-line detections from Stage 4.
