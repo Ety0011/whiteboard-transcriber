@@ -1,20 +1,13 @@
 """Stage 3 — Surface Reconstruction.
 
 Maintains a clean, unobstructed view of the whiteboard surface using
-OpenCV's MOG2 Gaussian Mixture background subtractor. Person-region
-pixels are masked out before feeding frames to MOG2 so that people
-standing still do not corrupt the background model.
+an Exponential Moving Average (EMA) with a spatially varying learning rate.
+The learning rate is proportional to the distance from the person mask,
+minimizing shadow leakage near the professor while allowing fast updates
+for clear board regions.
 
 The composite output is: background_image where mask==1, current_frame
 where mask==0.
-
-Key OpenCV API: cv2.createBackgroundSubtractorMOG2,
-bg_subtractor.apply(), bg_subtractor.getBackgroundImage().
-
-Typical usage::
-
-    reconstructor = BackgroundReconstructor()
-    composite = reconstructor.process(warped_frame, person_mask)
 """
 
 from __future__ import annotations
@@ -27,42 +20,39 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+# TODO: fix for some reason arm is not masked at the end of video
 class BackgroundReconstructor:
-    """Stateful surface-reconstruction stage backed by OpenCV MOG2.
+    """Stateful surface-reconstruction stage backed by distance-weighted EMA.
 
-    Maintains a background model of the whiteboard surface. Person pixels
-    (mask == 1) are replaced with white before each MOG2 update so that
-    stationary people do not corrupt the learned background.
-
-    The composite output takes background pixels where people were detected
-    and keeps the current frame pixels everywhere the board is visible.
+    Maintains a background model of the whiteboard surface. The learning rate
+    scales from 0 at the person's edge to max_lr at a set falloff distance.
+    This prevents stationary people and their nearby shadows from corrupting
+    the background.
     """
 
     def __init__(
         self,
-        history: int = 500,
-        var_threshold: float = 16.0,
-        learning_rate: float = 0.005,
+        max_lr: float = 0.1,
+        falloff_distance: float = 500.0,
+        power: float = 2.0,
     ) -> None:
         """
         Args:
-            history: Number of frames used to build the background model.
-            var_threshold: Mahalanobis distance threshold for background/foreground
-                classification. Lower values make the subtractor more sensitive.
-            learning_rate: How fast the background model adapts (0–1). 0.005
-                converges in ~200 frames (~7 s at 30 fps) while remaining stable.
+            max_lr: The maximum learning rate for distant pixels.
+            falloff_distance: Distance in pixels from the mask where learning
+                reaches max_lr.
+            power: The exponent for the falloff curve (e.g., 2.0 for squared).
         """
-        self._learning_rate = learning_rate
-        self._subtractor = cv2.createBackgroundSubtractorMOG2(
-            history=history,
-            varThreshold=var_threshold,
-            detectShadows=False,
-        )
+        self._max_lr = max_lr
+        self._falloff_distance = falloff_distance
+        self._power = power
+        self._background_float: np.ndarray | None = None
+
         logger.info(
-            "BackgroundReconstructor ready (history=%d, var_threshold=%.1f, lr=%.4f)",
-            history,
-            var_threshold,
-            learning_rate,
+            "BackgroundReconstructor ready (Exp-Distance-EMA: max_lr=%.4f, falloff=%.1f, p=%.1f)",
+            max_lr,
+            falloff_distance,
+            power,
         )
 
     def process(self, frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
@@ -75,43 +65,36 @@ class BackgroundReconstructor:
         Returns:
             BGR uint8 composite image showing the board surface without people.
         """
-        masked_frame = frame.copy()
-        board_pixels = masked_frame[mask == 0]
-        if board_pixels.size > 0:
-            fill_color = np.median(board_pixels, axis=0).astype(np.uint8)
-        else:
-            fill_color = np.array([255, 255, 255], dtype=np.uint8)
-        masked_frame[mask == 1] = fill_color
+        frame_float = frame.astype(np.float32)
 
-        self._subtractor.apply(masked_frame, learningRate=self._learning_rate)
-
-        bg = self._subtractor.getBackgroundImage()
-        if bg is None:
+        if self._background_float is None:
+            self._background_float = frame_float.copy()
             return frame.copy()
 
+        # 1. Calculate distance from the person mask
+        # distanceTransform calculates distance to the nearest 0 pixel.
+        # We set board pixels (mask==0) to 1 so the person (mask==1) becomes 0.
+        visible_mask = (mask == 0).astype(np.uint8)
+        dist_map = cv2.distanceTransform(visible_mask, cv2.DIST_L2, 5)
+
+        # 2. Exponential Learning Rate calculation
+        # Formula: LR = max_lr * (dist / falloff)^power
+        # This creates a "dead zone" of zero-learning where the professor stands.
+        normalized_dist = np.clip(dist_map / self._falloff_distance, 0, 1)
+        exponential_weight = np.power(normalized_dist, self._power)
+        pixel_wise_lr = (exponential_weight * self._max_lr)[..., np.newaxis]
+
+        # 3. EMA Update: BG = (1 - LR) * BG + LR * Frame
+        self._background_float = (
+            1 - pixel_wise_lr
+        ) * self._background_float + pixel_wise_lr * frame_float
+
+        background_uint8 = self._background_float.astype(np.uint8)
+
+        # 4. Composite: use current frame for board, stored bg for person
         composite = frame.copy()
-        composite[mask == 1] = bg[mask == 1]
-        return composite
+        composite[mask == 1] = background_uint8[mask == 1]
 
-
-class _ProgressiveBackgroundReconstructor:
-    """Alternative to MOG2: simple progressive last-seen buffer.
-
-    Every frame, board-visible pixels (mask==0) overwrite the buffer;
-    person-occluded pixels (mask==1) are left unchanged, preserving the
-    last known board content beneath them. Simpler and adapts instantly
-    to new writing, but takes raw noisy pixels with no temporal averaging.
-    """
-
-    def __init__(self) -> None:
-        self._background: np.ndarray | None = None
-
-    def process(self, frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        if self._background is None:
-            self._background = frame.copy()
-        self._background[mask == 0] = frame[mask == 0]
-        composite = frame.copy()
-        composite[mask == 1] = self._background[mask == 1]
         return composite
 
 
