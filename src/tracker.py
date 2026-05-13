@@ -38,7 +38,7 @@ _IMAGENET_STD = (0.229, 0.224, 0.225)
 
 
 class RegionState(enum.Enum):
-    """Physical lifecycle states for a tracked region."""
+    """Lifecycle states for a tracked region."""
 
     NEW = "NEW"
     GROWING = "GROWING"
@@ -145,7 +145,20 @@ def _ema_bbox(
 
 
 def _preprocess_crop(crop_bgr: np.ndarray) -> torch.Tensor:
-    """Convert a BGR uint8 crop to a DINOv2-ready (1,3,H,W) float32 tensor."""
+    """Convert a BGR uint8 crop to a DINOv2-ready (1,3,H,W) float32 tensor.
+
+    Steps:
+      1. BGR → RGB
+      2. Resize so both dimensions are multiples of 14 (minimum 14×14)
+      3. Normalize [0,255] → [0.0,1.0] then apply ImageNet mean/std
+      4. Add batch dimension
+
+    Args:
+        crop_bgr: BGR uint8 numpy array from OpenCV.
+
+    Returns:
+        Float32 tensor of shape (1, 3, H', W').
+    """
     rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
     h, w = rgb.shape[:2]
     new_h = max(14, (h // 14) * 14)
@@ -165,7 +178,7 @@ def _preprocess_crop(crop_bgr: np.ndarray) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 
 
-# TODO: fix duplicate regionss
+# TODO: fix duplicate regions
 class RegionTracker:
     """Persistent region registry for the whiteboard tracker (Stage 5).
 
@@ -178,6 +191,8 @@ class RegionTracker:
             required before GROWING → STABLE.
         missing_time_threshold: Duration (seconds) without matches before ERASED.
         new_to_growing_time: Duration (seconds) of presence required for NEW → GROWING.
+        grace_period_threshold: Duration (seconds) before unmatched regions transition
+            to MISSING.
         match_threshold: Minimum combined score to match a detection to a region.
         significant_shift_iou: Raw detection IoU below this resets timers.
         content_change_threshold: DINOv2 cosine similarity below this triggers re-OCR.
@@ -188,6 +203,7 @@ class RegionTracker:
         stable_time_threshold: float = 5.0,
         missing_time_threshold: float = 5.0,
         new_to_growing_time: float = 0.5,
+        grace_period_threshold: float = 1.0,
         match_threshold: float = 0.4,
         significant_shift_iou: float = 0.85,
         content_change_threshold: float = 0.92,
@@ -195,6 +211,7 @@ class RegionTracker:
         self._stable_time_threshold = stable_time_threshold
         self._missing_time_threshold = missing_time_threshold
         self._new_to_growing_time = new_to_growing_time
+        self._grace_period_threshold = grace_period_threshold
         self._match_threshold = match_threshold
         self._significant_shift_iou = significant_shift_iou
         self._content_change_threshold = content_change_threshold
@@ -215,7 +232,17 @@ class RegionTracker:
         log.info("DINOv2-base loaded.")
 
     def _embed(self, crop_bgr: np.ndarray) -> torch.Tensor:
-        """Return the L2-normalized DINOv2 CLS token embedding for *crop_bgr*."""
+        """Return the L2-normalized DINOv2 CLS token embedding for *crop_bgr*.
+
+        Args:
+            crop_bgr: BGR uint8 numpy array.
+
+        Returns:
+            Float32 tensor of shape (768,), L2-normalized.
+
+        Raises:
+            RuntimeError: If DINOv2 was not loaded via load_dino().
+        """
         if self._dino is None:
             raise RuntimeError("DINOv2 not loaded — call load_dino() first")
         t = _preprocess_crop(crop_bgr)
@@ -225,7 +252,10 @@ class RegionTracker:
         return F.normalize(cls_token, dim=0)
 
     def _cosine_similarity(self, a: torch.Tensor, b: torch.Tensor) -> float:
-        """Cosine similarity of two embedding vectors."""
+        """Cosine similarity of two embedding vectors.
+
+        Clamps to [-1, 1] to handle floating-point rounding on L2-normalized inputs.
+        """
         return float(torch.dot(a, b).clamp(-1.0, 1.0))
 
     def mark_ocr_done(
@@ -268,7 +298,7 @@ class RegionTracker:
         # ------------------------------------------------------------------
         # Step A: Build match candidates, greedy assign highest-score first
         # ------------------------------------------------------------------
-        candidates: list[tuple[float, int, int]] = []
+        candidates: list[tuple[float, int, int]] = []  # (score, det_idx, region_id)
         for di, det in enumerate(detections):
             for reg in active_regions:
                 score = _match_score(det.bbox, reg.bbox, frame_diag)
@@ -279,7 +309,7 @@ class RegionTracker:
 
         matched_det: set[int] = set()
         matched_reg: set[int] = set()
-        assignments: dict[int, int] = {}
+        assignments: dict[int, int] = {}  # det_idx → region_id
 
         for score, di, rid in candidates:
             if di not in matched_det and rid not in matched_reg:
@@ -398,13 +428,15 @@ class RegionTracker:
         # ------------------------------------------------------------------
         for reg in active_regions:
             if reg.id not in matched_reg:
+                # TODO: missing_frames is useless
                 reg.missing_frames += 1
 
-                # Allow both STABLE and GROWING regions to transition to MISSING
+                # Transition to MISSING only after the grace period
                 if reg.state in (RegionState.STABLE, RegionState.GROWING):
-                    reg.state = RegionState.MISSING
-                    reg.last_modified = now  # Track when it went missing
-                    log.debug("Region %d lost detection → MISSING", reg.id)
+                    if now - reg.last_seen > self._grace_period_threshold:
+                        reg.state = RegionState.MISSING
+                        reg.last_modified = now  # Track when it went missing
+                        log.debug("Region %d lost detection → MISSING", reg.id)
 
         # ------------------------------------------------------------------
         # Step E: Unmatched detections — create new regions
@@ -443,7 +475,7 @@ class RegionTracker:
             # Only prune regions that have been MISSING too long
             if reg.state == RegionState.MISSING:
                 if now - reg.last_seen > self._missing_time_threshold:
-                    # FINAL VERIFICATION: Only works if we have an embedding
+                    # FINAL VERIFICATION: Priority check (always runs when threshold hit)
                     if self._dino is not None and reg.last_stable_embedding is not None:
                         x1, y1, x2, y2 = reg.bbox
                         current_crop = frame[y1:y2, x1:x2]
@@ -493,6 +525,7 @@ def init(
     significant_shift_iou: float = 0.85,
     content_change_threshold: float = 0.92,
 ) -> None:
+    """Create the module-level tracker singleton and load DINOv2. Call once at startup."""
     global _global_tracker
     _global_tracker = RegionTracker(
         stable_time_threshold=stable_time_threshold,
@@ -506,6 +539,7 @@ def init(
 
 
 def process(detections: list[Detection], frame: np.ndarray) -> TrackerResult:
+    """Run one tracking cycle using the module-level singleton."""
     global _global_tracker
     if _global_tracker is None:
         log.warning("tracker.process() called before init() — using defaults")
