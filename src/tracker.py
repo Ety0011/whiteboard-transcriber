@@ -75,6 +75,7 @@ class Region:
     ocr_text: str | None
     ocr_confidence: float | None
     last_stable_crop: np.ndarray | None  # BGR uint8 crop at last stabilization
+    last_stable_center: tuple[float, float] | None = None  # Baseline for drift
     last_stable_embedding: torch.Tensor | None = None  # Cached DINOv2 embedding
     _consecutive_visible: int = dataclasses.field(default=0, repr=False)
 
@@ -195,6 +196,7 @@ class RegionTracker:
             to MISSING.
         match_threshold: Minimum combined score to match a detection to a region.
         significant_shift_iou: Raw detection IoU below this resets timers.
+        drift_threshold_px: Cumulative Euclidean drift from last stable center.
         content_change_threshold: DINOv2 cosine similarity below this triggers re-OCR.
     """
 
@@ -206,6 +208,7 @@ class RegionTracker:
         grace_period_threshold: float = 1.0,
         match_threshold: float = 0.4,
         significant_shift_iou: float = 0.85,
+        drift_threshold_px: float = 20.0,
         content_change_threshold: float = 0.92,
     ) -> None:
         self._stable_time_threshold = stable_time_threshold
@@ -214,6 +217,7 @@ class RegionTracker:
         self._grace_period_threshold = grace_period_threshold
         self._match_threshold = match_threshold
         self._significant_shift_iou = significant_shift_iou
+        self._drift_threshold_px = drift_threshold_px
         self._content_change_threshold = content_change_threshold
 
         self._registry: dict[int, Region] = {}
@@ -362,6 +366,18 @@ class RegionTracker:
             raw_iou = _iou(det.bbox, compensated_prev)
             significant_shift = raw_iou < self._significant_shift_iou
 
+            # Cumulative Drift Check
+            cur_cx = (det.bbox[0] + det.bbox[2]) / 2.0
+            cur_cy = (det.bbox[1] + det.bbox[3]) / 2.0
+            if reg.last_stable_center is not None:
+                # Drift distance relative to board motion
+                drift = math.sqrt(
+                    (cur_cx - (reg.last_stable_center[0] + global_dx)) ** 2
+                    + (cur_cy - (reg.last_stable_center[1] + global_dy)) ** 2
+                )
+                if drift > self._drift_threshold_px:
+                    significant_shift = True
+
             reg.bbox = _ema_bbox(det.bbox, reg.bbox)
             reg.confidence = det.confidence
             reg.last_seen = now
@@ -391,6 +407,7 @@ class RegionTracker:
 
                     if stable_crop.size > 0:
                         reg.last_stable_crop = stable_crop.copy()
+                        reg.last_stable_center = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
                         if self._dino is not None:
                             reg.last_stable_embedding = self._embed(stable_crop)
 
