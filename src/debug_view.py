@@ -217,8 +217,8 @@ def main(source: int | str = 0) -> None:
     show_corners = True
     show_mask = True
     show_bg = True
-    show_layout = False
-    show_text_lines = False
+    show_layout = True
+    show_text_lines = True
     show_tracker = True
 
     print(

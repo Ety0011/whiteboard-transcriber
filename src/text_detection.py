@@ -233,6 +233,7 @@ def _parse_lines(raw_results: list, crop: np.ndarray) -> list[TextLine]:
 # ---------------------------------------------------------------------------
 
 
+# TODO: decommission layout, rely on text detector directly
 class TextDetector:
     """Runs PP-OCRv5_server_det in a child process so the main GIL is never blocked.
 

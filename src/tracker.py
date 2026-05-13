@@ -165,6 +165,7 @@ def _preprocess_crop(crop_bgr: np.ndarray) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 
 
+# TODO: fix duplicate regionss
 class RegionTracker:
     """Persistent region registry for the whiteboard tracker (Stage 5).
 
@@ -287,7 +288,29 @@ class RegionTracker:
                 matched_reg.add(rid)
 
         # ------------------------------------------------------------------
-        # Step B+C: Update matched regions and advance state machine
+        # Step B: Calculate Global Motion Offset (Consensus)
+        # ------------------------------------------------------------------
+        global_dx, global_dy = 0.0, 0.0
+        match_displacements = []
+
+        for di, rid in assignments.items():
+            det = detections[di]
+            reg = self._registry[rid]
+
+            # Calculate displacement from old smoothed center to new raw center
+            old_cx = (reg.bbox[0] + reg.bbox[2]) / 2.0
+            old_cy = (reg.bbox[1] + reg.bbox[3]) / 2.0
+            new_cx = (det.bbox[0] + det.bbox[2]) / 2.0
+            new_cy = (det.bbox[1] + det.bbox[3]) / 2.0
+            match_displacements.append((new_cx - old_cx, new_cy - old_cy))
+
+        if match_displacements:
+            # Use Median to ignore outliers
+            global_dx = float(np.median([d[0] for d in match_displacements]))
+            global_dy = float(np.median([d[1] for d in match_displacements]))
+
+        # ------------------------------------------------------------------
+        # Step C: Update matched regions and advance state machine
         # ------------------------------------------------------------------
         for di, rid in assignments.items():
             det = detections[di]
@@ -299,7 +322,14 @@ class RegionTracker:
                 reg.last_modified = now  # Reset timer for stabilization
                 log.debug("Region %d recovered from MISSING → GROWING", rid)
 
-            raw_iou = _iou(det.bbox, reg.bbox)
+            # Compensate for global shift before checking for significant shift
+            compensated_prev = (
+                int(reg.bbox[0] + global_dx),
+                int(reg.bbox[1] + global_dy),
+                int(reg.bbox[2] + global_dx),
+                int(reg.bbox[3] + global_dy),
+            )
+            raw_iou = _iou(det.bbox, compensated_prev)
             significant_shift = raw_iou < self._significant_shift_iou
 
             reg.bbox = _ema_bbox(det.bbox, reg.bbox)
@@ -339,25 +369,29 @@ class RegionTracker:
                         log.debug("Region %d → STABLE (baseline captured)", rid)
 
             elif reg.state == RegionState.STABLE:
-                # Content change check: if something is added to existing text
-                if (
-                    self._dino is not None
-                    and reg.last_stable_embedding is not None
-                    and not significant_shift
-                ):
-                    x1, y1, x2, y2 = reg.bbox
-                    current_crop = frame[y1:y2, x1:x2]
-                    if current_crop.size > 0:
-                        emb_current = self._embed(current_crop)
-                        sim = self._cosine_similarity(
-                            emb_current, reg.last_stable_embedding
-                        )
+                pass
+                # TODO: we assume that new text appears only after erasing
+                # what about typo corrections? therefore important to check after GROWING -> STABLE for changes
 
-                        if sim < self._content_change_threshold:
-                            reg.state = RegionState.GROWING
-                            reg.stable_frames = 0
-                            reg.last_modified = now
-                            reg.ocr_text = None  # Mark for re-OCR
+                # Content change check: if something is added to existing text
+                # if (
+                #     self._dino is not None
+                #     and reg.last_stable_embedding is not None
+                #     and not significant_shift
+                # ):
+                #     x1, y1, x2, y2 = reg.bbox
+                #     current_crop = frame[y1:y2, x1:x2]
+                #     if current_crop.size > 0:
+                #         emb_current = self._embed(current_crop)
+                #         sim = self._cosine_similarity(
+                #             emb_current, reg.last_stable_embedding
+                #         )
+
+                #         if sim < self._content_change_threshold:
+                #             reg.state = RegionState.GROWING
+                #             reg.stable_frames = 0
+                #             reg.last_modified = now
+                #             reg.ocr_text = None  # Mark for re-OCR
 
         # ------------------------------------------------------------------
         # Step D: Unmatched regions — transition to MISSING
