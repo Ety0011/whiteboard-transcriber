@@ -18,6 +18,7 @@ Keyboard controls:
     b  — toggle Stage 3 background composite (separate window, side-by-side)
     l  — toggle Stage 4 layout bounding boxes on the Stage 3 composite
     t  — toggle Stage 5 text line bounding boxes within each layout region
+    r  — toggle Stage 5 region tracker lifecycle visualization
 """
 
 from __future__ import annotations
@@ -54,13 +55,13 @@ _LAYOUT_COLOURS: dict[str, tuple[int, int, int]] = {
 }
 _LAYOUT_DEFAULT_COLOUR: tuple[int, int, int] = (180, 180, 180)
 
-# --- Stage 5 State Colours ---
+# --- Updated Stage 5 State Colours ---
 _STATE_COLOURS = {
-    RegionState.NEW: (255, 255, 0),
-    RegionState.GROWING: (0, 165, 255),
-    RegionState.STABLE: (0, 255, 0),
-    RegionState.OCR_DONE: (0, 128, 0),
-    RegionState.ERASED: (0, 0, 255),
+    RegionState.NEW: (255, 255, 0),  # Cyan
+    RegionState.GROWING: (0, 165, 255),  # Orange
+    RegionState.STABLE: (0, 255, 0),  # Green
+    RegionState.MISSING: (200, 0, 200),  # Magenta/Purple
+    RegionState.ERASED: (0, 0, 255),  # Red
 }
 
 
@@ -92,15 +93,22 @@ def _draw_text_lines(frame: np.ndarray, regions: list[RegionWithLines]) -> np.nd
     return out
 
 
-# --- Stage 5 Drawing Helper ---
+# --- Updated Stage 5 Drawing Helper ---
 def _draw_tracker(frame: np.ndarray, regions: list) -> np.ndarray:
-    """Draw persistent tracked regions with IDs and States."""
+    """Draw persistent tracked regions with IDs, States, and OCR status."""
     out = frame.copy()
     for reg in regions:
         x1, y1, x2, y2 = reg.bbox
         color = _STATE_COLOURS.get(reg.state, (255, 255, 255))
-        cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
-        label = f"ID:{reg.id} {reg.state.value} {reg.confidence:.2f}"
+
+        # Draw dotted line for MISSING regions, solid for others
+        thickness = 1 if reg.state == RegionState.MISSING else 2
+        cv2.rectangle(out, (x1, y1), (x2, y2), color, thickness)
+
+        # Indicate OCR status in the label
+        ocr_status = "✓" if reg.ocr_text else "..."
+        label = f"ID:{reg.id} {reg.state.value} {reg.confidence:.2f} [{ocr_status}]"
+
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
         cv2.rectangle(out, (x1, y1), (x1 + tw + 4, y1 + th + 6), color, -1)
         cv2.putText(
@@ -187,19 +195,19 @@ def _draw_corners(frame: np.ndarray, registrar: Registrar) -> np.ndarray:
 
 
 def main(source: int | str = 0) -> None:
-    """Run the Stage 0 + 1 + 2 + 3 + 4 preview loop."""
+    """Run the Stage 0-5 preview loop."""
     fps = _video_fps(source)
     wait_ms = max(1, int(1000 / fps))
 
     frame_queue = start_camera(source)
     registrar = Registrar()
 
-    print("Initialising MediaPipe segmenter (first load may take a moment)...")
+    print("Initialising MediaPipe segmenter...")
     segmenter = Segmenter()
     reconstructor = BackgroundReconstructor()
-    print("Initialising PP-DocLayout model (first load may take a moment)...")
+    print("Initialising PP-DocLayout model...")
     layout_detector = LayoutDetector()
-    print("Initialising PP-OCRv5_server_det model (first load may take a moment)...")
+    print("Initialising PP-OCRv5_server_det model...")
     text_detector = TextDetector()
 
     # --- Stage 5 Tracker Instance ---
@@ -209,15 +217,15 @@ def main(source: int | str = 0) -> None:
     show_corners = True
     show_mask = True
     show_bg = True
-    show_layout = True
-    show_text_lines = True
+    show_layout = False
+    show_text_lines = False
     show_tracker = True
 
     print(
         "Stage 1+2+3+4+5 preview running.\n"
         "  d — toggle detected board corners\n"
         "  s — toggle person-mask overlay\n"
-        "  b — toggle Stage 3 background composite (separate window)\n"
+        "  b — toggle Stage 3 background composite\n"
         "  l — toggle Stage 4 layout bounding boxes\n"
         "  t — toggle Stage 5 text line bounding boxes\n"
         "  r — toggle Stage 5 region tracker\n"
@@ -248,56 +256,52 @@ def main(source: int | str = 0) -> None:
             composite = reconstructor.process(warped, bg_mask)
             regions = layout_detector.process(composite)
 
+            # Stage 4: Run text detection (always run to feed tracker)
+            regions_with_lines = text_detector.process(regions)
+
             # --- Stage 5: Prepare detections for tracker ---
             all_detections = []
-            regions_with_lines = text_detector.process(regions)
             for r in regions_with_lines:
                 rx1, ry1, _, _ = r.bbox
                 for line in r.lines:
                     lx1, ly1, lx2, ly2 = line.bbox
-                    # Map to global composite coordinates
+                    # Translate local region coords to global composite coords
                     global_bbox = (rx1 + lx1, ry1 + ly1, rx1 + lx2, ry1 + ly2)
                     all_detections.append(
                         Detection(bbox=global_bbox, confidence=line.confidence)
                     )
 
-            # Update Tracker
+            # Update Tracker using the Background Composite as the truth source
             tracker_result = region_tracker.process(all_detections, composite)
 
+            # Visualisation overlays
+            vis_composite = composite.copy()
             if show_layout:
-                composite = _draw_layout(composite, regions)
+                vis_composite = _draw_layout(vis_composite, regions)
             if show_text_lines:
-                composite = _draw_text_lines(composite, regions_with_lines)
-            # --- Stage 5 Visualization ---
+                vis_composite = _draw_text_lines(vis_composite, regions_with_lines)
             if show_tracker:
-                composite = _draw_tracker(composite, tracker_result.regions)
+                vis_composite = _draw_tracker(vis_composite, tracker_result.regions)
 
-            cv2.imshow("Stage 3+4", composite)
+            cv2.imshow("Stage 3+4+5", vis_composite)
 
         key = cv2.waitKey(wait_ms) & 0xFF
         if key == ord("q"):
             break
         if key == ord("d"):
             show_corners = not show_corners
-            logger.info("Corner overlay: %s", "ON" if show_corners else "OFF")
         if key == ord("s"):
             show_mask = not show_mask
-            logger.info("Mask overlay: %s", "ON" if show_mask else "OFF")
         if key == ord("b"):
             show_bg = not show_bg
             if not show_bg:
-                cv2.destroyWindow("Stage 3+4")
-            logger.info("Background composite: %s", "ON" if show_bg else "OFF")
+                cv2.destroyWindow("Stage 3+4+5")
         if key == ord("l"):
             show_layout = not show_layout
-            logger.info("Layout overlay: %s", "ON" if show_layout else "OFF")
         if key == ord("t"):
             show_text_lines = not show_text_lines
-            logger.info("Text line overlay: %s", "ON" if show_text_lines else "OFF")
-        # --- Stage 5 Toggle Control ---
         if key == ord("r"):
             show_tracker = not show_tracker
-            logger.info("Tracker overlay: %s", "ON" if show_tracker else "OFF")
 
     cv2.destroyAllWindows()
 

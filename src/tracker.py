@@ -2,9 +2,11 @@
 
 Maintains a persistent registry of Region objects across frames. Each frame,
 raw detections are matched to existing regions using IoU + centroid scoring,
-bounding boxes are EMA-smoothed, and the state machine is advanced. Newly
-stable regions are returned for Stage 6 (OCR). Content change on OCR_DONE
-regions is detected via DINOv2-base cosine similarity.
+bounding boxes are EMA-smoothed, and the state machine is advanced.
+
+The whiteboard is modeled as a set of physical regions. OCR status is handled
+as metadata (ocr_text) rather than a lifecycle state. DINOv2-base embeddings
+are used to detect content changes and verify region presence during occlusion.
 """
 
 from __future__ import annotations
@@ -36,12 +38,12 @@ _IMAGENET_STD = (0.229, 0.224, 0.225)
 
 
 class RegionState(enum.Enum):
-    """Lifecycle states for a tracked region."""
+    """Physical lifecycle states for a tracked region."""
 
     NEW = "NEW"
     GROWING = "GROWING"
     STABLE = "STABLE"
-    OCR_DONE = "OCR_DONE"
+    MISSING = "MISSING"
     ERASED = "ERASED"
 
 
@@ -72,7 +74,8 @@ class Region:
     missing_frames: int
     ocr_text: str | None
     ocr_confidence: float | None
-    last_stable_crop: np.ndarray | None  # BGR uint8 crop at last OCR stabilization
+    last_stable_crop: np.ndarray | None  # BGR uint8 crop at last stabilization
+    last_stable_embedding: torch.Tensor | None = None  # Cached DINOv2 embedding
     _consecutive_visible: int = dataclasses.field(default=0, repr=False)
 
 
@@ -142,20 +145,7 @@ def _ema_bbox(
 
 
 def _preprocess_crop(crop_bgr: np.ndarray) -> torch.Tensor:
-    """Convert a BGR uint8 crop to a DINOv2-ready (1,3,H,W) float32 tensor.
-
-    Steps:
-      1. BGR → RGB
-      2. Resize so both dimensions are multiples of 14 (minimum 14×14)
-      3. Normalize [0,255] → [0.0,1.0] then apply ImageNet mean/std
-      4. Add batch dimension
-
-    Args:
-        crop_bgr: BGR uint8 numpy array from OpenCV.
-
-    Returns:
-        Float32 tensor of shape (1, 3, H', W').
-    """
+    """Convert a BGR uint8 crop to a DINOv2-ready (1,3,H,W) float32 tensor."""
     rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
     h, w = rgb.shape[:2]
     new_h = max(14, (h // 14) * 14)
@@ -180,7 +170,7 @@ class RegionTracker:
 
     Matches frame detections to existing regions, applies EMA bbox smoothing,
     advances the state machine, and exposes newly stable or erased regions each
-    frame. DINOv2-base detects content change on OCR_DONE regions.
+    frame. DINOv2-base detects content change on STABLE regions.
 
     Args:
         stable_time_threshold: Duration (seconds) without significant bbox shift
@@ -188,9 +178,8 @@ class RegionTracker:
         missing_time_threshold: Duration (seconds) without matches before ERASED.
         new_to_growing_time: Duration (seconds) of presence required for NEW → GROWING.
         match_threshold: Minimum combined score to match a detection to a region.
-        significant_shift_iou: Raw detection IoU below this resets stable_frames.
-        content_change_threshold: DINOv2 cosine similarity below this triggers
-            OCR_DONE → GROWING.
+        significant_shift_iou: Raw detection IoU below this resets timers.
+        content_change_threshold: DINOv2 cosine similarity below this triggers re-OCR.
     """
 
     def __init__(
@@ -225,17 +214,7 @@ class RegionTracker:
         log.info("DINOv2-base loaded.")
 
     def _embed(self, crop_bgr: np.ndarray) -> torch.Tensor:
-        """Return the L2-normalized DINOv2 CLS token embedding for *crop_bgr*.
-
-        Args:
-            crop_bgr: BGR uint8 numpy array.
-
-        Returns:
-            Float32 tensor of shape (768,), L2-normalized.
-
-        Raises:
-            RuntimeError: If DINOv2 was not loaded via load_dino().
-        """
+        """Return the L2-normalized DINOv2 CLS token embedding for *crop_bgr*."""
         if self._dino is None:
             raise RuntimeError("DINOv2 not loaded — call load_dino() first")
         t = _preprocess_crop(crop_bgr)
@@ -245,10 +224,7 @@ class RegionTracker:
         return F.normalize(cls_token, dim=0)
 
     def _cosine_similarity(self, a: torch.Tensor, b: torch.Tensor) -> float:
-        """Cosine similarity of two embedding vectors.
-
-        Clamps to [-1, 1] to handle floating-point rounding on L2-normalized inputs.
-        """
+        """Cosine similarity of two embedding vectors."""
         return float(torch.dot(a, b).clamp(-1.0, 1.0))
 
     def mark_ocr_done(
@@ -256,35 +232,17 @@ class RegionTracker:
         region_id: int,
         text: str,
         confidence: float,
-        stable_crop: np.ndarray,
     ) -> None:
-        """Record OCR result and transition the region to OCR_DONE.
+        """Record OCR result metadata for a region.
 
-        Called by pipeline.py after Stage 6 finishes on a newly_stable region.
-        Stores OCR text, confidence, and the crop as the DINOv2 baseline for
-        future content-change detection.
-
-        Args:
-            region_id:   The Region.id to update.
-            text:        Full OCR text for the region.
-            confidence:  OCR confidence score.
-            stable_crop: BGR uint8 crop used during OCR (DINOv2 baseline).
-
-        Raises:
-            KeyError: If region_id is not in the active registry.
+        The physical state remains STABLE. Orchestrators should check
+        if ocr_text is None to identify regions needing recognition.
         """
         region = self._registry[region_id]
         region.ocr_text = text
         region.ocr_confidence = confidence
-        region.last_stable_crop = stable_crop.copy()
-        region.state = RegionState.OCR_DONE
         region.last_modified = time.monotonic()
-        log.debug(
-            "Region %d → OCR_DONE (conf=%.2f, text=%r…)",
-            region_id,
-            confidence,
-            text[:40],
-        )
+        log.debug("Metadata updated for Region %d: %r", region_id, text[:30])
 
     def process(
         self,
@@ -295,11 +253,10 @@ class RegionTracker:
 
         Args:
             detections: Raw text-line detections from Stage 4.
-            frame:      Current BGR frame (used for DINOv2 crop extraction).
+            frame:      Current BGR background composite (Stage 3).
 
         Returns:
-            TrackerResult with all active regions, plus newly-stable and
-            newly-erased regions from this frame.
+            TrackerResult with all active regions.
         """
         now = time.monotonic()
         h, w = frame.shape[:2]
@@ -310,7 +267,7 @@ class RegionTracker:
         # ------------------------------------------------------------------
         # Step A: Build match candidates, greedy assign highest-score first
         # ------------------------------------------------------------------
-        candidates: list[tuple[float, int, int]] = []  # (score, det_idx, region_id)
+        candidates: list[tuple[float, int, int]] = []
         for di, det in enumerate(detections):
             for reg in active_regions:
                 score = _match_score(det.bbox, reg.bbox, frame_diag)
@@ -321,7 +278,7 @@ class RegionTracker:
 
         matched_det: set[int] = set()
         matched_reg: set[int] = set()
-        assignments: dict[int, int] = {}  # det_idx → region_id
+        assignments: dict[int, int] = {}
 
         for score, di, rid in candidates:
             if di not in matched_det and rid not in matched_reg:
@@ -336,7 +293,12 @@ class RegionTracker:
             det = detections[di]
             reg = self._registry[rid]
 
-            # Compare raw detection against current smoothed bbox for stability
+            # If a MISSING region returns, it must re-stabilize
+            if reg.state == RegionState.MISSING:
+                reg.state = RegionState.GROWING
+                reg.last_modified = now  # Reset timer for stabilization
+                log.debug("Region %d recovered from MISSING → GROWING", rid)
+
             raw_iou = _iou(det.bbox, reg.bbox)
             significant_shift = raw_iou < self._significant_shift_iou
 
@@ -344,11 +306,14 @@ class RegionTracker:
             reg.confidence = det.confidence
             reg.last_seen = now
             reg.missing_frames = 0
-            reg._consecutive_visible += 1
 
             if significant_shift:
                 reg.stable_frames = 0
                 reg.last_modified = now
+                # If a stable region moves, it becomes GROWING and its text is stale
+                if reg.state == RegionState.STABLE:
+                    reg.state = RegionState.GROWING
+                    reg.ocr_text = None  # Clear metadata so Stage 6 re-runs
             else:
                 reg.stable_frames += 1
 
@@ -360,38 +325,52 @@ class RegionTracker:
 
             elif reg.state == RegionState.GROWING:
                 if now - reg.last_modified >= self._stable_time_threshold:
-                    reg.state = RegionState.STABLE
-                    reg.last_modified = now
+                    # Capture baseline data immediately upon stabilization
+                    x1, y1, x2, y2 = reg.bbox
+                    stable_crop = frame[y1:y2, x1:x2]
 
-            elif reg.state == RegionState.OCR_DONE:
+                    if stable_crop.size > 0:
+                        reg.last_stable_crop = stable_crop.copy()
+                        if self._dino is not None:
+                            reg.last_stable_embedding = self._embed(stable_crop)
+
+                        reg.state = RegionState.STABLE
+                        reg.last_modified = now
+                        log.debug("Region %d → STABLE (baseline captured)", rid)
+
+            elif reg.state == RegionState.STABLE:
+                # Content change check: if something is added to existing text
                 if (
                     self._dino is not None
-                    and reg.last_stable_crop is not None
+                    and reg.last_stable_embedding is not None
                     and not significant_shift
                 ):
                     x1, y1, x2, y2 = reg.bbox
                     current_crop = frame[y1:y2, x1:x2]
                     if current_crop.size > 0:
                         emb_current = self._embed(current_crop)
-                        emb_stored = self._embed(reg.last_stable_crop)
-                        sim = self._cosine_similarity(emb_current, emb_stored)
+                        sim = self._cosine_similarity(
+                            emb_current, reg.last_stable_embedding
+                        )
+
                         if sim < self._content_change_threshold:
                             reg.state = RegionState.GROWING
                             reg.stable_frames = 0
                             reg.last_modified = now
-                            log.debug(
-                                "Region %d content changed (cos=%.3f) → GROWING",
-                                rid,
-                                sim,
-                            )
+                            reg.ocr_text = None  # Mark for re-OCR
 
         # ------------------------------------------------------------------
-        # Step D: Unmatched regions — increment missing counter
+        # Step D: Unmatched regions — transition to MISSING
         # ------------------------------------------------------------------
         for reg in active_regions:
             if reg.id not in matched_reg:
                 reg.missing_frames += 1
-                reg._consecutive_visible = 0
+
+                # Allow both STABLE and GROWING regions to transition to MISSING
+                if reg.state in (RegionState.STABLE, RegionState.GROWING):
+                    reg.state = RegionState.MISSING
+                    reg.last_modified = now  # Track when it went missing
+                    log.debug("Region %d lost detection → MISSING", reg.id)
 
         # ------------------------------------------------------------------
         # Step E: Unmatched detections — create new regions
@@ -427,14 +406,33 @@ class RegionTracker:
             if reg.state == RegionState.STABLE and reg.last_modified == now:
                 newly_stable.append(reg)
 
-            if (
-                reg.state != RegionState.ERASED
-                and now - reg.last_seen > self._missing_time_threshold
-            ):
-                reg.state = RegionState.ERASED
-                reg.last_modified = now
-                newly_erased.append(reg)
-                to_remove.append(rid)
+            # Only prune regions that have been MISSING too long
+            if reg.state == RegionState.MISSING:
+                if now - reg.last_seen > self._missing_time_threshold:
+                    # FINAL VERIFICATION: Only works if we have an embedding
+                    if self._dino is not None and reg.last_stable_embedding is not None:
+                        x1, y1, x2, y2 = reg.bbox
+                        current_crop = frame[y1:y2, x1:x2]
+                        if current_crop.size > 0:
+                            emb_current = self._embed(current_crop)
+                            sim = self._cosine_similarity(
+                                emb_current, reg.last_stable_embedding
+                            )
+
+                            if sim >= self._content_change_threshold:
+                                reg.last_seen = now
+                                continue
+
+                    # If verification fails or it's unverified (no embedding), it's gone
+                    reg.state = RegionState.ERASED
+                    reg.last_modified = now
+                    newly_erased.append(reg)
+                    to_remove.append(rid)
+
+            # Handle NEW regions that disappear immediately
+            elif reg.state == RegionState.NEW:
+                if now - reg.last_seen > self._missing_time_threshold:
+                    to_remove.append(rid)
 
         for rid in to_remove:
             del self._registry[rid]
@@ -461,16 +459,6 @@ def init(
     significant_shift_iou: float = 0.85,
     content_change_threshold: float = 0.92,
 ) -> None:
-    """Create the module-level tracker singleton and load DINOv2. Call once at startup.
-
-    Args:
-        stable_time_threshold: Seconds before GROWING → STABLE.
-        missing_time_threshold: Seconds before ERASED.
-        new_to_growing_time: Seconds before NEW → GROWING.
-        match_threshold: Minimum score to match a detection to a region.
-        significant_shift_iou: Raw IoU below which stable_frames resets.
-        content_change_threshold: DINOv2 cosine below which OCR_DONE → GROWING.
-    """
     global _global_tracker
     _global_tracker = RegionTracker(
         stable_time_threshold=stable_time_threshold,
@@ -484,15 +472,6 @@ def init(
 
 
 def process(detections: list[Detection], frame: np.ndarray) -> TrackerResult:
-    """Run one tracking cycle using the module-level singleton.
-
-    Args:
-        detections: Raw text-line detections from Stage 4.
-        frame:      Current BGR frame.
-
-    Returns:
-        TrackerResult with active, newly-stable, and newly-erased regions.
-    """
     global _global_tracker
     if _global_tracker is None:
         log.warning("tracker.process() called before init() — using defaults")
