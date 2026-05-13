@@ -89,13 +89,7 @@ class BackgroundReconstructor:
             1 - pixel_wise_lr
         ) * self._background_float + pixel_wise_lr * frame_float
 
-        background_uint8 = self._background_float.astype(np.uint8)
-
-        # 4. Composite: use current frame for board, stored bg for person
-        composite = frame.copy()
-        composite[mask == 1] = background_uint8[mask == 1]
-
-        return composite
+        return self._background_float.astype(np.uint8)
 
 
 # ---------------------------------------------------------------------------
