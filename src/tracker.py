@@ -198,6 +198,7 @@ class RegionTracker:
         significant_shift_iou: Raw detection IoU below this resets timers.
         drift_threshold_px: Cumulative Euclidean drift from last stable center.
         content_change_threshold: DINOv2 cosine similarity below this triggers re-OCR.
+        max_checks_per_frame: Number of STABLE regions to check with DINO per frame.
     """
 
     def __init__(
@@ -210,6 +211,7 @@ class RegionTracker:
         significant_shift_iou: float = 0.85,
         drift_threshold_px: float = 20.0,
         content_change_threshold: float = 0.92,
+        max_checks_per_frame: int = 2,
     ) -> None:
         self._stable_time_threshold = stable_time_threshold
         self._missing_time_threshold = missing_time_threshold
@@ -219,9 +221,11 @@ class RegionTracker:
         self._significant_shift_iou = significant_shift_iou
         self._drift_threshold_px = drift_threshold_px
         self._content_change_threshold = content_change_threshold
+        self._max_checks_per_frame = max_checks_per_frame
 
         self._registry: dict[int, Region] = {}
         self._next_id: int = 0
+        self._check_index: int = 0  # Round-robin counter
         self._dino: torch.nn.Module | None = None
 
     def load_dino(self) -> None:
@@ -346,6 +350,9 @@ class RegionTracker:
         # ------------------------------------------------------------------
         # Step C: Update matched regions and advance state machine
         # ------------------------------------------------------------------
+        # Prepare for round-robin check later
+        stable_to_check: list[Region] = []
+
         for di, rid in assignments.items():
             det = detections[di]
             reg = self._registry[rid]
@@ -416,29 +423,38 @@ class RegionTracker:
                         log.debug("Region %d → STABLE (baseline captured)", rid)
 
             elif reg.state == RegionState.STABLE:
-                pass
-                # TODO: we assume that new text appears only after erasing
-                # what about typo corrections? therefore important to check after GROWING -> STABLE for changes
+                # Accumulate candidates for the round-robin content-change check
+                if (
+                    self._dino is not None
+                    and reg.last_stable_embedding is not None
+                    and not significant_shift
+                ):
+                    stable_to_check.append(reg)
 
-                # Content change check: if something is added to existing text
-                # if (
-                #     self._dino is not None
-                #     and reg.last_stable_embedding is not None
-                #     and not significant_shift
-                # ):
-                #     x1, y1, x2, y2 = reg.bbox
-                #     current_crop = frame[y1:y2, x1:x2]
-                #     if current_crop.size > 0:
-                #         emb_current = self._embed(current_crop)
-                #         sim = self._cosine_similarity(
-                #             emb_current, reg.last_stable_embedding
-                #         )
+        # ------------------------------------------------------------------
+        # Step C.2: Round-robin DINO Content Check
+        # ------------------------------------------------------------------
+        if stable_to_check:
+            # Select a subset of STABLE regions to check this frame
+            num_to_check = min(len(stable_to_check), self._max_checks_per_frame)
+            for _ in range(num_to_check):
+                self._check_index %= len(stable_to_check)
+                reg = stable_to_check[self._check_index]
+                self._check_index += 1
 
-                #         if sim < self._content_change_threshold:
-                #             reg.state = RegionState.GROWING
-                #             reg.stable_frames = 0
-                #             reg.last_modified = now
-                #             reg.ocr_text = None  # Mark for re-OCR
+                x1, y1, x2, y2 = reg.bbox
+                current_crop = frame[y1:y2, x1:x2]
+                if current_crop.size > 0:
+                    emb_current = self._embed(current_crop)
+                    sim = self._cosine_similarity(
+                        emb_current, reg.last_stable_embedding
+                    )
+
+                    if sim < self._content_change_threshold:
+                        reg.state = RegionState.GROWING
+                        reg.stable_frames = 0
+                        reg.last_modified = now
+                        reg.ocr_text = None  # Mark for re-OCR
 
         # ------------------------------------------------------------------
         # Step D: Unmatched regions — transition to MISSING
