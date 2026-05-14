@@ -17,8 +17,7 @@ Typical usage::
 
     detector = BoardDetector()
     # each frame:
-    detector.submit_frame(frame)
-    corners = detector.get_corners()   # non-blocking, returns cached value
+    corners = detector.process(frame)   # non-blocking, returns cached value
 """
 
 from __future__ import annotations
@@ -39,7 +38,7 @@ class BoardDetector:
     """Stateful whiteboard-localization stage backed by SAM 3.
 
     SAM 3 fires asynchronously every ``recompute_interval`` seconds.
-    ``get_corners()`` never blocks — it returns the most recently accepted
+    ``process()`` never blocks — it returns the most recently accepted
     four-corner array, or ``None`` before any successful detection.
     """
 
@@ -93,14 +92,19 @@ class BoardDetector:
     # Public
     # ------------------------------------------------------------------
 
-    def submit_frame(self, frame: np.ndarray) -> None:
-        """Trigger an async SAM 3 detection if the recompute interval has elapsed.
+    def process(self, frame: np.ndarray) -> np.ndarray | None:
+        """Submit *frame* for async detection and return the cached corners.
 
-        Safe to call every frame — detection only fires at most once per
-        ``recompute_interval`` seconds and does not block the caller.
+        Non-blocking. Triggers SAM 3 at most once per ``recompute_interval``
+        seconds; returns the most recently accepted corners immediately.
+        Matches the single-call API of other pipeline stages.
 
         Args:
             frame: BGR uint8 raw camera frame.
+
+        Returns:
+            Float32 array of shape ``(4, 2)`` ordered TL/TR/BR/BL, or
+            ``None`` if no successful detection has occurred yet.
         """
         now = time.monotonic()
         if not self._detecting and (now - self._last_detect_time) >= self._recompute_interval:
@@ -108,14 +112,6 @@ class BoardDetector:
             self._pending_frame = frame
             self._detecting = True
             self._detect_event.set()
-
-    def get_corners(self) -> np.ndarray | None:
-        """Return the most recently accepted board corners without blocking.
-
-        Returns:
-            Float32 array of shape ``(4, 2)`` ordered TL/TR/BR/BL, or
-            ``None`` if no successful detection has occurred yet.
-        """
         with self._lock:
             return self._cached_corners
 

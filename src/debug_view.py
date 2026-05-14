@@ -247,8 +247,7 @@ def main(source: int | str = 0) -> None:
             break
 
         # Stage 1: detect board corners (async, non-blocking)
-        board_detector.submit_frame(frame)
-        corners = board_detector.get_corners()
+        corners = board_detector.process(frame)
 
         # Stage 2: person mask on raw frame
         mask_raw = person_masker.process(frame)
