@@ -26,11 +26,14 @@ Typical usage::
 from __future__ import annotations
 
 import logging
+import os
 import urllib.request
 from pathlib import Path
 
 import cv2
-import mediapipe as mp
+
+os.environ.setdefault("GLOG_minloglevel", "3")  # suppress MediaPipe C++ telemetry logs
+import mediapipe as mp  # noqa: E402
 import numpy as np
 
 logger = logging.getLogger(__name__)

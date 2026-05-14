@@ -16,6 +16,7 @@ import enum
 import logging
 import math
 import time
+import warnings
 
 import cv2
 import numpy as np
@@ -216,6 +217,7 @@ class RegionTracker:
 
     def load_dino(self) -> None:
         """Load DINOv2-base (ViT-B/14) from torch.hub. Call once at startup."""
+        warnings.filterwarnings("ignore", message="xFormers is not available")
         log.info("Loading DINOv2-base (ViT-B/14) …")
         self._dino = torch.hub.load(
             "facebookresearch/dinov2",
