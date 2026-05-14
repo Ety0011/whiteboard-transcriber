@@ -216,13 +216,10 @@ class RegionTracker:
 
         self._registry: dict[int, Region] = {}
         self._next_id: int = 0
-        self._dino: torch.nn.Module | None = None
 
-    def load_dino(self) -> None:
-        """Load DINOv2-base (ViT-B/14) from torch.hub. Call once at startup."""
         warnings.filterwarnings("ignore", message="xFormers is not available")
         log.info("Loading DINOv2-base (ViT-B/14) …")
-        self._dino = torch.hub.load(
+        self._dino: torch.nn.Module = torch.hub.load(
             "facebookresearch/dinov2",
             "dinov2_vitb14",
             pretrained=True,
@@ -238,12 +235,7 @@ class RegionTracker:
 
         Returns:
             Float32 tensor of shape (768,), L2-normalized.
-
-        Raises:
-            RuntimeError: If DINOv2 was not loaded via load_dino().
         """
-        if self._dino is None:
-            raise RuntimeError("DINOv2 not loaded — call load_dino() first")
         t = _preprocess_crop(crop_bgr)
         with torch.no_grad():
             feats = self._dino.forward_features(t)
@@ -388,8 +380,7 @@ class RegionTracker:
         if crop.size > 0:
             reg.last_stable_crop = crop.copy()
             reg.last_stable_center = (reg.bbox[:2] + reg.bbox[2:]) / 2.0
-            if self._dino:
-                reg.last_stable_embedding = self._embed(crop)
+            reg.last_stable_embedding = self._embed(crop)
             reg.state, reg.last_modified = RegionState.STABLE, now
             log.debug("Region %d → STABLE", reg.id)
 

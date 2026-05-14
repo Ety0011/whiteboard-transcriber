@@ -218,18 +218,14 @@ def main(source: int | str = 0) -> None:
     frame_queue = start_camera(source)
     registrar = Registrar()
 
-    print("Initialising MediaPipe segmenter...")
     segmenter = Segmenter()
     reconstructor = BackgroundReconstructor()
-    print("Initialising PP-OCRv5_server_det model...")
     text_detector = TextDetector()
 
     # --- Stage 5 Tracker Instance ---
     region_tracker = RegionTracker()
-    region_tracker.load_dino()
 
     # --- Stage 6 Recognizer ---
-    print("Initialising PP-OCRv5_server_rec model...")
     recognizer = Recognizer()
     doc = WhiteboardDoc()
 
