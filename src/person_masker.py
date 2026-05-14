@@ -27,6 +27,10 @@ Typical usage::
     mask = masker.process(raw_frame)   # raw_frame direct from camera
 """
 
+# TODO: fix this shit
+# E0000 00:00:1778787895.076966 14464544 portable_clearcut_uploader.cc:90] Failed to send to clearcut: FAILED_PRECONDITION: Not valid for uploading until: 2026-05-14T21:59:36.213943+02:00
+# === Source Location Trace: ===
+# wireless/android/play/playlog/cplusplus/portable_clearcut_uploader.cc:180
 from __future__ import annotations
 
 import logging
@@ -79,7 +83,7 @@ class PersonMasker:
         self,
         model_path: Path | None = None,
         threshold: float = 0.5,
-        dilation_px: int = 10,
+        dilation_px: int = 5,
     ) -> None:
         """
         Args:
