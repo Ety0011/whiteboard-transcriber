@@ -52,7 +52,7 @@ class RegionState(enum.Enum):
 class Detection:
     """A single text-line detection produced by Stage 4."""
 
-    bbox: tuple[int, int, int, int]  # x1, y1, x2, y2
+    bbox: np.ndarray  # shape (4,) int32: x1, y1, x2, y2
     confidence: float
 
 
@@ -65,7 +65,7 @@ class Region:
     """
 
     id: int
-    bbox: tuple[int, int, int, int]  # x1, y1, x2, y2 — EMA-smoothed
+    bbox: np.ndarray  # shape (4,) int32: x1, y1, x2, y2 — EMA-smoothed
     confidence: float
     state: RegionState
     first_seen: float
@@ -74,7 +74,7 @@ class Region:
     ocr_text: str | None
     ocr_confidence: float | None
     last_stable_crop: np.ndarray | None  # BGR uint8 crop at last stabilization
-    last_stable_center: tuple[float, float] | None = None  # Baseline for drift
+    last_stable_center: np.ndarray | None = None  # shape (2,) float64 cx,cy
     last_stable_embedding: torch.Tensor | None = None  # Cached DINOv2 embedding
     _consecutive_visible: int = dataclasses.field(default=0, repr=False)
 
@@ -93,7 +93,7 @@ class TrackerResult:
 # ---------------------------------------------------------------------------
 
 
-def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+def _iou(a: np.ndarray, b: np.ndarray) -> float:
     """Compute Intersection-over-Union of two (x1,y1,x2,y2) bounding boxes."""
     ix1 = max(a[0], b[0])
     iy1 = max(a[1], b[1])
@@ -107,8 +107,8 @@ def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
 
 
 def _centroid_similarity(
-    a: tuple[int, int, int, int],
-    b: tuple[int, int, int, int],
+    a: np.ndarray,
+    b: np.ndarray,
     frame_diag: float,
 ) -> float:
     """Centroid proximity normalized to [0, 1] via frame diagonal."""
@@ -121,8 +121,8 @@ def _centroid_similarity(
 
 
 def _match_score(
-    det_bbox: tuple[int, int, int, int],
-    reg_bbox: tuple[int, int, int, int],
+    det_bbox: np.ndarray,
+    reg_bbox: np.ndarray,
     frame_diag: float,
 ) -> float:
     # TODO: put coefficients as parameters
@@ -354,23 +354,15 @@ class RegionTracker:
     def _update_region(self, det, reg, frame, now):
         """Logic for a single matched region."""
 
-        if reg.last_stable_center:
-            cur_cx, cur_cy = (
-                (det.bbox[0] + det.bbox[2]) / 2.0,
-                (det.bbox[1] + det.bbox[3]) / 2.0,
-            )
-            drift = math.sqrt(
-                (cur_cx - (reg.last_stable_center[0])) ** 2
-                + (cur_cy - (reg.last_stable_center[1])) ** 2
-            )
+        if reg.last_stable_center is not None:
+            cur_center = (det.bbox[:2] + det.bbox[2:]) / 2.0
+            drift = float(np.linalg.norm(cur_center - reg.last_stable_center))
             if drift > self._drift_threshold_px and reg.state == RegionState.STABLE:
                 reg.state, reg.ocr_text = RegionState.STABILIZING, None
                 reg.last_modified = now
 
-        # Physical Update
-        # TODO: use numpy
-        # TODO: these are parameters
-        reg.bbox = tuple(int(0.2 * d + 0.8 * p) for d, p in zip(det.bbox, reg.bbox))
+        # Physical Update — EMA bbox smoothing
+        reg.bbox = (0.2 * det.bbox + 0.8 * reg.bbox).astype(np.int32)
         reg.confidence, reg.last_seen = det.confidence, now
 
         # Transitions
@@ -391,7 +383,7 @@ class RegionTracker:
         crop = frame[y1:y2, x1:x2]
         if crop.size > 0:
             reg.last_stable_crop = crop.copy()
-            reg.last_stable_center = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+            reg.last_stable_center = (reg.bbox[:2] + reg.bbox[2:]) / 2.0
             if self._dino:
                 reg.last_stable_embedding = self._embed(crop)
             reg.state, reg.last_modified = RegionState.STABLE, now
@@ -411,7 +403,7 @@ class RegionTracker:
                 self._next_id += 1
                 self._registry[new_id] = Region(
                     id=new_id,
-                    bbox=det.bbox,
+                    bbox=det.bbox.copy(),
                     confidence=det.confidence,
                     state=RegionState.CANDIDATE,
                     first_seen=now,

@@ -47,7 +47,7 @@ _WHITEBOARD_LABELS = {
 class Region:
     """A detected layout region on the whiteboard."""
 
-    bbox: tuple[int, int, int, int]  # x1, y1, x2, y2
+    bbox: np.ndarray  # shape (4,) int32: x1, y1, x2, y2
     label: str
     confidence: float
     crop: np.ndarray  # BGR uint8, same dtype as input
@@ -127,7 +127,7 @@ def _build_regions(box_dicts: list[dict], image: np.ndarray) -> list[Region]:
         crop = image[y1:y2, x1:x2].copy()
         regions.append(
             Region(
-                bbox=(x1, y1, x2, y2),
+                bbox=np.array([x1, y1, x2, y2], dtype=np.int32),
                 label=d["label"],
                 confidence=d["confidence"],
                 crop=crop,

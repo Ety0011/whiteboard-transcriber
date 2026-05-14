@@ -38,7 +38,7 @@ _SKIP_LABELS: frozenset[str] = frozenset({"figure", "table"})
 class TextLine:
     """A detected text line within a layout region."""
 
-    bbox: tuple[int, int, int, int]  # x1, y1, x2, y2 in region-crop coordinates
+    bbox: np.ndarray  # shape (4,) int32: x1, y1, x2, y2 in region-crop coordinates
     confidence: float  # Added: Actual detection score
     crop: np.ndarray  # BGR uint8
 
@@ -155,12 +155,13 @@ def _build_regions_with_lines(
         h, w = region.crop.shape[:2]
         lines = []
         for poly, score in detections:
-            x1, y1, x2, y2 = _polygon_to_bbox(poly, h, w)
+            bbox = _polygon_to_bbox(poly, h, w)
+            x1, y1, x2, y2 = bbox
             if x2 <= x1 or y2 <= y1:
                 continue
             lines.append(
                 TextLine(
-                    bbox=(x1, y1, x2, y2),
+                    bbox=bbox,
                     confidence=score,
                     crop=region.crop[y1:y2, x1:x2].copy(),
                 )
@@ -186,7 +187,7 @@ def _polygon_to_bbox(
     polygon: list,
     img_h: int,
     img_w: int,
-) -> tuple[int, int, int, int]:
+) -> np.ndarray:
     """Convert a polygon to an axis-aligned bbox clamped to image bounds.
 
     Args:
@@ -195,15 +196,14 @@ def _polygon_to_bbox(
         img_w: Image width in pixels.
 
     Returns:
-        Clamped (x1, y1, x2, y2) tuple.
+        Clamped int32 array [x1, y1, x2, y2].
     """
-    xs = [pt[0] for pt in polygon]
-    ys = [pt[1] for pt in polygon]
-    x1 = max(0, int(min(xs)))
-    y1 = max(0, int(min(ys)))
-    x2 = min(img_w, int(max(xs)))
-    y2 = min(img_h, int(max(ys)))
-    return x1, y1, x2, y2
+    pts = np.array(polygon, dtype=np.float32)
+    x1 = int(np.clip(pts[:, 0].min(), 0, img_w))
+    y1 = int(np.clip(pts[:, 1].min(), 0, img_h))
+    x2 = int(np.clip(pts[:, 0].max(), 0, img_w))
+    y2 = int(np.clip(pts[:, 1].max(), 0, img_h))
+    return np.array([x1, y1, x2, y2], dtype=np.int32)
 
 
 def _parse_lines(raw_results: list, crop: np.ndarray) -> list[TextLine]:
@@ -223,13 +223,12 @@ def _parse_lines(raw_results: list, crop: np.ndarray) -> list[TextLine]:
     h, w = crop.shape[:2]
     lines = []
     for poly, score in detections:
-        x1, y1, x2, y2 = _polygon_to_bbox(poly, h, w)
+        bbox = _polygon_to_bbox(poly, h, w)
+        x1, y1, x2, y2 = bbox
         if x2 <= x1 or y2 <= y1:
             continue
         lines.append(
-            TextLine(
-                bbox=(x1, y1, x2, y2), confidence=score, crop=crop[y1:y2, x1:x2].copy()
-            )
+            TextLine(bbox=bbox, confidence=score, crop=crop[y1:y2, x1:x2].copy())
         )
     return lines
 

@@ -256,7 +256,10 @@ def main(source: int | str = 0) -> None:
             # Stage 4: full-image region — bypass layout detection
             h, w = composite.shape[:2]
             full_region = Region(
-                bbox=(0, 0, w, h), label="text", confidence=1.0, crop=composite
+                bbox=np.array([0, 0, w, h], dtype=np.int32),
+                label="text",
+                confidence=1.0,
+                crop=composite,
             )
             regions_with_lines = text_detector.process([full_region])
 
