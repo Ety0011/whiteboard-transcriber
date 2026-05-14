@@ -16,6 +16,8 @@ import argparse
 import logging
 from pathlib import Path
 
+import cv2
+
 import capture
 from pipeline import Pipeline
 
@@ -40,7 +42,7 @@ def main() -> None:
     frame_queue = capture.process(args.source)
     pipeline = Pipeline(output_path)
 
-    logger.info("Processing started. Press Ctrl-C to stop.")
+    logger.info("Processing started. Press q or Ctrl-C to stop.")
     try:
         while True:
             frame = frame_queue.get()
@@ -48,8 +50,13 @@ def main() -> None:
                 logger.info("End of stream.")
                 break
             pipeline.process(frame)
+            cv2.imshow("Whiteboard", frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
     except KeyboardInterrupt:
         pass
+    finally:
+        cv2.destroyAllWindows()
 
     logger.info("Shutting down.")
 
