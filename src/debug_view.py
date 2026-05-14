@@ -32,11 +32,11 @@ import numpy as np
 from board_detector import BoardDetector
 from board_reconstructor import BoardReconstructor
 from capture import process as start_camera
-from layout import Region
+from layout import LayoutRegion
 from person_masker import PersonMasker
-from recognition import Recognizer, WhiteboardDoc
+from recognizer import Recognizer, WhiteboardDoc
 from rectifier import Rectifier
-from text_detection import RegionWithLines, TextDetector
+from text_detector import RegionWithLines, TextDetector
 from tracker import Detection, RegionState, RegionTracker
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -136,7 +136,7 @@ def _draw_tracker(frame: np.ndarray, regions: list) -> np.ndarray:
     return out
 
 
-def _draw_layout(frame: np.ndarray, regions: list[Region]) -> np.ndarray:
+def _draw_layout(frame: np.ndarray, regions: list[LayoutRegion]) -> np.ndarray:
     """Draw layout bounding boxes and labels on *frame* and return it."""
     out = frame.copy()
     for r in regions:
@@ -270,7 +270,7 @@ def main(source: int | str = 0) -> None:
             composite = reconstructor.process(warped, warped_mask)
 
             h, w = composite.shape[:2]
-            full_region = Region(
+            full_region = LayoutRegion(
                 bbox=np.array([0, 0, w, h], dtype=np.int32),
                 label="text",
                 confidence=1.0,
@@ -290,7 +290,7 @@ def main(source: int | str = 0) -> None:
                     )
 
             tracker_result = region_tracker.process(all_detections, composite)
-            recognizer.process(tracker_result, doc)
+            recognizer.process(tracker_result, region_tracker, doc)
 
             vis_composite = composite.copy()
             if show_text_lines:

@@ -10,12 +10,11 @@ from __future__ import annotations
 import dataclasses
 import difflib
 import logging
-import time
 
 import numpy as np
 from paddleocr import TextRecognition
 
-from tracker import Region, TrackerResult
+from tracker import Region, RegionTracker, TrackerResult
 
 log = logging.getLogger(__name__)
 
@@ -131,6 +130,7 @@ class Recognizer:
     def process(
         self,
         tracker_result: TrackerResult,
+        tracker: RegionTracker,
         doc: WhiteboardDoc,
     ) -> WhiteboardDoc:
         """OCR newly-stable regions and patch the WhiteboardDoc.
@@ -140,11 +140,10 @@ class Recognizer:
         content is identical, otherwise replaces the block.
         For erased regions: wraps the existing block in strikethrough.
 
-        Mutates region.ocr_text, region.ocr_confidence, region.last_modified
-        directly on the Region objects (shared references with the tracker).
-
         Args:
             tracker_result: Output of RegionTracker.process() for this frame.
+            tracker:        The RegionTracker instance — used to record OCR results
+                            via its API rather than writing Region fields directly.
             doc:            Persistent document to patch in-place.
 
         Returns:
@@ -176,9 +175,7 @@ class Recognizer:
                 )
 
             doc.blocks[region.id] = new_text
-            region.ocr_text = new_text
-            region.ocr_confidence = confidence
-            region.last_modified = time.monotonic()
+            tracker.mark_ocr_done(region, new_text, confidence)
             log.debug(
                 "Region %d OCR'd (conf=%.2f): %r",
                 region.id,

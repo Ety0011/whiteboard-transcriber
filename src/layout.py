@@ -44,7 +44,7 @@ _WHITEBOARD_LABELS = {
 
 
 @dataclasses.dataclass
-class Region:
+class LayoutRegion:
     """A detected layout region on the whiteboard."""
 
     bbox: np.ndarray  # shape (4,) int32: x1, y1, x2, y2
@@ -119,14 +119,14 @@ def _filter_boxes(
     return out
 
 
-def _build_regions(box_dicts: list[dict], image: np.ndarray) -> list[Region]:
-    """Reconstruct Region objects (with crops) from serialisable box dicts."""
-    regions: list[Region] = []
+def _build_regions(box_dicts: list[dict], image: np.ndarray) -> list[LayoutRegion]:
+    """Reconstruct LayoutRegion objects (with crops) from serialisable box dicts."""
+    regions: list[LayoutRegion] = []
     for d in box_dicts:
         x1, y1, x2, y2 = d["bbox"]
         crop = image[y1:y2, x1:x2].copy()
         regions.append(
-            Region(
+            LayoutRegion(
                 bbox=np.array([x1, y1, x2, y2], dtype=np.int32),
                 label=d["label"],
                 confidence=d["confidence"],
@@ -164,7 +164,7 @@ class LayoutDetector:
         self._recompute_interval = recompute_interval
         self._last_detect_time: float = 0.0
 
-        self._cached_regions: list[Region] = []
+        self._cached_regions: list[LayoutRegion] = []
         self._detecting = False
         self._pending_image: np.ndarray | None = None
 
@@ -187,7 +187,7 @@ class LayoutDetector:
     # Public
     # ------------------------------------------------------------------
 
-    def process(self, image: np.ndarray) -> list[Region]:
+    def process(self, image: np.ndarray) -> list[LayoutRegion]:
         """Submit *image* to the child process and return the last cached result.
 
         Never blocks. Polls the result queue on every call; submits a new image
@@ -197,7 +197,7 @@ class LayoutDetector:
             image: BGR uint8 numpy array (H×W×3) from Stage 3.
 
         Returns:
-            Last detected list of Region objects (empty until first detection).
+            Last detected list of LayoutRegion objects (empty until first detection).
         """
         # Poll for completed result from child process (non-blocking).
         try:
@@ -230,7 +230,7 @@ class LayoutDetector:
     # Synchronous path — for tests only, not called in production
     # ------------------------------------------------------------------
 
-    def _run_detection(self, image: np.ndarray) -> list[Region]:
+    def _run_detection(self, image: np.ndarray) -> list[LayoutRegion]:
         """Run inference synchronously in the calling process.
 
         Used by unit tests to verify filtering logic without going through

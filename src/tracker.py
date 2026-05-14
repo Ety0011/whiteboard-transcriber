@@ -251,7 +251,7 @@ class RegionTracker:
 
     def mark_ocr_done(
         self,
-        region_id: int,
+        region: Region,
         text: str,
         confidence: float,
     ) -> None:
@@ -260,11 +260,10 @@ class RegionTracker:
         The physical state remains STABLE. Orchestrators should check
         if ocr_text is None to identify regions needing recognition.
         """
-        region = self._registry[region_id]
         region.ocr_text = text
         region.ocr_confidence = confidence
         region.last_modified = time.monotonic()
-        log.debug("Metadata updated for Region %d: %r", region_id, text[:30])
+        log.debug("Metadata updated for Region %d: %r", region.id, text[:30])
 
     def process(
         self,

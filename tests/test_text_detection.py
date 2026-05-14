@@ -26,9 +26,9 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-import src.text_detection as td_mod
-from src.layout import Region
-from src.text_detection import (
+import src.text_detector as td_mod
+from src.layout import LayoutRegion
+from src.text_detector import (
     RegionWithLines,
     TextDetector,
     TextLine,
@@ -36,7 +36,6 @@ from src.text_detection import (
     _parse_lines,
     _polygon_to_bbox,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -48,15 +47,15 @@ def _crop(h: int = 100, w: int = 200) -> np.ndarray:
     return np.ones((h, w, 3), dtype=np.uint8) * 255
 
 
-def _region(label: str = "text", h: int = 100, w: int = 200) -> Region:
-    return Region(bbox=(0, 0, w, h), label=label, confidence=0.9, crop=_crop(h, w))
+def _region(label: str = "text", h: int = 100, w: int = 200) -> LayoutRegion:
+    return LayoutRegion(bbox=(0, 0, w, h), label=label, confidence=0.9, crop=_crop(h, w))
 
 
 def _make_detector(monkeypatch, raw_result: list) -> TextDetector:
     """Return a TextDetector whose engine returns raw_result on predict()."""
     engine = MagicMock()
     engine.predict = MagicMock(return_value=raw_result)
-    monkeypatch.setattr("src.text_detection.TextDetection", lambda **kw: engine)
+    monkeypatch.setattr("src.text_detector.TextDetection", lambda **kw: engine)
     return TextDetector()
 
 
@@ -113,9 +112,9 @@ def patch_process(monkeypatch):
     mp.Queue uses OS-level pipes that break when used inside threads on macOS.
     queue.Queue is identical in API and raises the same Empty exception class.
     """
-    monkeypatch.setattr("src.text_detection.mp.Process", _FakeProcess)
+    monkeypatch.setattr("src.text_detector.mp.Process", _FakeProcess)
     monkeypatch.setattr(
-        "src.text_detection.mp.Queue", lambda maxsize=0: queue.Queue(maxsize=maxsize)
+        "src.text_detector.mp.Queue", lambda maxsize=0: queue.Queue(maxsize=maxsize)
     )
 
 
@@ -177,23 +176,35 @@ def test_regionwithlines_default_lines_not_shared():
 
 def test_polygon_to_bbox_basic():
     assert _polygon_to_bbox([[10, 20], [80, 20], [80, 60], [10, 60]], 100, 200) == (
-        10, 20, 80, 60,
+        10,
+        20,
+        80,
+        60,
     )
 
 
 def test_polygon_to_bbox_clamps_to_image():
-    assert _polygon_to_bbox([[-5, -10], [250, -10], [250, 120], [-5, 120]], 100, 200) == (
-        0, 0, 200, 100,
+    assert _polygon_to_bbox(
+        [[-5, -10], [250, -10], [250, 120], [-5, 120]], 100, 200
+    ) == (
+        0,
+        0,
+        200,
+        100,
     )
 
 
 def test_polygon_to_bbox_partial_clamp():
-    x1, y1, x2, y2 = _polygon_to_bbox([[190, 90], [210, 90], [210, 110], [190, 110]], 100, 200)
+    x1, y1, x2, y2 = _polygon_to_bbox(
+        [[190, 90], [210, 90], [210, 110], [190, 110]], 100, 200
+    )
     assert (x1, y1, x2, y2) == (190, 90, 200, 100)
 
 
 def test_polygon_to_bbox_non_rectangular():
-    x1, y1, x2, y2 = _polygon_to_bbox([[10, 30], [90, 10], [110, 70], [30, 90]], 200, 200)
+    x1, y1, x2, y2 = _polygon_to_bbox(
+        [[10, 30], [90, 10], [110, 70], [30, 90]], 200, 200
+    )
     assert (x1, y1, x2, y2) == (10, 10, 110, 90)
 
 
@@ -217,7 +228,9 @@ def test_parse_lines_single_line():
 
 
 def test_parse_lines_crop_shape_matches_bbox():
-    line = _parse_lines([{"dt_polys": [_rect_poly(10, 20, 80, 50)]}], _crop(100, 200))[0]
+    line = _parse_lines([{"dt_polys": [_rect_poly(10, 20, 80, 50)]}], _crop(100, 200))[
+        0
+    ]
     x1, y1, x2, y2 = line.bbox
     assert line.crop.shape == (y2 - y1, x2 - x1, 3)
 
@@ -239,7 +252,11 @@ def test_parse_lines_degenerate_bbox_skipped():
 
 def test_parse_lines_multiple_lines():
     crop = _crop(200, 400)
-    polys = [_rect_poly(0, 0, 100, 30), _rect_poly(0, 50, 200, 80), _rect_poly(0, 100, 300, 130)]
+    polys = [
+        _rect_poly(0, 0, 100, 30),
+        _rect_poly(0, 50, 200, 80),
+        _rect_poly(0, 100, 300, 130),
+    ]
     assert len(_parse_lines([{"dt_polys": polys}], crop)) == 3
 
 
@@ -282,7 +299,7 @@ def test_run_detection_crop_is_copy(monkeypatch):
 def test_process_initially_returns_empty(monkeypatch):
     engine = MagicMock()
     engine.predict = MagicMock(side_effect=lambda img: time.sleep(10) or [])
-    monkeypatch.setattr("src.text_detection.TextDetection", lambda **kw: engine)
+    monkeypatch.setattr("src.text_detector.TextDetection", lambda **kw: engine)
     detector = TextDetector()
     assert detector.process([_region()]) == []
 
@@ -304,13 +321,13 @@ def test_process_does_not_resubmit_while_detecting(monkeypatch):
 
     engine = MagicMock()
     engine.predict = _counting_predict
-    monkeypatch.setattr("src.text_detection.TextDetection", lambda **kw: engine)
+    monkeypatch.setattr("src.text_detector.TextDetection", lambda **kw: engine)
     detector = TextDetector()
 
-    _flush(detector, [_region()])           # first detection
-    detector._detecting = True              # simulate busy worker
-    detector.process([_region()])           # must be ignored
-    detector.process([_region()])           # must be ignored
+    _flush(detector, [_region()])  # first detection
+    detector._detecting = True  # simulate busy worker
+    detector.process([_region()])  # must be ignored
+    detector.process([_region()])  # must be ignored
     detector._detecting = False
 
     assert call_count == 1
@@ -326,7 +343,7 @@ def test_process_resubmits_after_detection_completes(monkeypatch):
 
     engine = MagicMock()
     engine.predict = _counting_predict
-    monkeypatch.setattr("src.text_detection.TextDetection", lambda **kw: engine)
+    monkeypatch.setattr("src.text_detector.TextDetection", lambda **kw: engine)
     detector = TextDetector()
 
     _flush(detector, [_region()])
@@ -355,7 +372,7 @@ def test_process_paragraph_title_gets_lines(monkeypatch):
 def test_process_figure_region_skipped(monkeypatch):
     engine = MagicMock()
     engine.predict = MagicMock(return_value=[{"dt_polys": [_rect_poly(0, 0, 50, 30)]}])
-    monkeypatch.setattr("src.text_detection.TextDetection", lambda **kw: engine)
+    monkeypatch.setattr("src.text_detector.TextDetection", lambda **kw: engine)
     detector = TextDetector()
     results = _flush(detector, [_region("figure")])
     assert results[0].lines == []
@@ -365,7 +382,7 @@ def test_process_figure_region_skipped(monkeypatch):
 def test_process_table_region_skipped(monkeypatch):
     engine = MagicMock()
     engine.predict = MagicMock(return_value=[{"dt_polys": [_rect_poly(0, 0, 50, 30)]}])
-    monkeypatch.setattr("src.text_detection.TextDetection", lambda **kw: engine)
+    monkeypatch.setattr("src.text_detector.TextDetection", lambda **kw: engine)
     detector = TextDetector()
     results = _flush(detector, [_region("table")])
     assert results[0].lines == []
@@ -408,29 +425,30 @@ def test_process_returns_regionwithlines_instances(monkeypatch):
 
 
 def test_init_creates_singleton(monkeypatch):
-    monkeypatch.setattr("src.text_detection.TextDetection", lambda **kw: MagicMock())
+    monkeypatch.setattr("src.text_detector.TextDetection", lambda **kw: MagicMock())
     assert td_mod._global_detector is None
     td_mod.init()
     assert td_mod._global_detector is not None
 
 
 def test_process_lazy_creates_singleton(monkeypatch):
-    monkeypatch.setattr("src.text_detection.TextDetection", lambda **kw: MagicMock())
+    monkeypatch.setattr("src.text_detector.TextDetection", lambda **kw: MagicMock())
     assert td_mod._global_detector is None
     td_mod.process([])
     assert td_mod._global_detector is not None
 
 
 def test_process_warns_on_lazy_init(monkeypatch, caplog):
-    monkeypatch.setattr("src.text_detection.TextDetection", lambda **kw: MagicMock())
+    monkeypatch.setattr("src.text_detector.TextDetection", lambda **kw: MagicMock())
     import logging
-    with caplog.at_level(logging.WARNING, logger="src.text_detection"):
+
+    with caplog.at_level(logging.WARNING, logger="src.text_detector"):
         td_mod.process([])
     assert any("before init()" in r.message for r in caplog.records)
 
 
 def test_init_replaces_existing_singleton(monkeypatch):
-    monkeypatch.setattr("src.text_detection.TextDetection", lambda **kw: MagicMock())
+    monkeypatch.setattr("src.text_detector.TextDetection", lambda **kw: MagicMock())
     td_mod.init()
     first = td_mod._global_detector
     td_mod.init()

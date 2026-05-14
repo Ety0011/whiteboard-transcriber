@@ -28,7 +28,7 @@ import numpy as np
 import pytest
 
 import src.layout as layout_mod
-from src.layout import LayoutDetector, Region
+from src.layout import LayoutDetector, LayoutRegion
 
 
 # ---------------------------------------------------------------------------
@@ -123,12 +123,12 @@ def reset_global(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Region dataclass
+# LayoutRegion dataclass
 # ---------------------------------------------------------------------------
 
 def test_region_dataclass_fields():
     img = np.zeros((10, 10, 3), dtype=np.uint8)
-    r = Region(bbox=(0, 0, 10, 10), label="text", confidence=0.9, crop=img)
+    r = LayoutRegion(bbox=(0, 0, 10, 10), label="text", confidence=0.9, crop=img)
     assert r.bbox == (0, 0, 10, 10)
     assert r.label == "text"
     assert r.confidence == pytest.approx(0.9)

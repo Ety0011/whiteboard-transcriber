@@ -27,7 +27,7 @@ from multiprocessing.queues import Empty
 import numpy as np
 from paddleocr import TextDetection
 
-from layout import Region
+from layout import LayoutRegion
 
 log = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ class TextLine:
 
 
 @dataclasses.dataclass
-class RegionWithLines(Region):
+class RegionWithLines(LayoutRegion):
     """A layout region enriched with detected text line bounding boxes."""
 
     lines: list[TextLine] = dataclasses.field(default_factory=list)
@@ -136,7 +136,7 @@ def _extract_polys(raw_results: list) -> list[list]:
 
 def _build_regions_with_lines(
     poly_lists: list[list],
-    regions: list[Region],
+    regions: list[LayoutRegion],
 ) -> list[RegionWithLines]:
     """Reconstruct RegionWithLines objects in the parent process.
 
@@ -266,7 +266,7 @@ class TextDetector:
 
         self._cached_results: list[RegionWithLines] = []
         self._detecting = False
-        self._pending_regions: list[Region] | None = None
+        self._pending_regions: list[LayoutRegion] | None = None
 
         self._regions_queue: mp.Queue = mp.Queue(maxsize=1)
         self._result_queue: mp.Queue = mp.Queue(maxsize=1)
@@ -288,7 +288,7 @@ class TextDetector:
     # Public
     # ------------------------------------------------------------------
 
-    def process(self, regions: list[Region]) -> list[RegionWithLines]:
+    def process(self, regions: list[LayoutRegion]) -> list[RegionWithLines]:
         """Submit *regions* to the child process and return the last cached result.
 
         Never blocks. Polls the result queue on every call; submits a new

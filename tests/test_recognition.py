@@ -7,15 +7,12 @@ lightweight mock so no model weights are required.
 from __future__ import annotations
 
 import time
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
 
-from src.recognition import Recognizer, WhiteboardDoc
-from src.tracker import Detection, Region, RegionState, TrackerResult
-
+from src.recognizer import Recognizer, WhiteboardDoc
+from src.tracker import Region, RegionState, TrackerResult
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -68,6 +65,19 @@ def _make_recognizer(mock_predict_return: list[dict]) -> Recognizer:
     return recognizer
 
 
+def _make_mock_tracker() -> MagicMock:
+    """Return a mock RegionTracker whose mark_ocr_done writes fields correctly."""
+    mock = MagicMock()
+
+    def _mark_ocr_done(region, text: str, confidence: float) -> None:
+        region.ocr_text = text
+        region.ocr_confidence = confidence
+        region.last_modified = time.monotonic()
+
+    mock.mark_ocr_done.side_effect = _mark_ocr_done
+    return mock
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -77,11 +87,13 @@ class TestFirstStabilization:
     def test_block_created_with_ocr_text(self):
         region = _make_region(region_id=1, ocr_text=None)
         recognizer = _make_recognizer(
-            [{"rec_text": "hello", "rec_score": 0.95},
-             {"rec_text": "world", "rec_score": 0.90}]
+            [
+                {"rec_text": "hello", "rec_score": 0.95},
+                {"rec_text": "world", "rec_score": 0.90},
+            ]
         )
         doc = WhiteboardDoc()
-        result = recognizer.process(_make_tracker_result(newly_stable=[region]), doc)
+        result = recognizer.process(_make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc)
 
         assert result.blocks[1] == "hello\nworld"
 
@@ -89,7 +101,7 @@ class TestFirstStabilization:
         region = _make_region(region_id=2, ocr_text=None)
         recognizer = _make_recognizer([{"rec_text": "foo", "rec_score": 0.88}])
         doc = WhiteboardDoc()
-        recognizer.process(_make_tracker_result(newly_stable=[region]), doc)
+        recognizer.process(_make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc)
 
         assert region.ocr_text == "foo"
         assert region.ocr_confidence is not None
@@ -98,7 +110,7 @@ class TestFirstStabilization:
         region = _make_region(region_id=3, ocr_text=None)
         recognizer = _make_recognizer([])
         doc = WhiteboardDoc()
-        recognizer.process(_make_tracker_result(newly_stable=[region]), doc)
+        recognizer.process(_make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc)
 
         assert doc.blocks[3] == ""
         assert region.ocr_text == ""
@@ -108,11 +120,13 @@ class TestRestabilizationWithAdditions:
     def test_block_updated_with_new_line(self):
         region = _make_region(region_id=1, ocr_text="hello")
         recognizer = _make_recognizer(
-            [{"rec_text": "hello", "rec_score": 0.95},
-             {"rec_text": "world", "rec_score": 0.90}]
+            [
+                {"rec_text": "hello", "rec_score": 0.95},
+                {"rec_text": "world", "rec_score": 0.90},
+            ]
         )
         doc = WhiteboardDoc(blocks={1: "hello"})
-        recognizer.process(_make_tracker_result(newly_stable=[region]), doc)
+        recognizer.process(_make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc)
 
         assert doc.blocks[1] == "hello\nworld"
         assert region.ocr_text == "hello\nworld"
@@ -122,7 +136,7 @@ class TestRestabilizationWithAdditions:
         region = _make_region(region_id=1, ocr_text="old")
         recognizer = _make_recognizer([{"rec_text": "new", "rec_score": 0.9}])
         doc = WhiteboardDoc(blocks={1: "old"})
-        recognizer.process(_make_tracker_result(newly_stable=[region]), doc)
+        recognizer.process(_make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc)
 
         assert region.last_modified >= before
 
@@ -132,7 +146,7 @@ class TestRestabilizationWithRemovals:
         region = _make_region(region_id=1, ocr_text="hello\nworld")
         recognizer = _make_recognizer([{"rec_text": "hello", "rec_score": 0.95}])
         doc = WhiteboardDoc(blocks={1: "hello\nworld"})
-        recognizer.process(_make_tracker_result(newly_stable=[region]), doc)
+        recognizer.process(_make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc)
 
         assert doc.blocks[1] == "hello"
         assert "world" not in region.ocr_text
@@ -144,7 +158,7 @@ class TestNoChangeSkip:
         original_modified = region.last_modified
         recognizer = _make_recognizer([{"rec_text": "hello", "rec_score": 0.95}])
         doc = WhiteboardDoc(blocks={1: "hello"})
-        recognizer.process(_make_tracker_result(newly_stable=[region]), doc)
+        recognizer.process(_make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc)
 
         assert doc.blocks[1] == "hello"
         assert region.last_modified == original_modified  # no mutation when unchanged
@@ -155,7 +169,7 @@ class TestErasedRegion:
         region = _make_region(region_id=1)
         recognizer = _make_recognizer([])
         doc = WhiteboardDoc(blocks={1: "some text"})
-        recognizer.process(_make_tracker_result(newly_erased=[region]), doc)
+        recognizer.process(_make_tracker_result(newly_erased=[region]), _make_mock_tracker(), doc)
 
         assert doc.blocks[1] == "~~some text~~"
 
@@ -163,7 +177,7 @@ class TestErasedRegion:
         region = _make_region(region_id=99)
         recognizer = _make_recognizer([])
         doc = WhiteboardDoc(blocks={})
-        recognizer.process(_make_tracker_result(newly_erased=[region]), doc)
+        recognizer.process(_make_tracker_result(newly_erased=[region]), _make_mock_tracker(), doc)
 
         assert 99 not in doc.blocks
 

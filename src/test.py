@@ -30,7 +30,7 @@ import numpy as np
 
 from background import BackgroundReconstructor
 from capture import process as start_camera
-from layout import LayoutDetector, Region
+from layout import LayoutDetector, LayoutRegion
 from registration import Registrar
 from segmentation import Segmenter
 
@@ -68,7 +68,7 @@ def _apply_mask_overlay(frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return cv2.addWeighted(frame, 0.65, overlay, 0.35, 0)
 
 
-def _draw_layout(frame: np.ndarray, regions: list[Region]) -> np.ndarray:
+def _draw_layout(frame: np.ndarray, regions: list[LayoutRegion]) -> np.ndarray:
     """Draw layout bounding boxes and labels on *frame* and return it."""
     out = frame.copy()
     for r in regions:
