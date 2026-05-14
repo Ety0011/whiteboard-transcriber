@@ -20,7 +20,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-# TODO: fix for some reason arm is not masked at the end of video
+# TODO: fix for some reason arm is not masked if very near to border
 class BackgroundReconstructor:
     """Stateful surface-reconstruction stage backed by distance-weighted EMA.
 

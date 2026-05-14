@@ -1,4 +1,4 @@
-"""Dev tool — Stage 0 + Stage 1 + Stage 2 + Stage 3 + Stage 4 + Stage 5 live preview.
+"""Dev tool — Stage 0–6 live preview.
 
 Opens the camera (or a video file), runs perspective registration,
 person segmentation, surface reconstruction, layout detection, and text line
@@ -35,6 +35,7 @@ from layout import Region
 from registration import Registrar
 from segmentation import Segmenter
 from text_detection import RegionWithLines, TextDetector
+from recognition import Recognizer, WhiteboardDoc
 from tracker import Detection, RegionState, RegionTracker
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -105,8 +106,8 @@ def _draw_tracker(frame: np.ndarray, regions: list) -> np.ndarray:
         thickness = 1 if reg.state == RegionState.MISSING else 2
         cv2.rectangle(out, (x1, y1), (x2, y2), color, thickness)
 
-        # Indicate OCR status in the label
-        ocr_status = "✓" if reg.ocr_text else "..."
+        # Header label: ID, state, confidence
+        ocr_status = "OK" if reg.ocr_text else "..."
         label = f"ID:{reg.id} {reg.state.value} {reg.confidence:.2f} [{ocr_status}]"
 
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
@@ -121,6 +122,21 @@ def _draw_tracker(frame: np.ndarray, regions: list) -> np.ndarray:
             1,
             cv2.LINE_AA,
         )
+
+        # OCR text lines below the region box
+        if reg.ocr_text:
+            for i, line in enumerate(reg.ocr_text.splitlines()):
+                ty = y2 + 14 + i * 14
+                cv2.putText(
+                    out,
+                    line[:80],
+                    (x1, ty),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.38,
+                    (0, 255, 0),
+                    1,
+                    cv2.LINE_AA,
+                )
     return out
 
 
@@ -195,7 +211,7 @@ def _draw_corners(frame: np.ndarray, registrar: Registrar) -> np.ndarray:
 
 
 def main(source: int | str = 0) -> None:
-    """Run the Stage 0-5 preview loop."""
+    """Run the Stage 0–6 preview loop."""
     fps = _video_fps(source)
     wait_ms = max(1, int(1000 / fps))
 
@@ -212,6 +228,11 @@ def main(source: int | str = 0) -> None:
     region_tracker = RegionTracker()
     region_tracker.load_dino()
 
+    # --- Stage 6 Recognizer ---
+    print("Initialising PP-OCRv5_server_rec model...")
+    recognizer = Recognizer()
+    doc = WhiteboardDoc()
+
     show_corners = True
     show_mask = True
     show_bg = True
@@ -220,7 +241,7 @@ def main(source: int | str = 0) -> None:
     show_tracker = True
 
     print(
-        "Stage 1+2+3+4+5 preview running.\n"
+        "Stage 1–6 preview running.\n"
         "  d — toggle detected board corners\n"
         "  s — toggle person-mask overlay\n"
         "  b — toggle Stage 3 background composite\n"
@@ -268,11 +289,18 @@ def main(source: int | str = 0) -> None:
             for r in regions_with_lines:
                 for line in r.lines:
                     all_detections.append(
-                        Detection(bbox=line.bbox, confidence=line.confidence)
+                        Detection(
+                            bbox=line.bbox,
+                            confidence=line.confidence,
+                            line_bboxes=[line.bbox],
+                        )
                     )
 
             # Update Tracker using the Background Composite as the truth source
             tracker_result = region_tracker.process(all_detections, composite)
+
+            # --- Stage 6: OCR newly-stable regions ---
+            recognizer.process(tracker_result, doc)
 
             # Visualisation overlays
             vis_composite = composite.copy()

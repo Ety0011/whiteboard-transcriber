@@ -15,7 +15,7 @@ import time
 import numpy as np
 from paddleocr import TextRecognition
 
-from src.tracker import Region, TrackerResult
+from tracker import Region, TrackerResult
 
 log = logging.getLogger(__name__)
 
@@ -34,11 +34,19 @@ class WhiteboardDoc:
 class Recognizer:
     """Loads OCR model once and processes newly-stable regions each frame."""
 
-    def __init__(self) -> None:
-        """Load PP-OCRv5_rec_server. Blocks for a few seconds on first run."""
-        log.info("Loading PP-OCRv5_rec_server …")
-        self._recognizer = TextRecognition(model_name="PP-OCRv5_rec_server")
-        log.info("PP-OCRv5_rec_server loaded.")
+    def __init__(self, device: str | None = None) -> None:
+        """Load PP-OCRv5_server_rec. Blocks for a few seconds on first run.
+
+        Args:
+            device: Inference device, e.g. "cpu", "gpu", "gpu:0". Defaults to
+                GPU 0 if available, otherwise CPU.
+        """
+        log.info("Loading PP-OCRv5_server_rec …")
+        self._recognizer = TextRecognition(
+            model_name="PP-OCRv5_server_rec",
+            device=device,
+        )
+        log.info("PP-OCRv5_server_rec loaded.")
 
     def _extract_line_crops(self, region: Region) -> list[np.ndarray]:
         """Return individual line crops from the region's stable crop.
@@ -86,15 +94,19 @@ class Recognizer:
         Returns:
             Tuple of (joined text, mean confidence score).
         """
-        results = self._recognizer.predict(line_crops)
+        results = self._recognizer.predict(line_crops, batch_size=len(line_crops))
         texts: list[str] = []
         scores: list[float] = []
         for item in results:
             text = item.get("rec_text", "").strip()
             score = float(item.get("rec_score", 0.0))
-            if text:
-                texts.append(text)
-                scores.append(score)
+            if not text:
+                continue
+            if score < 0.5:
+                log.debug("Low-confidence line (%.2f) skipped: %r", score, text)
+                continue
+            texts.append(text)
+            scores.append(score)
         joined = "\n".join(texts)
         mean_score = sum(scores) / len(scores) if scores else 0.0
         return joined, mean_score
