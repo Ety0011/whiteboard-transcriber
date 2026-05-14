@@ -54,6 +54,8 @@ class Detection:
 
     bbox: np.ndarray  # shape (4,) int32: x1, y1, x2, y2
     confidence: float
+    # axis-aligned bboxes for sub-lines within this detection
+    line_bboxes: list[np.ndarray] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -76,6 +78,7 @@ class Region:
     last_stable_crop: np.ndarray | None  # BGR uint8 crop at last stabilization
     last_stable_center: np.ndarray | None = None  # shape (2,) float64 cx,cy
     last_stable_embedding: torch.Tensor | None = None  # Cached DINOv2 embedding
+    line_bboxes: list[np.ndarray] = dataclasses.field(default_factory=list)
     _consecutive_visible: int = dataclasses.field(default=0, repr=False)
 
 
@@ -364,6 +367,7 @@ class RegionTracker:
         # Physical Update — EMA bbox smoothing
         reg.bbox = (0.2 * det.bbox + 0.8 * reg.bbox).astype(np.int32)
         reg.confidence, reg.last_seen = det.confidence, now
+        reg.line_bboxes = det.line_bboxes
 
         # Transitions
         if reg.state == RegionState.CANDIDATE:
@@ -412,6 +416,7 @@ class RegionTracker:
                     ocr_text=None,
                     ocr_confidence=None,
                     last_stable_crop=None,
+                    line_bboxes=list(det.line_bboxes),
                 )
 
     def _remove_missing_regions(self, now):
