@@ -137,22 +137,24 @@ def test_are_corners_shifted_area_guard() -> None:
 
 
 def test_get_corners_returns_none_initially() -> None:
-    """Before any detection, get_corners() returns None."""
+    """Before any detection, process() returns None."""
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
     det = _make_detector()
-    assert det.get_corners() is None
+    assert det.process(frame) is None
 
 
 def test_corners_set_after_detection(
     synthetic_board_frame: tuple[np.ndarray, np.ndarray],
 ) -> None:
-    """After submit_frame triggers a detection, get_corners() returns the result."""
+    """After process() triggers a detection, subsequent call returns the result."""
     frame, corners = synthetic_board_frame
     det = _make_detector(recompute_interval=0.0)
     with patch.object(det, "_detect_corners", return_value=corners.copy()):
-        det.submit_frame(frame)
+        det.process(frame)
         time.sleep(0.1)
-    assert det.get_corners() is not None
-    assert det.get_corners().shape == (4, 2)
+    result = det.process(frame)
+    assert result is not None
+    assert result.shape == (4, 2)
 
 
 def test_submit_frame_respects_interval(
@@ -171,7 +173,7 @@ def test_submit_frame_respects_interval(
 
     with patch.object(det, "_detect_corners", side_effect=counting_detect):
         for _ in range(10):
-            det.submit_frame(frame)
+            det.process(frame)
         time.sleep(0.05)
 
     # Only the very first call fires (interval=9999 s blocks all subsequent)
