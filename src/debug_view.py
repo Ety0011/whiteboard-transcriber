@@ -31,7 +31,7 @@ import numpy as np
 
 from background import BackgroundReconstructor
 from capture import process as start_camera
-from layout import LayoutDetector, Region
+from layout import Region
 from registration import Registrar
 from segmentation import Segmenter
 from text_detection import RegionWithLines, TextDetector
@@ -205,8 +205,6 @@ def main(source: int | str = 0) -> None:
     print("Initialising MediaPipe segmenter...")
     segmenter = Segmenter()
     reconstructor = BackgroundReconstructor()
-    print("Initialising PP-DocLayout model...")
-    layout_detector = LayoutDetector()
     print("Initialising PP-OCRv5_server_det model...")
     text_detector = TextDetector()
 
@@ -254,21 +252,20 @@ def main(source: int | str = 0) -> None:
         if show_bg:
             bg_mask = segmenter.process(warped)
             composite = reconstructor.process(warped, bg_mask)
-            regions = layout_detector.process(composite)
 
-            # Stage 4: Run text detection (always run to feed tracker)
-            regions_with_lines = text_detector.process(regions)
+            # Stage 4: full-image region — bypass layout detection
+            h, w = composite.shape[:2]
+            full_region = Region(
+                bbox=(0, 0, w, h), label="text", confidence=1.0, crop=composite
+            )
+            regions_with_lines = text_detector.process([full_region])
 
             # --- Stage 5: Prepare detections for tracker ---
             all_detections = []
             for r in regions_with_lines:
-                rx1, ry1, _, _ = r.bbox
                 for line in r.lines:
-                    lx1, ly1, lx2, ly2 = line.bbox
-                    # Translate local region coords to global composite coords
-                    global_bbox = (rx1 + lx1, ry1 + ly1, rx1 + lx2, ry1 + ly2)
                     all_detections.append(
-                        Detection(bbox=global_bbox, confidence=line.confidence)
+                        Detection(bbox=line.bbox, confidence=line.confidence)
                     )
 
             # Update Tracker using the Background Composite as the truth source
@@ -276,8 +273,6 @@ def main(source: int | str = 0) -> None:
 
             # Visualisation overlays
             vis_composite = composite.copy()
-            if show_layout:
-                vis_composite = _draw_layout(vis_composite, regions)
             if show_text_lines:
                 vis_composite = _draw_text_lines(vis_composite, regions_with_lines)
             if show_tracker:
