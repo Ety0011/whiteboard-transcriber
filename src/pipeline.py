@@ -99,15 +99,9 @@ class Pipeline:
             for region in regions_with_lines
             for line in region.lines
         ]
-        log.debug("Frame: %d detections", len(detections))
 
         # Stage 6: region tracker
         tracker_result = self._tracker.process(detections, composite)
-        log.debug(
-            "Tracker: %d regions, %d newly stable",
-            len(tracker_result.regions),
-            len(tracker_result.newly_stable),
-        )
 
         if not tracker_result.newly_stable:
             return
