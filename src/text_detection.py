@@ -58,6 +58,8 @@ class RegionWithLines(Region):
 def _inference_worker(
     regions_queue: mp.Queue,
     result_queue: mp.Queue,
+    box_thresh: float,
+    unclip_ratio: float,
 ) -> None:
     """Entry point for the child process.
 
@@ -66,7 +68,11 @@ def _inference_worker(
     puts serialisable polygon lists into result_queue. Runs until it
     receives None as a sentinel.
     """
-    engine = TextDetection(model_name="PP-OCRv5_server_det")
+    engine = TextDetection(
+        model_name="PP-OCRv5_server_det",
+        box_thresh=box_thresh,
+        unclip_ratio=unclip_ratio,
+    )
     while True:
         items = regions_queue.get()
         if items is None:
@@ -240,10 +246,25 @@ class TextDetector:
     Same external pattern as Stage 4 LayoutDetector:
     - process() never blocks — returns cached regions immediately.
     - A new detection is submitted whenever the child is idle.
+
+    Args:
+        box_thresh: Minimum pixel-level score threshold for a region to be
+            included as a text box candidate. Lower values recall more (noisier)
+            boxes; higher values are more conservative. Default 0.6.
+        unclip_ratio: Controls how much detected text polygons are expanded
+            before converting to bounding boxes. Higher values include more context
+            around text; lower values hug the text tighter. Default 1.5.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        box_thresh: float = 0.6,
+        unclip_ratio: float = 1.2,
+    ) -> None:
         """Start the child process and load PP-OCRv5_server_det inside it."""
+        self._box_thresh = box_thresh
+        self._unclip_ratio = unclip_ratio
+
         self._cached_results: list[RegionWithLines] = []
         self._detecting = False
         self._pending_regions: list[Region] | None = None
@@ -252,7 +273,12 @@ class TextDetector:
         self._result_queue: mp.Queue = mp.Queue(maxsize=1)
         self._worker = mp.Process(
             target=_inference_worker,
-            args=(self._regions_queue, self._result_queue),
+            args=(
+                self._regions_queue,
+                self._result_queue,
+                self._box_thresh,
+                self._unclip_ratio,
+            ),
             daemon=True,
             name="text-detect",
         )
