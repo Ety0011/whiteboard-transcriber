@@ -34,7 +34,8 @@ from board_reconstructor import BoardReconstructor
 from capture import process as start_camera
 from layout import LayoutRegion
 from person_masker import PersonMasker
-from recognizer import Recognizer, WhiteboardDoc
+from document import WhiteboardDoc
+from recognizer import Recognizer
 from rectifier import Rectifier
 from text_detector import RegionWithLines, TextDetector
 from tracker import Detection, RegionState, RegionTracker

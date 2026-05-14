@@ -11,7 +11,8 @@ from unittest.mock import MagicMock
 
 import numpy as np
 
-from src.recognizer import Recognizer, WhiteboardDoc
+from src.document import WhiteboardDoc
+from src.recognizer import Recognizer
 from src.tracker import Region, RegionState, TrackerResult
 
 # ---------------------------------------------------------------------------

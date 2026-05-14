@@ -7,27 +7,16 @@ which regions are text; this module OCRs all regions it receives unconditionally
 
 from __future__ import annotations
 
-import dataclasses
 import difflib
 import logging
 
 import numpy as np
 from paddleocr import TextRecognition
 
+from document import WhiteboardDoc
 from tracker import Region, RegionTracker, TrackerResult
 
 log = logging.getLogger(__name__)
-
-
-@dataclasses.dataclass
-class WhiteboardDoc:
-    """Persistent Markdown document for the whiteboard session.
-
-    blocks maps region_id to the current Markdown text for that region.
-    Erased regions are wrapped in Markdown strikethrough to preserve history.
-    """
-
-    blocks: dict[int, str] = dataclasses.field(default_factory=dict)
 
 
 class Recognizer:
