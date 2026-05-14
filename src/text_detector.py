@@ -126,7 +126,7 @@ def _extract_polys(raw_results: list) -> list[list]:
     results = []
     for result in raw_results:
         polys = result.get("dt_polys", [])
-        scores = result.get("dt_scores", [])
+        scores = result.get("dt_scores", [1.0] * len(polys))
         for poly, score in zip(polys, scores):
             results.append(
                 ([[float(pt[0]), float(pt[1])] for pt in poly], float(score))

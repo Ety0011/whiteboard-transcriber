@@ -66,7 +66,7 @@ def _rect_poly(x1: int, y1: int, x2: int, y2: int) -> list[list[int]]:
 
 def _flush(
     detector: TextDetector,
-    regions: list[Region],
+    regions: list[LayoutRegion],
     timeout: float = 2.0,
 ) -> list[RegionWithLines]:
     """Submit *regions* (bypassing idle check) and block until ONE detection completes.
@@ -118,12 +118,6 @@ def patch_process(monkeypatch):
     )
 
 
-@pytest.fixture(autouse=True)
-def reset_global(monkeypatch):
-    """Reset the module-level singleton before each test."""
-    monkeypatch.setattr(td_mod, "_global_detector", None)
-
-
 # ---------------------------------------------------------------------------
 # TextLine dataclass
 # ---------------------------------------------------------------------------
@@ -131,8 +125,9 @@ def reset_global(monkeypatch):
 
 def test_textline_fields():
     img = np.zeros((10, 20, 3), dtype=np.uint8)
-    line = TextLine(bbox=(0, 0, 20, 10), crop=img)
+    line = TextLine(bbox=(0, 0, 20, 10), confidence=0.9, crop=img)
     assert line.bbox == (0, 0, 20, 10)
+    assert line.confidence == pytest.approx(0.9)
     assert line.crop is img
 
 
@@ -153,7 +148,7 @@ def test_regionwithlines_inherits_region_fields():
 
 def test_regionwithlines_lines_field():
     crop = _crop()
-    line = TextLine(bbox=(5, 5, 45, 15), crop=_crop(10, 40))
+    line = TextLine(bbox=(5, 5, 45, 15), confidence=0.9, crop=_crop(10, 40))
     r = RegionWithLines(
         bbox=(0, 0, 200, 100), label="text", confidence=0.9, crop=crop, lines=[line]
     )
@@ -165,7 +160,7 @@ def test_regionwithlines_default_lines_not_shared():
     crop = _crop()
     r1 = RegionWithLines(bbox=(0, 0, 200, 100), label="text", confidence=0.9, crop=crop)
     r2 = RegionWithLines(bbox=(0, 0, 200, 100), label="text", confidence=0.9, crop=crop)
-    r1.lines.append(TextLine(bbox=(0, 0, 10, 10), crop=_crop(10, 10)))
+    r1.lines.append(TextLine(bbox=(0, 0, 10, 10), confidence=0.9, crop=_crop(10, 10)))
     assert r2.lines == []
 
 
@@ -175,23 +170,13 @@ def test_regionwithlines_default_lines_not_shared():
 
 
 def test_polygon_to_bbox_basic():
-    assert _polygon_to_bbox([[10, 20], [80, 20], [80, 60], [10, 60]], 100, 200) == (
-        10,
-        20,
-        80,
-        60,
-    )
+    x1, y1, x2, y2 = _polygon_to_bbox([[10, 20], [80, 20], [80, 60], [10, 60]], 100, 200)
+    assert (x1, y1, x2, y2) == (10, 20, 80, 60)
 
 
 def test_polygon_to_bbox_clamps_to_image():
-    assert _polygon_to_bbox(
-        [[-5, -10], [250, -10], [250, 120], [-5, 120]], 100, 200
-    ) == (
-        0,
-        0,
-        200,
-        100,
-    )
+    x1, y1, x2, y2 = _polygon_to_bbox([[-5, -10], [250, -10], [250, 120], [-5, 120]], 100, 200)
+    assert (x1, y1, x2, y2) == (0, 0, 200, 100)
 
 
 def test_polygon_to_bbox_partial_clamp():
@@ -224,7 +209,7 @@ def test_parse_lines_no_polys():
 def test_parse_lines_single_line():
     lines = _parse_lines([{"dt_polys": [_rect_poly(10, 20, 80, 50)]}], _crop(100, 200))
     assert len(lines) == 1
-    assert lines[0].bbox == (10, 20, 80, 50)
+    assert tuple(lines[0].bbox) == (10, 20, 80, 50)
 
 
 def test_parse_lines_crop_shape_matches_bbox():
@@ -247,7 +232,7 @@ def test_parse_lines_degenerate_bbox_skipped():
         [{"dt_polys": [_rect_poly(10, 30, 80, 30), _rect_poly(10, 50, 80, 80)]}], crop
     )
     assert len(lines) == 1
-    assert lines[0].bbox == (10, 50, 80, 80)
+    assert tuple(lines[0].bbox) == (10, 50, 80, 80)
 
 
 def test_parse_lines_multiple_lines():
@@ -270,7 +255,7 @@ def test_run_detection_returns_textlines(monkeypatch):
     lines = detector._run_detection(_crop())
     assert len(lines) == 1
     assert isinstance(lines[0], TextLine)
-    assert lines[0].bbox == (5, 10, 60, 40)
+    assert tuple(lines[0].bbox) == (5, 10, 60, 40)
 
 
 def test_run_detection_empty_result(monkeypatch):
@@ -419,37 +404,3 @@ def test_process_returns_regionwithlines_instances(monkeypatch):
     assert isinstance(results[0], RegionWithLines)
 
 
-# ---------------------------------------------------------------------------
-# Singleton behaviour
-# ---------------------------------------------------------------------------
-
-
-def test_init_creates_singleton(monkeypatch):
-    monkeypatch.setattr("src.text_detector.TextDetection", lambda **kw: MagicMock())
-    assert td_mod._global_detector is None
-    td_mod.init()
-    assert td_mod._global_detector is not None
-
-
-def test_process_lazy_creates_singleton(monkeypatch):
-    monkeypatch.setattr("src.text_detector.TextDetection", lambda **kw: MagicMock())
-    assert td_mod._global_detector is None
-    td_mod.process([])
-    assert td_mod._global_detector is not None
-
-
-def test_process_warns_on_lazy_init(monkeypatch, caplog):
-    monkeypatch.setattr("src.text_detector.TextDetection", lambda **kw: MagicMock())
-    import logging
-
-    with caplog.at_level(logging.WARNING, logger="src.text_detector"):
-        td_mod.process([])
-    assert any("before init()" in r.message for r in caplog.records)
-
-
-def test_init_replaces_existing_singleton(monkeypatch):
-    monkeypatch.setattr("src.text_detector.TextDetection", lambda **kw: MagicMock())
-    td_mod.init()
-    first = td_mod._global_detector
-    td_mod.init()
-    assert td_mod._global_detector is not first

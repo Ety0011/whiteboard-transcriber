@@ -66,7 +66,7 @@ def _make_detector(monkeypatch, boxes: list[dict]) -> LayoutDetector:
     return LayoutDetector()
 
 
-def _flush(detector: LayoutDetector, image: np.ndarray, timeout: float = 2.0) -> list[Region]:
+def _flush(detector: LayoutDetector, image: np.ndarray, timeout: float = 2.0) -> list[LayoutRegion]:
     """Submit *image* (bypassing interval) and block until ONE detection completes.
 
     Polls _result_queue directly so the loop never triggers a second submission.
@@ -114,12 +114,6 @@ def patch_process(monkeypatch):
     monkeypatch.setattr("src.layout.mp.Process", _FakeProcess)
     monkeypatch.setattr("src.layout.mp.Queue",
                         lambda maxsize=0: queue.Queue(maxsize=maxsize))
-
-
-@pytest.fixture(autouse=True)
-def reset_global(monkeypatch):
-    """Reset the module-level singleton before each test."""
-    monkeypatch.setattr(layout_mod, "_global_detector", None)
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +240,7 @@ def test_process_returns_regions_after_flush(monkeypatch):
 def test_process_respects_recompute_interval(monkeypatch):
     call_count = 0
 
-    def _counting_predict(img):
+    def _counting_predict(img, **_kw):
         nonlocal call_count
         call_count += 1
         return []
@@ -265,7 +259,7 @@ def test_process_respects_recompute_interval(monkeypatch):
 def test_process_fires_again_after_interval(monkeypatch):
     call_count = 0
 
-    def _counting_predict(img):
+    def _counting_predict(img, **_kw):
         nonlocal call_count
         call_count += 1
         return []
@@ -281,43 +275,3 @@ def test_process_fires_again_after_interval(monkeypatch):
     assert call_count == 2
 
 
-# ---------------------------------------------------------------------------
-# Singleton behaviour
-# ---------------------------------------------------------------------------
-
-def test_init_creates_singleton(monkeypatch):
-    engine = MagicMock()
-    engine.predict = MagicMock(return_value=[])
-    monkeypatch.setattr("src.layout.LayoutDetection", lambda **kw: engine)
-
-    assert layout_mod._global_detector is None
-    layout_mod.init()
-    assert layout_mod._global_detector is not None
-
-
-def test_process_lazy_creates_singleton(monkeypatch):
-    engine = MagicMock()
-    engine.predict = MagicMock(return_value=[])
-    monkeypatch.setattr("src.layout.LayoutDetection", lambda **kw: engine)
-
-    assert layout_mod._global_detector is None
-    layout_mod.process(_white_board())
-    assert layout_mod._global_detector is not None
-
-
-def test_init_respects_confidence_threshold(monkeypatch):
-    engine = MagicMock()
-    engine.predict = MagicMock(return_value=[])
-    monkeypatch.setattr("src.layout.LayoutDetection", lambda **kw: engine)
-
-    layout_mod.init(confidence_threshold=0.7)
-    assert layout_mod._global_detector._confidence_threshold == pytest.approx(0.7)
-
-
-def test_init_respects_recompute_interval(monkeypatch):
-    engine = MagicMock()
-    engine.predict = MagicMock(return_value=[])
-    monkeypatch.setattr("src.layout.LayoutDetection", lambda **kw: engine)
-
-    layout_mod.init(recompute_interval=5.0)
-    assert layout_mod._global_detector._recompute_interval == pytest.approx(5.0)
