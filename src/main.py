@@ -34,12 +34,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    source: int | str = args.source if args.source is not None else 0
-
     output_path = Path("output/whiteboard.md")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    frame_queue = capture.process(source)
+    frame_queue = capture.process(args.source)
     pipeline = Pipeline(output_path)
 
     logger.info("Processing started. Press Ctrl-C to stop.")
