@@ -32,12 +32,12 @@ import numpy as np
 from board_detector import BoardDetector
 from board_reconstructor import BoardReconstructor
 from capture import process as start_camera
+from document import WhiteboardDoc
 from layout import LayoutRegion
 from person_masker import PersonMasker
-from document import WhiteboardDoc
-from recognizer import Recognizer
 from rectifier import Rectifier
 from text_detector import RegionWithLines, TextDetector
+from text_recognizer import TextRecognizer
 from tracker import Detection, RegionState, RegionTracker
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -160,6 +160,31 @@ def _draw_layout(frame: np.ndarray, regions: list[LayoutRegion]) -> np.ndarray:
     return out
 
 
+def _render_doc(doc: WhiteboardDoc, width: int = 800) -> np.ndarray:
+    """Render doc.to_markdown() as a BGR image for cv2.imshow."""
+    text = doc.to_markdown()
+    raw_lines = text.splitlines() if text else ["(no content yet)"]
+
+    line_h = 20
+    padding = 12
+    img_h = max(200, len(raw_lines) * line_h + 2 * padding)
+    img = np.full((img_h, width, 3), 30, dtype=np.uint8)
+
+    for i, line in enumerate(raw_lines):
+        y = padding + (i + 1) * line_h
+        cv2.putText(
+            img,
+            line[:110],
+            (padding, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (180, 255, 180),
+            1,
+            cv2.LINE_AA,
+        )
+    return img
+
+
 def _draw_corners(frame: np.ndarray, detector: BoardDetector) -> np.ndarray:
     """Draw the detected board quad on *frame* in-place and return it."""
     with detector._lock:
@@ -219,7 +244,7 @@ def main(source: int | str = 0) -> None:
     reconstructor = BoardReconstructor()
     text_detector = TextDetector()
     region_tracker = RegionTracker()
-    recognizer = Recognizer()
+    recognizer = TextRecognizer()
     doc = WhiteboardDoc()
 
     show_corners = True
@@ -228,6 +253,7 @@ def main(source: int | str = 0) -> None:
     show_layout = True
     show_text_lines = True
     show_tracker = True
+    show_doc = True
 
     print(
         "Stage 1–7 preview running.\n"
@@ -237,6 +263,7 @@ def main(source: int | str = 0) -> None:
         "  l — toggle layout bounding boxes\n"
         "  t — toggle Stage 5 text line bounding boxes\n"
         "  r — toggle Stage 6 region tracker\n"
+        "  m — toggle Markdown document view\n"
         "  q — quit"
     )
 
@@ -300,6 +327,9 @@ def main(source: int | str = 0) -> None:
 
             cv2.imshow("Stage 4+5+6 (rectified)", vis_composite)
 
+        if show_doc:
+            cv2.imshow("Stage 7 (document)", _render_doc(doc))
+
         key = cv2.waitKey(wait_ms) & 0xFF
         if key == ord("q"):
             break
@@ -317,6 +347,10 @@ def main(source: int | str = 0) -> None:
             show_text_lines = not show_text_lines
         if key == ord("r"):
             show_tracker = not show_tracker
+        if key == ord("m"):
+            show_doc = not show_doc
+            if not show_doc:
+                cv2.destroyWindow("Stage 7 (document)")
 
     cv2.destroyAllWindows()
 

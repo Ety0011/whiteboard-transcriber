@@ -19,7 +19,7 @@ from tracker import Region, RegionTracker, TrackerResult
 log = logging.getLogger(__name__)
 
 
-class Recognizer:
+class TextRecognizer:
     """Loads OCR model once and processes newly-stable regions each frame."""
 
     def __init__(self, device: str | None = None) -> None:
@@ -138,11 +138,6 @@ class Recognizer:
         Returns:
             The same doc object, mutated.
         """
-        for region in tracker_result.newly_erased:
-            if region.id in doc.blocks:
-                doc.blocks[region.id] = f"~~{doc.blocks[region.id]}~~"
-                log.debug("Region %d erased from doc.", region.id)
-
         for region in tracker_result.newly_stable:
             new_text, confidence = self._ocr_region(region)
 
@@ -163,7 +158,7 @@ class Recognizer:
                     "\n".join(diff),
                 )
 
-            doc.blocks[region.id] = new_text
+            doc.append(new_text)
             tracker.mark_ocr_done(region, new_text, confidence)
             log.debug(
                 "Region %d OCR'd (conf=%.2f): %r",

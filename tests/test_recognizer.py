@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 import numpy as np
 
 from src.document import WhiteboardDoc
-from src.recognizer import Recognizer
+from src.text_recognizer import TextRecognizer
 from src.tracker import Region, RegionState, TrackerResult
 
 # ---------------------------------------------------------------------------
@@ -57,9 +57,9 @@ def _make_tracker_result(
     )
 
 
-def _make_recognizer(mock_predict_return: list[dict]) -> Recognizer:
+def _make_recognizer(mock_predict_return: list[dict]) -> TextRecognizer:
     """Return a Recognizer whose internal TextRecognition is mocked."""
-    recognizer = object.__new__(Recognizer)
+    recognizer = object.__new__(TextRecognizer)
     mock_engine = MagicMock()
     mock_engine.predict.return_value = mock_predict_return
     recognizer._recognizer = mock_engine
@@ -94,15 +94,19 @@ class TestFirstStabilization:
             ]
         )
         doc = WhiteboardDoc()
-        result = recognizer.process(_make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc)
+        result = recognizer.process(
+            _make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc
+        )
 
-        assert result.blocks[1] == "hello\nworld"
+        assert result.blocks[0] == "hello\nworld"
 
     def test_region_ocr_text_mutated(self):
         region = _make_region(region_id=2, ocr_text=None)
         recognizer = _make_recognizer([{"rec_text": "foo", "rec_score": 0.88}])
         doc = WhiteboardDoc()
-        recognizer.process(_make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc)
+        recognizer.process(
+            _make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc
+        )
 
         assert region.ocr_text == "foo"
         assert region.ocr_confidence is not None
@@ -111,14 +115,16 @@ class TestFirstStabilization:
         region = _make_region(region_id=3, ocr_text=None)
         recognizer = _make_recognizer([])
         doc = WhiteboardDoc()
-        recognizer.process(_make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc)
+        recognizer.process(
+            _make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc
+        )
 
-        assert doc.blocks[3] == ""
+        assert doc.blocks[0] == ""
         assert region.ocr_text == ""
 
 
 class TestRestabilizationWithAdditions:
-    def test_block_updated_with_new_line(self):
+    def test_new_block_appended_on_change(self):
         region = _make_region(region_id=1, ocr_text="hello")
         recognizer = _make_recognizer(
             [
@@ -126,9 +132,12 @@ class TestRestabilizationWithAdditions:
                 {"rec_text": "world", "rec_score": 0.90},
             ]
         )
-        doc = WhiteboardDoc(blocks={1: "hello"})
-        recognizer.process(_make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc)
+        doc = WhiteboardDoc(blocks=["hello"])
+        recognizer.process(
+            _make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc
+        )
 
+        assert len(doc.blocks) == 2
         assert doc.blocks[1] == "hello\nworld"
         assert region.ocr_text == "hello\nworld"
 
@@ -136,51 +145,62 @@ class TestRestabilizationWithAdditions:
         before = time.monotonic()
         region = _make_region(region_id=1, ocr_text="old")
         recognizer = _make_recognizer([{"rec_text": "new", "rec_score": 0.9}])
-        doc = WhiteboardDoc(blocks={1: "old"})
-        recognizer.process(_make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc)
+        doc = WhiteboardDoc(blocks=["old"])
+        recognizer.process(
+            _make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc
+        )
 
         assert region.last_modified >= before
 
 
 class TestRestabilizationWithRemovals:
-    def test_removed_line_absent_from_block(self):
+    def test_new_block_appended_with_removed_line(self):
         region = _make_region(region_id=1, ocr_text="hello\nworld")
         recognizer = _make_recognizer([{"rec_text": "hello", "rec_score": 0.95}])
-        doc = WhiteboardDoc(blocks={1: "hello\nworld"})
-        recognizer.process(_make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc)
+        doc = WhiteboardDoc(blocks=["hello\nworld"])
+        recognizer.process(
+            _make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc
+        )
 
+        assert len(doc.blocks) == 2
         assert doc.blocks[1] == "hello"
-        assert "world" not in region.ocr_text
+        assert region.ocr_text == "hello"
 
 
 class TestNoChangeSkip:
-    def test_block_unchanged_when_content_identical(self):
+    def test_no_new_block_when_content_identical(self):
         region = _make_region(region_id=1, ocr_text="hello")
         original_modified = region.last_modified
         recognizer = _make_recognizer([{"rec_text": "hello", "rec_score": 0.95}])
-        doc = WhiteboardDoc(blocks={1: "hello"})
-        recognizer.process(_make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc)
+        doc = WhiteboardDoc(blocks=["hello"])
+        recognizer.process(
+            _make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc
+        )
 
-        assert doc.blocks[1] == "hello"
+        assert len(doc.blocks) == 1  # no new block appended
         assert region.last_modified == original_modified  # no mutation when unchanged
 
 
 class TestErasedRegion:
-    def test_block_wrapped_in_strikethrough(self):
+    def test_erased_region_leaves_doc_unchanged(self):
         region = _make_region(region_id=1)
         recognizer = _make_recognizer([])
-        doc = WhiteboardDoc(blocks={1: "some text"})
-        recognizer.process(_make_tracker_result(newly_erased=[region]), _make_mock_tracker(), doc)
+        doc = WhiteboardDoc(blocks=["some text"])
+        recognizer.process(
+            _make_tracker_result(newly_erased=[region]), _make_mock_tracker(), doc
+        )
 
-        assert doc.blocks[1] == "~~some text~~"
+        assert doc.blocks == ["some text"]
 
-    def test_missing_block_not_added(self):
+    def test_erased_region_on_empty_doc_leaves_doc_unchanged(self):
         region = _make_region(region_id=99)
         recognizer = _make_recognizer([])
-        doc = WhiteboardDoc(blocks={})
-        recognizer.process(_make_tracker_result(newly_erased=[region]), _make_mock_tracker(), doc)
+        doc = WhiteboardDoc()
+        recognizer.process(
+            _make_tracker_result(newly_erased=[region]), _make_mock_tracker(), doc
+        )
 
-        assert 99 not in doc.blocks
+        assert doc.blocks == []
 
 
 class TestLineCropExtraction:
