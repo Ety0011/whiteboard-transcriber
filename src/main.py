@@ -1,13 +1,22 @@
-"""Entry point for the whiteboard transcription pipeline.
+"""Whiteboard transcription pipeline — entry point.
 
-Starts the camera daemon thread and the processing thread, wires them
-together via a Queue(maxsize=1), and handles graceful shutdown on
-KeyboardInterrupt or when the input source is exhausted.
+Chains Stages 1–7 sequentially on each frame. In normal mode shows the
+raw camera feed. With ``--debug`` all stage overlays are shown and can be
+toggled individually.
 
-Usage:
+Usage::
+
     python src/main.py                    # live webcam (default)
-    python src/main.py video.mp4          # video file for testing
-    python src/main.py image.jpg          # still image for testing
+    python src/main.py video.mp4          # video file
+    python src/main.py --debug            # webcam + full debug overlays
+    python src/main.py --debug video.mp4  # file + full debug overlays
+
+Keyboard controls (debug mode only):
+    q  — quit
+    w  — toggle Stage 1 corner overlay
+    p  — toggle Stage 2 person-mask overlay
+    t  — toggle Stage 5 text line boxes
+    r  — toggle Stage 6 region tracker
 """
 
 from __future__ import annotations
@@ -17,16 +26,150 @@ import logging
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 import capture
-from pipeline import Pipeline
+from board_detector import BoardDetector
+from board_reconstructor import BoardReconstructor
+from document import WhiteboardDoc
+from layout import LayoutRegion
+from person_masker import PersonMasker
+from rectifier import Rectifier
+from text_detector import RegionWithLines, TextDetector
+from text_recognizer import TextRecognizer
+from tracker import Detection, RegionState, RegionTracker
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Debug drawing helpers
+# ---------------------------------------------------------------------------
+
+_LABELS = ["TL", "TR", "BR", "BL"]
+
+_STATE_COLOURS = {
+    RegionState.CANDIDATE: (255, 255, 0),
+    RegionState.STABILIZING: (0, 165, 255),
+    RegionState.STABLE: (0, 255, 0),
+    RegionState.MISSING: (200, 0, 200),
+    RegionState.REMOVED: (0, 0, 255),
+}
+
+
+def _apply_mask_overlay(frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Blend a semi-transparent red highlight over *frame* where *mask* is 1."""
+    overlay = frame.copy()
+    overlay[mask == 1] = (0, 0, 220)
+    return cv2.addWeighted(frame, 0.65, overlay, 0.35, 0)
+
+
+def _draw_corners(frame: np.ndarray, detector: BoardDetector) -> np.ndarray:
+    """Draw the detected board quad and corner labels on *frame*."""
+    with detector._lock:
+        corners = detector._cached_corners
+
+    if detector._detecting:
+        cv2.putText(
+            frame,
+            "Detecting board...",
+            (40, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.2,
+            (0, 180, 220),
+            2,
+        )
+    elif corners is None:
+        cv2.putText(
+            frame,
+            "No board detected",
+            (40, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.2,
+            (0, 180, 220),
+            2,
+        )
+
+    if corners is None:
+        return frame
+
+    pts = corners.astype(np.int32)
+    cv2.polylines(
+        frame, [pts.reshape(-1, 1, 2)], isClosed=True, color=(0, 0, 220), thickness=3
+    )
+    for i, (x, y) in enumerate(pts):
+        cv2.circle(frame, (int(x), int(y)), 12, (0, 200, 0), -1)
+        cv2.putText(
+            frame,
+            _LABELS[i],
+            (int(x) + 14, int(y) - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 255, 255),
+            2,
+        )
+    return frame
+
+
+def _draw_text_lines(frame: np.ndarray, regions: list[RegionWithLines]) -> np.ndarray:
+    """Draw text line bounding boxes on *frame* in board-composite coordinates."""
+    out = frame.copy()
+    for r in regions:
+        rx1, ry1, _, _ = r.bbox
+        for line in r.lines:
+            lx1, ly1, lx2, ly2 = line.bbox
+            cv2.rectangle(
+                out, (rx1 + lx1, ry1 + ly1), (rx1 + lx2, ry1 + ly2), (255, 150, 0), 1
+            )
+    return out
+
+
+def _draw_tracker(frame: np.ndarray, regions: list) -> np.ndarray:
+    """Draw tracked regions with ID, state, confidence, and OCR text."""
+    out = frame.copy()
+    for reg in regions:
+        x1, y1, x2, y2 = reg.bbox
+        colour = _STATE_COLOURS.get(reg.state, (255, 255, 255))
+        thickness = 1 if reg.state == RegionState.MISSING else 2
+        cv2.rectangle(out, (x1, y1), (x2, y2), colour, thickness)
+
+        ocr_tag = "OK" if reg.ocr_text else "..."
+        label = f"ID:{reg.id} {reg.state.value} {reg.confidence:.2f} [{ocr_tag}]"
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+        cv2.rectangle(out, (x1, y1), (x1 + tw + 4, y1 + th + 6), colour, -1)
+        cv2.putText(
+            out,
+            label,
+            (x1 + 2, y1 + th + 2),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.4,
+            (0, 0, 0),
+            1,
+            cv2.LINE_AA,
+        )
+
+        if reg.ocr_text:
+            for i, line in enumerate(reg.ocr_text.splitlines()):
+                cv2.putText(
+                    out,
+                    line[:80],
+                    (x1, y2 + 14 + i * 14),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.38,
+                    (0, 255, 0),
+                    1,
+                    cv2.LINE_AA,
+                )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 
 def main() -> None:
-    """Start the camera thread and processing pipeline."""
+    """Start the capture thread and run the pipeline loop."""
     parser = argparse.ArgumentParser(description="Whiteboard transcription pipeline")
     parser.add_argument(
         "source",
@@ -34,7 +177,11 @@ def main() -> None:
         metavar="FILE",
         help="video or image file (omit to use the default webcam)",
     )
-    parser.add_argument("--debug", action="store_true", help="enable debug logging")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="show stage overlays and enable debug logging",
+    )
     args = parser.parse_args()
 
     logging.getLogger().setLevel(logging.DEBUG if args.debug else logging.INFO)
@@ -43,25 +190,101 @@ def main() -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     frame_queue = capture.process(args.source)
-    pipeline = Pipeline(output_path)
 
-    logger.info("Processing started. Press q or Ctrl-C to stop.")
+    log.info("Loading models …")
+    board_detector = BoardDetector()
+    person_masker = PersonMasker()
+    rectifier = Rectifier()
+    reconstructor = BoardReconstructor()
+    text_detector = TextDetector()
+    tracker = RegionTracker()
+    recognizer = TextRecognizer()
+    doc = WhiteboardDoc()
+    log.info("Ready. Press q or Ctrl-C to stop.")
+
+    show_corners = show_mask = show_text_lines = show_tracker = True
+
     try:
         while True:
             frame = frame_queue.get()
             if frame is None:
-                logger.info("End of stream.")
+                log.info("End of stream.")
                 break
-            pipeline.process(frame)
-            cv2.imshow("Whiteboard", frame)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
+
+            # Stage 1 — board detection (async, non-blocking)
+            corners = board_detector.process(frame)
+            # Stage 2 — person mask on raw frame
+            mask = person_masker.process(frame)
+            # Stage 3 — perspective warp
+            warped, warped_mask = rectifier.process(frame, mask, corners)
+            # Stage 4 — EMA board reconstruction
+            composite = reconstructor.process(warped, warped_mask)
+            # Stage 5 — text detection
+            h, w = composite.shape[:2]
+            regions_with_lines = text_detector.process(
+                [
+                    LayoutRegion(
+                        bbox=np.array([0, 0, w, h], dtype=np.int32),
+                        label="text",
+                        confidence=1.0,
+                        crop=composite,
+                    )
+                ]
+            )
+            detections = [
+                Detection(
+                    bbox=line.bbox, confidence=line.confidence, line_bboxes=[line.bbox]
+                )
+                for region in regions_with_lines
+                for line in region.lines
+            ]
+            # Stage 6 — region tracker
+            tracker_result = tracker.process(detections, composite)
+            # Stage 7 — OCR + markdown write
+            if tracker_result.newly_stable:
+                recognizer.process(tracker_result, tracker, doc)
+                tmp = output_path.with_suffix(".tmp")
+                tmp.write_text(doc.to_markdown(), encoding="utf-8")
+                tmp.rename(output_path)
+                log.debug("Markdown written to %s", output_path)
+
+            if args.debug:
+                display = frame.copy()
+                if show_mask:
+                    display = _apply_mask_overlay(display, mask)
+                if show_corners:
+                    display = _draw_corners(display, board_detector)
+                cv2.imshow("raw", display)
+
+                vis = composite.copy()
+                if show_text_lines:
+                    vis = _draw_text_lines(vis, regions_with_lines)
+                if show_tracker:
+                    vis = _draw_tracker(vis, tracker_result.regions)
+                cv2.imshow("board", vis)
+
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("q"):
+                    break
+                elif key == ord("w"):
+                    show_corners = not show_corners
+                elif key == ord("p"):
+                    show_mask = not show_mask
+                elif key == ord("t"):
+                    show_text_lines = not show_text_lines
+                elif key == ord("r"):
+                    show_tracker = not show_tracker
+            else:
+                cv2.imshow("Whiteboard", frame)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+
     except KeyboardInterrupt:
         pass
     finally:
         cv2.destroyAllWindows()
 
-    logger.info("Shutting down.")
+    log.info("Shutting down.")
 
 
 if __name__ == "__main__":
