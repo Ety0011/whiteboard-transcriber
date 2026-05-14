@@ -318,34 +318,3 @@ class TextDetector:
         engine = TextDetection(model_name="PP-OCRv5_server_det")
         raw = engine.predict(crop)
         return _parse_lines(raw, crop)
-
-
-# ---------------------------------------------------------------------------
-# Module-level singleton + convenience functions
-# ---------------------------------------------------------------------------
-
-_global_detector: TextDetector | None = None
-
-
-def init() -> None:
-    """Start the child process and load PP-OCRv5_server_det. Call once at startup."""
-    global _global_detector
-    _global_detector = TextDetector()
-
-
-def process(regions: list[Region]) -> list[RegionWithLines]:
-    """Detect text lines using the module-level singleton detector.
-
-    Lazily initialises with default settings if init() was not called first.
-
-    Args:
-        regions: Layout regions from Stage 4.
-
-    Returns:
-        Last cached list of RegionWithLines (empty until first detection).
-    """
-    global _global_detector
-    if _global_detector is None:
-        log.warning("text_detection.process() called before init() — using defaults")
-        _global_detector = TextDetector()
-    return _global_detector.process(regions)

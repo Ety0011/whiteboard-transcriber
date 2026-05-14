@@ -57,11 +57,11 @@ _LAYOUT_DEFAULT_COLOUR: tuple[int, int, int] = (180, 180, 180)
 
 # --- Updated Stage 5 State Colours ---
 _STATE_COLOURS = {
-    RegionState.NEW: (255, 255, 0),  # Cyan
-    RegionState.GROWING: (0, 165, 255),  # Orange
+    RegionState.CANDIDATE: (255, 255, 0),  # Cyan
+    RegionState.STABILIZING: (0, 165, 255),  # Orange
     RegionState.STABLE: (0, 255, 0),  # Green
     RegionState.MISSING: (200, 0, 200),  # Magenta/Purple
-    RegionState.ERASED: (0, 0, 255),  # Red
+    RegionState.REMOVED: (0, 0, 255),  # Red
 }
 
 

@@ -156,26 +156,3 @@ class Segmenter:
         # Index 0 is used whether the model returns 1 or 2 masks, because empirically
         # the landscape model's single output represents person probability directly.
         return np.array(masks[0].numpy_view()).squeeze()
-
-
-# ---------------------------------------------------------------------------
-# Module-level convenience — delegates to a lazily-created global instance
-# ---------------------------------------------------------------------------
-
-_global_segmenter: Segmenter | None = None
-
-
-def process(frame: np.ndarray) -> np.ndarray:
-    """Compute a binary person mask using a module-global :class:`Segmenter`.
-
-    Args:
-        frame: BGR uint8 image (perspective-corrected, from Stage 1).
-
-    Returns:
-        Binary mask as uint8 ndarray with shape ``(H, W)``.
-        Pixel value 1 means "person present"; 0 means "board visible".
-    """
-    global _global_segmenter
-    if _global_segmenter is None:
-        _global_segmenter = Segmenter()
-    return _global_segmenter.process(frame)

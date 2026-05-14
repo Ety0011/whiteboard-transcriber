@@ -90,26 +90,3 @@ class BackgroundReconstructor:
         ) * self._background_float + pixel_wise_lr * frame_float
 
         return self._background_float.astype(np.uint8)
-
-
-# ---------------------------------------------------------------------------
-# Module-level convenience
-# ---------------------------------------------------------------------------
-
-_global_reconstructor: BackgroundReconstructor | None = None
-
-
-def process(frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """Update the background model and return the clean board composite.
-
-    Args:
-        frame: BGR uint8 warped frame from Stage 1.
-        mask:  Binary person mask from Stage 2 (uint8, 0=board, 1=person).
-
-    Returns:
-        BGR uint8 composite image showing the board surface without people.
-    """
-    global _global_reconstructor
-    if _global_reconstructor is None:
-        _global_reconstructor = BackgroundReconstructor()
-    return _global_reconstructor.process(frame, mask)

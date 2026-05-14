@@ -277,18 +277,3 @@ class Registrar:
 
         # Accept multiple corners change
         return True
-
-
-# ---------------------------------------------------------------------------
-# Module-level convenience
-# ---------------------------------------------------------------------------
-
-_global_registrar: Registrar | None = None
-
-
-def process(frame: np.ndarray) -> np.ndarray:
-    """Warp *frame* using a module-global :class:`Registrar`."""
-    global _global_registrar
-    if _global_registrar is None:
-        _global_registrar = Registrar()
-    return _global_registrar.process(frame)
