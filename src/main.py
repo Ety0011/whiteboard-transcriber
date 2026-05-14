@@ -34,7 +34,10 @@ def main() -> None:
         metavar="FILE",
         help="video or image file (omit to use the default webcam)",
     )
+    parser.add_argument("--debug", action="store_true", help="enable debug logging")
     args = parser.parse_args()
+
+    logging.getLogger().setLevel(logging.DEBUG if args.debug else logging.INFO)
 
     output_path = Path("output/whiteboard.md")
     output_path.parent.mkdir(parents=True, exist_ok=True)
