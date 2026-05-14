@@ -1,8 +1,8 @@
-"""Dev tool — Stage 0–6 live preview.
+"""Dev tool — Stage 1–7 live preview.
 
-Opens the camera (or a video file), runs perspective registration,
-person segmentation, surface reconstruction, layout detection, and text line
-detection, showing the results in cv2.imshow windows.
+Opens the camera (or a video file), runs board detection, person masking,
+perspective rectification, board reconstruction, and text detection, showing
+the results in cv2.imshow windows.
 
 Usage::
 
@@ -14,11 +14,11 @@ Keyboard controls:
     q  — quit
     d  — toggle Stage 1 corner overlay: shows raw camera frame with detected
          quad drawn on it so you can verify corner positions before warping
-    s  — toggle Stage 2 person-mask overlay (semi-transparent red, warped view)
-    b  — toggle Stage 3 background composite (separate window, side-by-side)
-    l  — toggle Stage 4 layout bounding boxes on the Stage 3 composite
+    s  — toggle Stage 2 person-mask overlay (semi-transparent red, raw frame)
+    b  — toggle Stage 4 board reconstruction (separate window, side-by-side)
+    l  — toggle layout bounding boxes on the board reconstruction
     t  — toggle Stage 5 text line bounding boxes within each layout region
-    r  — toggle Stage 5 region tracker lifecycle visualization
+    r  — toggle Stage 6 region tracker lifecycle visualization
 """
 
 from __future__ import annotations
@@ -29,13 +29,14 @@ import sys
 import cv2
 import numpy as np
 
-from background import BackgroundReconstructor
+from board_detector import BoardDetector
+from board_reconstructor import BoardReconstructor
 from capture import process as start_camera
 from layout import Region
-from registration import Registrar
-from segmentation import Segmenter
-from text_detection import RegionWithLines, TextDetector
+from person_masker import PersonMasker
 from recognition import Recognizer, WhiteboardDoc
+from rectifier import Rectifier
+from text_detection import RegionWithLines, TextDetector
 from tracker import Detection, RegionState, RegionTracker
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -43,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 _LABELS = ["TL", "TR", "BR", "BL"]
 
-# BGR colours per layout label for the Stage 4 overlay.
+# BGR colours per layout label for the layout overlay.
 _LAYOUT_COLOURS: dict[str, tuple[int, int, int]] = {
     "text": (0, 200, 0),
     "paragraph_title": (0, 220, 220),
@@ -56,7 +57,6 @@ _LAYOUT_COLOURS: dict[str, tuple[int, int, int]] = {
 }
 _LAYOUT_DEFAULT_COLOUR: tuple[int, int, int] = (180, 180, 180)
 
-# --- Updated Stage 5 State Colours ---
 _STATE_COLOURS = {
     RegionState.CANDIDATE: (255, 255, 0),  # Cyan
     RegionState.STABILIZING: (0, 165, 255),  # Orange
@@ -94,7 +94,6 @@ def _draw_text_lines(frame: np.ndarray, regions: list[RegionWithLines]) -> np.nd
     return out
 
 
-# --- Updated Stage 5 Drawing Helper ---
 def _draw_tracker(frame: np.ndarray, regions: list) -> np.ndarray:
     """Draw persistent tracked regions with IDs, States, and OCR status."""
     out = frame.copy()
@@ -102,11 +101,9 @@ def _draw_tracker(frame: np.ndarray, regions: list) -> np.ndarray:
         x1, y1, x2, y2 = reg.bbox
         color = _STATE_COLOURS.get(reg.state, (255, 255, 255))
 
-        # Draw dotted line for MISSING regions, solid for others
         thickness = 1 if reg.state == RegionState.MISSING else 2
         cv2.rectangle(out, (x1, y1), (x2, y2), color, thickness)
 
-        # Header label: ID, state, confidence
         ocr_status = "OK" if reg.ocr_text else "..."
         label = f"ID:{reg.id} {reg.state.value} {reg.confidence:.2f} [{ocr_status}]"
 
@@ -123,7 +120,6 @@ def _draw_tracker(frame: np.ndarray, regions: list) -> np.ndarray:
             cv2.LINE_AA,
         )
 
-        # OCR text lines below the region box
         if reg.ocr_text:
             for i, line in enumerate(reg.ocr_text.splitlines()):
                 ty = y2 + 14 + i * 14
@@ -163,12 +159,12 @@ def _draw_layout(frame: np.ndarray, regions: list[Region]) -> np.ndarray:
     return out
 
 
-def _draw_corners(frame: np.ndarray, registrar: Registrar) -> np.ndarray:
+def _draw_corners(frame: np.ndarray, detector: BoardDetector) -> np.ndarray:
     """Draw the detected board quad on *frame* in-place and return it."""
-    with registrar._lock:
-        corners = registrar._cached_corners
+    with detector._lock:
+        corners = detector._cached_corners
 
-    if registrar._detecting:
+    if detector._detecting:
         cv2.putText(
             frame,
             "Detecting board...",
@@ -211,21 +207,17 @@ def _draw_corners(frame: np.ndarray, registrar: Registrar) -> np.ndarray:
 
 
 def main(source: int | str = 0) -> None:
-    """Run the Stage 0–6 preview loop."""
+    """Run the Stage 1–7 preview loop."""
     fps = _video_fps(source)
     wait_ms = max(1, int(1000 / fps))
 
     frame_queue = start_camera(source)
-    registrar = Registrar()
-
-    segmenter = Segmenter()
-    reconstructor = BackgroundReconstructor()
+    board_detector = BoardDetector()
+    person_masker = PersonMasker()
+    rectifier = Rectifier()
+    reconstructor = BoardReconstructor()
     text_detector = TextDetector()
-
-    # --- Stage 5 Tracker Instance ---
     region_tracker = RegionTracker()
-
-    # --- Stage 6 Recognizer ---
     recognizer = Recognizer()
     doc = WhiteboardDoc()
 
@@ -237,13 +229,13 @@ def main(source: int | str = 0) -> None:
     show_tracker = True
 
     print(
-        "Stage 1–6 preview running.\n"
+        "Stage 1–7 preview running.\n"
         "  d — toggle detected board corners\n"
         "  s — toggle person-mask overlay\n"
-        "  b — toggle Stage 3 background composite\n"
-        "  l — toggle Stage 4 layout bounding boxes\n"
+        "  b — toggle Stage 4 board reconstruction\n"
+        "  l — toggle layout bounding boxes\n"
         "  t — toggle Stage 5 text line bounding boxes\n"
-        "  r — toggle Stage 5 region tracker\n"
+        "  r — toggle Stage 6 region tracker\n"
         "  q — quit"
     )
 
@@ -253,24 +245,30 @@ def main(source: int | str = 0) -> None:
             logger.info("End of stream — exiting")
             break
 
-        warped = registrar.process(frame)
+        # Stage 1: detect board corners (async, non-blocking)
+        board_detector.submit_frame(frame)
+        corners = board_detector.get_corners()
+
+        # Stage 2: person mask on raw frame
+        mask_raw = person_masker.process(frame)
+
+        # Stage 3: rectify frame and mask together
+        warped, warped_mask = rectifier.process(frame, mask_raw, corners)
 
         display = frame.copy()
 
         if show_mask:
-            mask = segmenter.process(frame)
-            display = _apply_mask_overlay(display, mask)
+            display = _apply_mask_overlay(display, mask_raw)
 
         if show_corners:
-            display = _draw_corners(display, registrar)
+            display = _draw_corners(display, board_detector)
 
-        cv2.imshow("Stage 1+2", display)
+        cv2.imshow("Stage 1+2 (raw)", display)
 
         if show_bg:
-            bg_mask = segmenter.process(warped)
-            composite = reconstructor.process(warped, bg_mask)
+            # Stage 4: reconstruct clean board surface
+            composite = reconstructor.process(warped, warped_mask)
 
-            # Stage 4: full-image region — bypass layout detection
             h, w = composite.shape[:2]
             full_region = Region(
                 bbox=np.array([0, 0, w, h], dtype=np.int32),
@@ -280,7 +278,6 @@ def main(source: int | str = 0) -> None:
             )
             regions_with_lines = text_detector.process([full_region])
 
-            # --- Stage 5: Prepare detections for tracker ---
             all_detections = []
             for r in regions_with_lines:
                 for line in r.lines:
@@ -292,20 +289,16 @@ def main(source: int | str = 0) -> None:
                         )
                     )
 
-            # Update Tracker using the Background Composite as the truth source
             tracker_result = region_tracker.process(all_detections, composite)
-
-            # --- Stage 6: OCR newly-stable regions ---
             recognizer.process(tracker_result, doc)
 
-            # Visualisation overlays
             vis_composite = composite.copy()
             if show_text_lines:
                 vis_composite = _draw_text_lines(vis_composite, regions_with_lines)
             if show_tracker:
                 vis_composite = _draw_tracker(vis_composite, tracker_result.regions)
 
-            cv2.imshow("Stage 3+4+5", vis_composite)
+            cv2.imshow("Stage 4+5+6 (rectified)", vis_composite)
 
         key = cv2.waitKey(wait_ms) & 0xFF
         if key == ord("q"):
@@ -317,7 +310,7 @@ def main(source: int | str = 0) -> None:
         if key == ord("b"):
             show_bg = not show_bg
             if not show_bg:
-                cv2.destroyWindow("Stage 3+4+5")
+                cv2.destroyWindow("Stage 4+5+6 (rectified)")
         if key == ord("l"):
             show_layout = not show_layout
         if key == ord("t"):

@@ -35,23 +35,24 @@ pip install -r requirements.txt
 ```
 whiteboard-transcriber/
 ├── src/
-│   ├── main.py                # Entry point, thread orchestration
-│   ├── capture.py             # Camera thread, frame queue
-│   ├── registration.py        # Stage 1: perspective correction
-│   ├── segmentation.py        # Stage 2: person mask (MediaPipe)
-│   ├── background.py          # Stage 3: MOG2 surface reconstruction
-│   ├── text_detection.py      # Stage 4: PP-OCRv5 raw text line boxes every frame
-│   ├── tracker.py             # Stage 5: region lifecycle state machine
-│   ├── recognition.py         # Stage 6: layout classify + OCR on newly stable regions
-│   ├── pipeline.py            # Orchestrates stages 1–6, writes Markdown to disk
-│   └── utils.py               # Config, logging, helpers
-├── models/                    # Downloaded model weights (.gitignore'd)
+│   ├── main.py                   # Entry point, thread orchestration
+│   ├── capture.py                # Camera thread, frame queue
+│   ├── board_detector.py         # Stage 1: SAM 3 whiteboard localization → corners
+│   ├── person_masker.py          # Stage 2: MediaPipe person mask (raw frame)
+│   ├── rectifier.py              # Stage 3: perspective warp of frame + mask
+│   ├── board_reconstructor.py    # Stage 4: distance-weighted EMA board model
+│   ├── text_detection.py         # Stage 5: PP-OCRv5 raw text line boxes every frame
+│   ├── tracker.py                # Stage 6: region lifecycle state machine
+│   ├── recognition.py            # Stage 7: layout classify + OCR on newly stable regions
+│   ├── pipeline.py               # Orchestrates stages 1–7, writes Markdown to disk
+│   └── utils.py                  # Config, logging, helpers
+├── models/                       # Downloaded model weights (.gitignore'd)
 ├── tests/
-│   ├── fixtures/              # Test images of whiteboards
-│   └── test_*.py              # One test file per stage
+│   ├── fixtures/                 # Test images of whiteboards
+│   └── test_*.py                 # One test file per stage
 ├── docs/
 │   └── architecture.md
-├── output/                    # Generated Markdown files
+├── output/                       # Generated Markdown files
 ├── requirements.txt
 ├── CLAUDE.md
 └── README.md
@@ -68,20 +69,23 @@ python src/main.py --input video.mp4      # run on a video file (for testing)
 
 ## Architecture Overview
 
-6-stage pipeline. The whiteboard is modeled as a **persistent evolving document**, not a sequence of independent frames. All stages run sequentially in a processing thread. Camera runs in a separate daemon thread with a `Queue(maxsize=1)` for back-pressure (latest frame only).
+7-stage pipeline. The whiteboard is modeled as a **persistent evolving document**, not a sequence of independent frames. All stages run sequentially in a processing thread. Camera runs in a separate daemon thread with a `Queue(maxsize=1)` for back-pressure (latest frame only).
+
+Stages 1 and 2 both operate on the **raw camera frame** (before any warp) because their models (SAM 3 and MediaPipe) were trained on natural camera images. Stage 3 then warps both the frame and the person mask into the canonical board coordinate system.
 
 | Stage | What | Library |
 |-------|------|---------|
-| 1. Registration | Perspective warp to flat board | OpenCV |
-| 2. Segmentation | Person mask | MediaPipe |
-| 3. Background | Clean board composite via MOG2 | OpenCV |
-| 4. Text Detection | Raw text line boxes every frame | PaddleOCR (`PP-OCRv5_det_server`) |
-| 5. Region Tracker | Lifecycle state machine, persistence, stability | Pure Python + DINOv2-base |
-| 6. Recognition | Layout classify + OCR on newly stable regions, Markdown patch | PaddleOCR |
+| 1. Board Detection | SAM 3 → whiteboard corners (async, periodic) | Ultralytics SAM 3 |
+| 2. Person Masking | Person mask on raw frame | MediaPipe |
+| 3. Rectification | Perspective warp of frame + mask → canonical view | OpenCV |
+| 4. Board Reconstruction | Distance-weighted EMA board model | OpenCV |
+| 5. Text Detection | Raw text line boxes every frame | PaddleOCR (`PP-OCRv5_det_server`) |
+| 6. Region Tracker | Lifecycle state machine, persistence, stability | Pure Python + DINOv2-base |
+| 7. Recognition | Layout classify + OCR on newly stable regions, Markdown patch | PaddleOCR |
 
 ---
 
-## Region Tracker Design (Stage 5)
+## Region Tracker Design (Stage 6)
 
 This is the core of the system. The tracker maintains a registry of persistent `Region` objects across frames. The whiteboard is treated as a persistent document — regions are long-lived entities, not per-frame detections.
 
@@ -125,7 +129,7 @@ Any bbox change or content change resets `stable_frames = 0`.
 
 ### Detection Matching
 
-Each frame, raw detections from Stage 4 are matched to existing regions:
+Each frame, raw detections from Stage 5 are matched to existing regions:
 
 ```
 score = 0.7 * IoU + 0.3 * centroid_similarity
@@ -191,7 +195,7 @@ Markdown updates are surgical — existing content is never blindly overwritten.
 - **DINOv2 model loading takes a few seconds.** Load once at startup. Use `torch.no_grad()` for all inference — you never train.
 - **MediaPipe expects RGB input.** Always `cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)` before calling `segmenter.process()`. Forgetting this produces garbage masks silently.
 - **DINOv2 expects RGB input, normalized.** Convert from BGR, resize to a multiple of 14, normalize with ImageNet mean/std. Don't feed it raw OpenCV arrays.
-- **MOG2 background model needs person masking.** Feed the subtractor a frame where person pixels are replaced with board color, otherwise people standing still corrupt the background model.
+- **Board reconstruction uses distance-weighted EMA, not MOG2.** The learning rate drops to zero near person pixels, so occluded board regions are frozen at their last known value rather than corrupted by the person's appearance.
 - **`Queue(maxsize=1)` drops frames intentionally.** Use `put_nowait()` with a try/except or `get()` the old frame first. This is correct behavior, not a bug.
 - **Model files are large.** Do not commit them to git. Add `models/` to `.gitignore`. PaddleOCR and DINOv2 download weights automatically on first run.
 - **PaddlePaddle is a separate ML framework from PyTorch.** Both will be installed. PaddleOCR uses PaddlePaddle; DINOv2 uses PyTorch. This is intentional — they don't conflict but the install is large.

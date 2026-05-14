@@ -1,21 +1,24 @@
-"""Stage 1 — Spatial Registration.
+"""Stage 1 — Board Detection.
 
-Detects the whiteboard quadrilateral using SAM 3 (Segment Anything Model 3)
-with a text prompt ("whiteboard"), extracts the board boundary from the
-resulting binary mask, and warps every frame to a canonical 1280×720 output.
+Locates the whiteboard in the raw camera frame using SAM 3 (Segment Anything
+Model 3) with a text prompt ("whiteboard"), extracts the board boundary from
+the resulting binary mask, and maintains a cache of the four corner points.
 
-SAM 3 re-runs every ``recompute_every`` frames. A re-detection only updates
-the homography when **all four corners** have moved beyond ``cache_threshold``
-pixels from their previously cached positions — single-corner drift is treated
-as noise and ignored.
+SAM 3 re-runs every ``recompute_interval`` seconds on a background thread so
+the main processing loop never blocks on inference. Corner updates are filtered
+by a geometric guard: a new detection only replaces the cache when the area
+is not shrinking (occlusion guard), the displacement passes the threshold, and
+single-corner shifts are only accepted if they improve the board's symmetry.
 
 Models:
-  ``sam3-l.pt``   — whiteboard detection (auto-downloaded by Ultralytics).
+  ``sam3.1_multiplex.pt``   — whiteboard detection (auto-downloaded by Ultralytics).
 
 Typical usage::
 
-    registrar = Registrar()
-    warped = registrar.process(frame)
+    detector = BoardDetector()
+    # each frame:
+    detector.submit_frame(frame)
+    corners = detector.get_corners()   # non-blocking, returns cached value
 """
 
 from __future__ import annotations
@@ -32,34 +35,31 @@ from ultralytics.models.sam import SAM3SemanticPredictor
 logger = logging.getLogger(__name__)
 
 
-class Registrar:
-    """Stateful perspective-correction stage backed by SAM 3 board detection.
+class BoardDetector:
+    """Stateful whiteboard-localization stage backed by SAM 3.
 
-    SAM 3 re-runs every ``recompute_interval`` seconds. Between runs the
-    cached homography is reused, keeping per-frame cost minimal. A new
-    homography is committed only when all four detected corners have shifted
-    beyond ``cache_threshold`` pixels — partial drift (one or two corners) is
-    discarded as measurement noise.
+    SAM 3 fires asynchronously every ``recompute_interval`` seconds.
+    ``get_corners()`` never blocks — it returns the most recently accepted
+    four-corner array, or ``None`` before any successful detection.
     """
 
     def __init__(
         self,
-        output_size: tuple[int, int] = (1920, 1080),
-        cache_threshold: float = 50.0,
         recompute_interval: float = 5.0,
+        cache_threshold: float = 50.0,
         sam_model: str = "sam3.1_multiplex.pt",
     ) -> None:
         """
         Args:
-            output_size: (width, height) of the warped output image.
-            cache_threshold: Corner displacement in pixels. All four corners
-                must exceed this to trigger a homography update.
             recompute_interval: Seconds between SAM 3 re-detection runs.
+            cache_threshold: Corner displacement in pixels used by the
+                geometric update filter. All four corners must exceed this
+                (or a single-corner improvement check must pass) to commit
+                a new detection.
             sam_model: Ultralytics model filename for SAM 3 detection.
         """
-        self._output_size = output_size
-        self._cache_threshold = cache_threshold
         self._recompute_interval = recompute_interval
+        self._cache_threshold = cache_threshold
 
         _model = Path(__file__).parent.parent / "models" / sam_model
         self._sam: SAM3SemanticPredictor = SAM3SemanticPredictor(
@@ -73,12 +73,11 @@ class Registrar:
             )
         )
 
-        # Set to 0 so the very first process() call fires SAM 3 immediately.
+        # Set to 0 so the very first submit_frame() call fires SAM 3 immediately.
         self._last_detect_time: float = 0.0
 
-        self._homography: np.ndarray | None = None
         self._cached_corners: np.ndarray | None = None  # (4, 2) float32, TL/TR/BR/BL
-        self._lock = threading.Lock()  # guards _homography and _cached_corners
+        self._lock = threading.Lock()
 
         self._detecting: bool = False
         self._pending_frame: np.ndarray | None = None
@@ -94,42 +93,38 @@ class Registrar:
     # Public
     # ------------------------------------------------------------------
 
-    def process(self, frame: np.ndarray) -> np.ndarray:
-        """Warp *frame* to remove perspective distortion.
+    def submit_frame(self, frame: np.ndarray) -> None:
+        """Trigger an async SAM 3 detection if the recompute interval has elapsed.
 
-        SAM 3 detection is fired asynchronously on a background thread every
-        ``recompute_interval`` seconds; this method never blocks on inference.
+        Safe to call every frame — detection only fires at most once per
+        ``recompute_interval`` seconds and does not block the caller.
 
         Args:
-            frame: BGR uint8 image captured from the camera.
-
-        Returns:
-            Perspective-corrected BGR uint8 image at ``output_size``.
-            Falls back to a centred resize if no board has ever been detected.
+            frame: BGR uint8 raw camera frame.
         """
         now = time.monotonic()
-        elapsed = now - self._last_detect_time
-        if not self._detecting and elapsed >= self._recompute_interval:
+        if not self._detecting and (now - self._last_detect_time) >= self._recompute_interval:
             self._last_detect_time = now
             self._pending_frame = frame
             self._detecting = True
             self._detect_event.set()
 
+    def get_corners(self) -> np.ndarray | None:
+        """Return the most recently accepted board corners without blocking.
+
+        Returns:
+            Float32 array of shape ``(4, 2)`` ordered TL/TR/BR/BL, or
+            ``None`` if no successful detection has occurred yet.
+        """
         with self._lock:
-            homography = self._homography
-
-        if homography is None:
-            logger.debug("No board detected yet — returning resized frame")
-            return cv2.resize(frame, self._output_size)
-
-        return cv2.warpPerspective(frame, homography, self._output_size)
+            return self._cached_corners
 
     # ------------------------------------------------------------------
     # Background detection thread
     # ------------------------------------------------------------------
 
     def _detection_loop(self) -> None:
-        """Daemon thread: runs SAM 3 periodically and updates the homography."""
+        """Daemon thread: runs SAM 3 periodically and updates the corner cache."""
         while True:
             self._detect_event.wait()
             self._detect_event.clear()
@@ -147,11 +142,8 @@ class Registrar:
                         if self._cached_corners is None or self._are_corners_shifted(
                             sorted_corners
                         ):
-                            self._homography = self._compute_homography(sorted_corners)
                             self._cached_corners = sorted_corners
-                            logger.debug(
-                                "Homography updated — corners: %s", sorted_corners
-                            )
+                            logger.debug("Board corners updated: %s", sorted_corners)
             except Exception:
                 logger.exception("SAM 3 detection failed")
             finally:
@@ -164,11 +156,8 @@ class Registrar:
     def _detect_corners(self, frame: np.ndarray) -> np.ndarray | None:
         """Run SAM 3 with a text prompt and return the board quad.
 
-        Uses SAM3SemanticPredictor with the concept prompt "whiteboard" so
-        detection is location-independent — no point prompts needed.
-
         Args:
-            frame: BGR uint8 camera frame.
+            frame: BGR uint8 raw camera frame.
 
         Returns:
             Corner array of shape ``(4, 2)`` as float32, or ``None``.
@@ -232,48 +221,38 @@ class Registrar:
         rect[3] = pts[np.argmax(d)]
         return rect
 
-    def _compute_homography(self, corners: np.ndarray) -> np.ndarray:
-        """Compute perspective transform from *corners* to the output rectangle."""
-        w, h = self._output_size
-        dst = np.array(
-            [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]],
-            dtype=np.float32,
-        )
-        return cv2.getPerspectiveTransform(corners, dst)
-
     def _are_corners_shifted(self, sorted_corners: np.ndarray) -> bool:
-        """Return True if 2-3 corners shift, or 1 corner shifts and improves ratio.
+        """Return True if corners have shifted enough to warrant a cache update.
 
-        Prevents updates during occlusion via area guard and ensures the board
-        converges toward a rectangular shape using an absolute diagonal ratio.
+        Prevents spurious updates during occlusion (area guard) and accepts
+        single-corner shifts only when they improve the board's diagonal symmetry.
+        Called from inside ``_lock`` — reads ``self._cached_corners`` directly.
         """
         if self._cached_corners is None:
             return True
 
-        def get_area(p):
-            return 0.5 * np.abs(
+        def get_area(p: np.ndarray) -> float:
+            return 0.5 * abs(
                 np.dot(p[:, 0], np.roll(p[:, 1], 1))
                 - np.dot(p[:, 1], np.roll(p[:, 0], 1))
             )
 
-        def get_ratio(p):
+        def get_ratio(p: np.ndarray) -> float:
             return np.linalg.norm(p[0] - p[2]) / (np.linalg.norm(p[1] - p[3]) + 1e-6)
 
-        # 1. Geometry Metrics
         new_a, old_a = get_area(sorted_corners), get_area(self._cached_corners)
         new_r, old_r = get_ratio(sorted_corners), get_ratio(self._cached_corners)
 
-        # Area Guard: Ignore if the professor occludes corners (shrinking)
+        # Occlusion guard: reject if detected area shrank (professor covering corners)
         if new_a < old_a * 0.98:
             return False
 
-        # 2. Movement Logic
         dists = np.linalg.norm(sorted_corners - self._cached_corners, axis=1)
         count = np.count_nonzero(dists > self._cache_threshold)
 
-        # If exactly one corner shifts, only accept if it makes the board more symmetric
+        # Single-corner shift: only accept if it makes the board more symmetric
         if count == 1:
             return abs(new_r - 1.0) < abs(old_r - 1.0)
 
-        # Accept multiple corners change
-        return True
+        # Multiple corners moved → accept; zero corners moved → reject (noise)
+        return count >= 2

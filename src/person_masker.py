@@ -1,8 +1,12 @@
-"""Stage 2 — Person Segmentation.
+"""Stage 2 — Person Masking.
 
 Produces a binary mask that marks pixels belonging to people (arms,
 torso, hands holding markers) so they can be excluded from the
-background model in Stage 3.
+rectified image when building the board surface model in Stage 4.
+
+Runs on the **raw camera frame** (before perspective rectification) so
+MediaPipe receives the natural image geometry it was trained on. The
+resulting mask is warped to rectified coordinates in Stage 3.
 
 Library: MediaPipe Image Segmenter (Tasks API, ≥ 0.10).
 
@@ -19,8 +23,8 @@ tends to under-segment.
 
 Typical usage::
 
-    segmenter = Segmenter()
-    mask = segmenter.process(warped_frame)  # warped_frame from Stage 1
+    masker = PersonMasker()
+    mask = masker.process(raw_frame)   # raw_frame direct from camera
 """
 
 from __future__ import annotations
@@ -64,8 +68,8 @@ def _ensure_model(path: Path = _DEFAULT_MODEL_PATH) -> Path:
     return path
 
 
-class Segmenter:
-    """Stateful person-segmentation stage backed by MediaPipe Image Segmenter.
+class PersonMasker:
+    """Stateful person-masking stage backed by MediaPipe Image Segmenter.
 
     The MediaPipe model is initialised eagerly in ``__init__`` so the
     one-time startup cost is paid at pipeline construction, not mid-stream.
@@ -108,7 +112,7 @@ class Segmenter:
             self._kernel = None
 
         logger.info(
-            "Segmenter ready (threshold=%.2f, dilation=%dpx)",
+            "PersonMasker ready (threshold=%.2f, dilation=%dpx)",
             threshold,
             dilation_px,
         )
@@ -121,7 +125,7 @@ class Segmenter:
         """Compute a binary person mask for *frame*.
 
         Args:
-            frame: BGR uint8 image (perspective-corrected output from Stage 1).
+            frame: BGR uint8 raw camera frame (before perspective rectification).
 
         Returns:
             Binary mask as uint8 ndarray with shape ``(H, W)``.
