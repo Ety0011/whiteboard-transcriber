@@ -68,8 +68,8 @@ class Region:
     confidence: float
     state: RegionState
     first_seen: float
-    last_seen: float
     last_modified: float
+    last_seen: float
     ocr_text: str | None
     ocr_confidence: float | None
     last_stable_crop: np.ndarray | None  # BGR uint8 crop at last stabilization
@@ -194,11 +194,11 @@ class RegionTracker:
 
     def __init__(
         self,
-        stabilizing_time_threshold: float = 1.0,
+        stabilizing_time_threshold: float = 5.0,
         stable_time_threshold: float = 5.0,
-        grace_time_threshold: float = 2.0,
+        grace_time_threshold: float = 5.0,
         missing_time_threshold: float = 5.0,
-        removed_time_threshold: float = 1.0,
+        removed_time_threshold: float = 5.0,
         match_threshold: float = 0.4,
         drift_threshold_px: float = 20.0,
     ) -> None:
@@ -212,7 +212,6 @@ class RegionTracker:
 
         self._registry: dict[int, Region] = {}
         self._next_id: int = 0
-        self._check_index: int = 0  # Round-robin counter
         self._dino: torch.nn.Module | None = None
 
     def load_dino(self) -> None:
@@ -362,10 +361,9 @@ class RegionTracker:
                 (cur_cx - (reg.last_stable_center[0])) ** 2
                 + (cur_cy - (reg.last_stable_center[1])) ** 2
             )
-            if drift > self._drift_threshold_px:
+            if drift > self._drift_threshold_px and reg.state == RegionState.STABLE:
+                reg.state, reg.ocr_text = RegionState.STABILIZING, None
                 reg.last_modified = now
-                if reg.state == RegionState.STABLE:
-                    reg.state, reg.ocr_text = RegionState.STABILIZING, None
 
         # Physical Update
         # TODO: use numpy
@@ -426,7 +424,7 @@ class RegionTracker:
         to_remove = []
         for reg_id, reg in self._registry.items():
             if reg.state == RegionState.MISSING:
-                if now - reg.last_seen > self._missing_time_threshold:
+                if now - reg.last_modified > self._missing_time_threshold:
                     reg.state, reg.last_modified = RegionState.REMOVED, now
 
             elif reg.state == RegionState.REMOVED:
