@@ -26,15 +26,15 @@ Typical usage::
 from __future__ import annotations
 
 import logging
-import os
 import urllib.request
 from pathlib import Path
 
+import absl.logging as _absl_log
 import cv2
-
-os.environ.setdefault("GLOG_minloglevel", "3")  # suppress MediaPipe C++ telemetry logs
-import mediapipe as mp  # noqa: E402
+import mediapipe as mp
 import numpy as np
+
+_absl_log.set_verbosity(_absl_log.FATAL)  # suppress clearcut uploader noise
 
 logger = logging.getLogger(__name__)
 
