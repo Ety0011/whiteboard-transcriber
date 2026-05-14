@@ -41,10 +41,14 @@ whiteboard-transcriber/
 │   ├── person_masker.py          # Stage 2: MediaPipe person mask (raw frame)
 │   ├── rectifier.py              # Stage 3: perspective warp of frame + mask
 │   ├── board_reconstructor.py    # Stage 4: distance-weighted EMA board model
-│   ├── text_detection.py         # Stage 5: PP-OCRv5 raw text line boxes every frame
+│   ├── change_detection.py       # Gate: skip stages 5–7 if nothing changed
+│   ├── layout.py                 # PP-DocLayout region classification
+│   ├── text_detector.py          # Stage 5: PP-OCRv5 raw text line boxes every frame
 │   ├── tracker.py                # Stage 6: region lifecycle state machine
-│   ├── recognition.py            # Stage 7: layout classify + OCR on newly stable regions
-│   ├── pipeline.py               # Orchestrates stages 1–7, writes Markdown to disk
+│   ├── recognizer.py             # Stage 7: OCR on newly stable regions, text diff
+│   ├── assembly.py               # Stage 8: spatial ordering → Markdown document
+│   ├── document.py               # WhiteboardDoc — persistent Markdown output model
+│   ├── pipeline.py               # Orchestrates stages 1–8, writes Markdown to disk
 │   └── utils.py                  # Config, logging, helpers
 ├── models/                       # Downloaded model weights (.gitignore'd)
 ├── tests/
@@ -79,9 +83,11 @@ Stages 1 and 2 both operate on the **raw camera frame** (before any warp) becaus
 | 2. Person Masking | Person mask on raw frame | MediaPipe |
 | 3. Rectification | Perspective warp of frame + mask → canonical view | OpenCV |
 | 4. Board Reconstruction | Distance-weighted EMA board model | OpenCV |
+| — Change Detection | Gate: skip 5–7 if board unchanged | OpenCV |
 | 5. Text Detection | Raw text line boxes every frame | PaddleOCR (`PP-OCRv5_det_server`) |
 | 6. Region Tracker | Lifecycle state machine, persistence, stability | Pure Python + DINOv2-base |
-| 7. Recognition | Layout classify + OCR on newly stable regions, Markdown patch | PaddleOCR |
+| 7. Recognition | OCR on newly stable regions, text diff + patch | PaddleOCR |
+| 8. Document Assembly | Spatial ordering → Markdown document | Python `difflib` |
 
 ---
 
@@ -94,38 +100,39 @@ This is the core of the system. The tracker maintains a registry of persistent `
 ```python
 class Region:
     id: int
-    bbox: tuple[int, int, int, int]      # x1, y1, x2, y2 — EMA-smoothed
+    bbox: np.ndarray                      # shape (4,) int32: x1, y1, x2, y2 — EMA-smoothed
     confidence: float
-    state: RegionState                    # NEW | GROWING | STABLE | OCR_DONE | ERASED
-    first_seen: float                     # timestamp
+    state: RegionState                    # CANDIDATE | STABILIZING | STABLE | MISSING | REMOVED
+    first_seen: float                     # time.monotonic() timestamps
     last_seen: float
     last_modified: float
-    stable_frames: int
-    missing_frames: int
-    ocr_text: str | None                  # cached OCR result
+    ocr_text: str | None                  # set by Recognizer via tracker.mark_ocr_done()
     ocr_confidence: float | None
-    last_stable_crop: np.ndarray | None   # crop at last stabilization
+    last_stable_crop: np.ndarray | None   # BGR uint8 crop at last stabilization
+    last_stable_center: np.ndarray | None # shape (2,) float64 centroid at stabilization
+    last_stable_embedding: torch.Tensor | None  # DINOv2 CLS token at stabilization
+    line_bboxes: list[np.ndarray]         # sub-line bboxes in board coordinates
 ```
 
 ### State Machine
 
 ```
-NEW → GROWING → STABLE → OCR_DONE
-                              ↓ (content changed)
-                           GROWING → STABLE → OCR_DONE  (text diff + patch)
-                              ↓ (missing too long)
-                           ERASED → remove from Markdown
+CANDIDATE → STABILIZING → STABLE ←→ STABILIZING (drift resets)
+                                ↓ (unmatched > grace)
+                             MISSING → REMOVED (purged after retention period)
+                                ↑ (re-matched)
+                           STABILIZING
 ```
 
 | State | Meaning | Transition |
 |-------|---------|------------|
-| NEW | Just appeared | → GROWING after 2–5 consecutive visible frames |
-| GROWING | Actively changing | → STABLE after `stable_frames > 20` (tune empirically) |
-| STABLE | Unchanged, eligible for OCR | → OCR_DONE after OCR runs |
-| OCR_DONE | OCR result cached | → GROWING if DINOv2 cosine(current, last_stable_crop) < 0.92 |
-| ERASED | Gone from board | Remove region after `missing_frames > 20` |
+| CANDIDATE | Just appeared | → STABILIZING after `stabilizing_time_threshold` s of presence |
+| STABILIZING | Building stability | → STABLE after `stable_time_threshold` s without drift |
+| STABLE | Stable; OCR runs here | → STABILIZING if centroid drifts > `drift_threshold_px` (ocr_text cleared) |
+| MISSING | Unmatched too long | → STABILIZING on re-match; → REMOVED after `missing_time_threshold` s |
+| REMOVED | Awaiting purge | Deleted from registry after `removed_time_threshold` s |
 
-Any bbox change or content change resets `stable_frames = 0`.
+OCR text is **metadata**, not a lifecycle state. The Recognizer calls `tracker.mark_ocr_done(region, text, confidence)` to record it on STABLE regions.
 
 ### Detection Matching
 
@@ -148,23 +155,22 @@ smoothed_bbox = 0.2 * detected_bbox + 0.8 * previous_bbox
 
 ### Region Persistence
 
-Do not remove a region immediately when its detection disappears — it may be a transient occlusion or lighting flicker. Increment `missing_frames` instead. Only transition to ERASED after `missing_frames > 20`.
+Unmatched regions are not removed immediately — they transition to MISSING after `grace_time_threshold` seconds. Only removed after `missing_time_threshold` additional seconds. This tolerates transient occlusion and lighting flicker.
 
 ### Re-stabilization and Text Diffing
 
-When a region cycles OCR_DONE → GROWING → STABLE again (professor modified something):
+When a STABLE region's centroid drifts beyond `drift_threshold_px` from `last_stable_center` (professor modified something), it resets to STABILIZING and `ocr_text` is cleared. Once it re-stabilizes:
 
-1. Run DINOv2 on current crop vs `last_stable_crop` to confirm content actually changed.
-2. Re-OCR the full region crop.
-3. Diff new text against `region.ocr_text` using `difflib.unified_diff`.
-4. Patch the Markdown document with only the changed lines (additions, removals, edits).
-5. Update `region.ocr_text` and `region.last_stable_crop`.
+1. Re-OCR the region crop using `line_bboxes` for line-level granularity.
+2. Diff new text against the previous `ocr_text` using `difflib.unified_diff`.
+3. Patch `WhiteboardDoc.blocks[region_id]` with only the changed lines.
+4. Call `tracker.mark_ocr_done(region, text, confidence)` to update Region metadata.
 
 Markdown updates are surgical — existing content is never blindly overwritten.
 
 ### Layout Classification
 
-`RT-DETR-H_layout_17cls` runs **once per region**, only when it first reaches STABLE. It classifies the region as text / table / formula / figure, which determines how Stage 6 OCRs it. It does NOT run every frame.
+`PP-DocLayout_plus-L` (via `layout.py`) classifies regions as text / table / formula / figure. It runs on the board composite image periodically (async child process, same pattern as text detection). Its output determines which regions Stage 7 OCRs and how. It does NOT run every frame.
 
 ---
 
