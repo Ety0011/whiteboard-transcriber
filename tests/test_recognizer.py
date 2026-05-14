@@ -98,7 +98,7 @@ class TestFirstStabilization:
             _make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc
         )
 
-        assert result.blocks[0] == "hello\nworld"
+        assert result.blocks[1] == "hello\nworld"
 
     def test_region_ocr_text_mutated(self):
         region = _make_region(region_id=2, ocr_text=None)
@@ -119,12 +119,12 @@ class TestFirstStabilization:
             _make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc
         )
 
-        assert doc.blocks[0] == ""
+        assert doc.blocks[3] == ""
         assert region.ocr_text == ""
 
 
 class TestRestabilizationWithAdditions:
-    def test_new_block_appended_on_change(self):
+    def test_block_updated_in_place_on_change(self):
         region = _make_region(region_id=1, ocr_text="hello")
         recognizer = _make_recognizer(
             [
@@ -132,12 +132,12 @@ class TestRestabilizationWithAdditions:
                 {"rec_text": "world", "rec_score": 0.90},
             ]
         )
-        doc = WhiteboardDoc(blocks=["hello"])
+        doc = WhiteboardDoc(blocks={1: "hello"})
         recognizer.process(
             _make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc
         )
 
-        assert len(doc.blocks) == 2
+        assert len(doc.blocks) == 1  # same entry, updated in-place
         assert doc.blocks[1] == "hello\nworld"
         assert region.ocr_text == "hello\nworld"
 
@@ -145,7 +145,7 @@ class TestRestabilizationWithAdditions:
         before = time.monotonic()
         region = _make_region(region_id=1, ocr_text="old")
         recognizer = _make_recognizer([{"rec_text": "new", "rec_score": 0.9}])
-        doc = WhiteboardDoc(blocks=["old"])
+        doc = WhiteboardDoc(blocks={1: "old"})
         recognizer.process(
             _make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc
         )
@@ -154,30 +154,30 @@ class TestRestabilizationWithAdditions:
 
 
 class TestRestabilizationWithRemovals:
-    def test_new_block_appended_with_removed_line(self):
+    def test_block_updated_in_place_with_removed_line(self):
         region = _make_region(region_id=1, ocr_text="hello\nworld")
         recognizer = _make_recognizer([{"rec_text": "hello", "rec_score": 0.95}])
-        doc = WhiteboardDoc(blocks=["hello\nworld"])
+        doc = WhiteboardDoc(blocks={1: "hello\nworld"})
         recognizer.process(
             _make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc
         )
 
-        assert len(doc.blocks) == 2
+        assert len(doc.blocks) == 1
         assert doc.blocks[1] == "hello"
         assert region.ocr_text == "hello"
 
 
 class TestNoChangeSkip:
-    def test_no_new_block_when_content_identical(self):
+    def test_block_unchanged_when_content_identical(self):
         region = _make_region(region_id=1, ocr_text="hello")
         original_modified = region.last_modified
         recognizer = _make_recognizer([{"rec_text": "hello", "rec_score": 0.95}])
-        doc = WhiteboardDoc(blocks=["hello"])
+        doc = WhiteboardDoc(blocks={1: "hello"})
         recognizer.process(
             _make_tracker_result(newly_stable=[region]), _make_mock_tracker(), doc
         )
 
-        assert len(doc.blocks) == 1  # no new block appended
+        assert doc.blocks[1] == "hello"
         assert region.last_modified == original_modified  # no mutation when unchanged
 
 
@@ -185,12 +185,12 @@ class TestErasedRegion:
     def test_erased_region_leaves_doc_unchanged(self):
         region = _make_region(region_id=1)
         recognizer = _make_recognizer([])
-        doc = WhiteboardDoc(blocks=["some text"])
+        doc = WhiteboardDoc(blocks={1: "some text"})
         recognizer.process(
             _make_tracker_result(newly_erased=[region]), _make_mock_tracker(), doc
         )
 
-        assert doc.blocks == ["some text"]
+        assert doc.blocks == {1: "some text"}
 
     def test_erased_region_on_empty_doc_leaves_doc_unchanged(self):
         region = _make_region(region_id=99)
@@ -200,7 +200,7 @@ class TestErasedRegion:
             _make_tracker_result(newly_erased=[region]), _make_mock_tracker(), doc
         )
 
-        assert doc.blocks == []
+        assert doc.blocks == {}
 
 
 class TestLineCropExtraction:

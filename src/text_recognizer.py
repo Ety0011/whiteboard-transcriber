@@ -158,7 +158,7 @@ class TextRecognizer:
                     "\n".join(diff),
                 )
 
-            doc.append(new_text)
+            doc.blocks[region.id] = new_text
             tracker.mark_ocr_done(region, new_text, confidence)
             log.debug(
                 "Region %d OCR'd (conf=%.2f): %r",
