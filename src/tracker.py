@@ -40,11 +40,11 @@ _IMAGENET_STD = (0.229, 0.224, 0.225)
 class RegionState(enum.Enum):
     """Lifecycle states for a tracked region."""
 
-    NEW = "NEW"
-    GROWING = "GROWING"
+    CANDIDATE = "CANDIDATE"
+    STABILIZING = "STABILIZING"
     STABLE = "STABLE"
     MISSING = "MISSING"
-    ERASED = "ERASED"
+    REMOVED = "REMOVED"
 
 
 @dataclasses.dataclass
@@ -70,8 +70,6 @@ class Region:
     first_seen: float
     last_seen: float
     last_modified: float
-    stable_frames: int
-    missing_frames: int
     ocr_text: str | None
     ocr_confidence: float | None
     last_stable_crop: np.ndarray | None  # BGR uint8 crop at last stabilization
@@ -126,18 +124,11 @@ def _match_score(
     reg_bbox: tuple[int, int, int, int],
     frame_diag: float,
 ) -> float:
+    # TODO: put coefficients as parameters
     """Combined detection-to-region match score: 0.7*IoU + 0.3*centroid_similarity."""
     return 0.7 * _iou(det_bbox, reg_bbox) + 0.3 * _centroid_similarity(
         det_bbox, reg_bbox, frame_diag
     )
-
-
-def _ema_bbox(
-    detected: tuple[int, int, int, int],
-    previous: tuple[int, int, int, int],
-) -> tuple[int, int, int, int]:
-    """Apply EMA smoothing: 0.2*detected + 0.8*previous, rounded to int."""
-    return tuple(int(0.2 * d + 0.8 * p) for d, p in zip(detected, previous))
 
 
 # ---------------------------------------------------------------------------
@@ -203,25 +194,21 @@ class RegionTracker:
 
     def __init__(
         self,
+        stabilizing_time_threshold: float = 1.0,
         stable_time_threshold: float = 5.0,
+        grace_time_threshold: float = 2.0,
         missing_time_threshold: float = 5.0,
-        new_to_growing_time: float = 0.5,
-        grace_period_threshold: float = 1.0,
+        removed_time_threshold: float = 1.0,
         match_threshold: float = 0.4,
-        significant_shift_iou: float = 0.85,
         drift_threshold_px: float = 20.0,
-        content_change_threshold: float = 0.92,
-        max_checks_per_frame: int = 2,
     ) -> None:
+        self._stabilizing_time_threshold = stabilizing_time_threshold
         self._stable_time_threshold = stable_time_threshold
+        self._grace_time_threshold = grace_time_threshold
         self._missing_time_threshold = missing_time_threshold
-        self._new_to_growing_time = new_to_growing_time
-        self._grace_period_threshold = grace_period_threshold
+        self._removed_retention_threshold = removed_time_threshold
         self._match_threshold = match_threshold
-        self._significant_shift_iou = significant_shift_iou
         self._drift_threshold_px = drift_threshold_px
-        self._content_change_threshold = content_change_threshold
-        self._max_checks_per_frame = max_checks_per_frame
 
         self._registry: dict[int, Region] = {}
         self._next_id: int = 0
@@ -295,102 +282,76 @@ class RegionTracker:
             frame:      Current BGR background composite (Stage 3).
 
         Returns:
-            TrackerResult with all active regions.
+            List with all active regions.
         """
         now = time.monotonic()
         h, w = frame.shape[:2]
         frame_diag = math.sqrt(h * h + w * w)
-        active_regions = list(self._registry.values())
+
+        active_regions = [
+            r for r in self._registry.values() if r.state != RegionState.REMOVED
+        ]
 
         # Step A: Matching
         assignments, matched_det, matched_reg = self._get_assignments(
             detections, active_regions, frame_diag
         )
 
-        # Step B: Physics Consensus
-        dx, dy = self._compute_global_motion(detections, assignments)
-
         # Step C: Update Matched Regions
-        stable_to_check: list[Region] = []
-        for di, rid in assignments.items():
-            reg = self._update_region(
-                detections[di], self._registry[rid], dx, dy, frame, now
-            )
-            if (
-                reg.state == RegionState.STABLE
-                and reg.last_stable_embedding is not None
-            ):
-                stable_to_check.append(reg)
+        for det_id, reg_id in assignments.items():
+            self._update_region(detections[det_id], self._registry[reg_id], frame, now)
 
-        # Step C.2: Throttled Verification
-        self._run_round_robin_check(stable_to_check, frame, now)
-
-        # Step D: Handle Lost Regions (Grace Period)
+        # Step D: Handle Lost Regions (regions not in assignments)
         self._handle_unmatched(active_regions, matched_reg, now)
 
-        # Step E: Create New Regions
+        # Step E: Create New Regions (detections not in assignments)
         self._create_new_regions(detections, matched_det, now)
 
         # Step F: Cleanup & Pardon Logic
-        return self._prune_and_pardon(frame, now)
+        self._remove_missing_regions(now)
+
+        return TrackerResult(
+            regions=list(self._registry.values()),
+            newly_stable=[
+                r
+                for r in self._registry.values()
+                if r.state == RegionState.STABLE and r.last_modified == now
+            ],
+            newly_erased=[
+                r
+                for r in self._registry.values()
+                if r.state == RegionState.REMOVED and r.last_modified == now
+            ],
+        )
 
     # -----------------------------------------------------------------------
     # Private Orchestration Helpers
     # -----------------------------------------------------------------------
 
+    # TODO: if board moves too much we lose all assignments
     def _get_assignments(self, detections, active_regions, diag):
         candidates = []
-        for di, det in enumerate(detections):
+        for det_id, det in enumerate(detections):
             for reg in active_regions:
                 score = _match_score(det.bbox, reg.bbox, diag)
                 if score > self._match_threshold:
-                    candidates.append((score, di, reg.id))
+                    candidates.append((score, det_id, reg.id))
 
         candidates.sort(key=lambda x: -x[0])
-        matched_det, matched_reg, assignments = set(), set(), {}
 
-        for _, di, rid in candidates:
-            if di not in matched_det and rid not in matched_reg:
-                assignments[di] = rid
-                matched_det.add(di)
-                matched_reg.add(rid)
+        matched_det: set[int] = set()
+        matched_reg: set[int] = set()
+        assignments: dict[int, int] = {}
+
+        for _, det_id, reg_id in candidates:
+            if det_id not in matched_det and reg_id not in matched_reg:
+                assignments[det_id] = reg_id
+                matched_det.add(det_id)
+                matched_reg.add(reg_id)
         return assignments, matched_det, matched_reg
 
-    def _compute_global_motion(self, detections, assignments):
-        disps = []
-        for di, rid in assignments.items():
-            reg, det = self._registry[rid], detections[di]
-            old_cx, old_cy = (
-                (reg.bbox[0] + reg.bbox[2]) / 2.0,
-                (reg.bbox[1] + reg.bbox[3]) / 2.0,
-            )
-            new_cx, new_cy = (
-                (det.bbox[0] + det.bbox[2]) / 2.0,
-                (det.bbox[1] + det.bbox[3]) / 2.0,
-            )
-            disps.append((new_cx - old_cx, new_cy - old_cy))
-
-        if not disps:
-            return 0.0, 0.0
-        return float(np.median([d[0] for d in disps])), float(
-            np.median([d[1] for d in disps])
-        )
-
-    def _update_region(self, det, reg, dx, dy, frame, now):
+    def _update_region(self, det, reg, frame, now):
         """Logic for a single matched region."""
-        if reg.state == RegionState.MISSING:
-            reg.state = RegionState.GROWING
-            reg.last_modified = now
-
-        # Shift & Drift Checks
-        comp_prev = (
-            int(reg.bbox[0] + dx),
-            int(reg.bbox[1] + dy),
-            int(reg.bbox[2] + dx),
-            int(reg.bbox[3] + dy),
-        )
-
-        significant_shift = _iou(det.bbox, comp_prev) < self._significant_shift_iou
 
         if reg.last_stable_center:
             cur_cx, cur_cy = (
@@ -398,35 +359,32 @@ class RegionTracker:
                 (det.bbox[1] + det.bbox[3]) / 2.0,
             )
             drift = math.sqrt(
-                (cur_cx - (reg.last_stable_center[0] + dx)) ** 2
-                + (cur_cy - (reg.last_stable_center[1] + dy)) ** 2
+                (cur_cx - (reg.last_stable_center[0])) ** 2
+                + (cur_cy - (reg.last_stable_center[1])) ** 2
             )
             if drift > self._drift_threshold_px:
-                significant_shift = True
+                reg.last_modified = now
+                if reg.state == RegionState.STABLE:
+                    reg.state, reg.ocr_text = RegionState.STABILIZING, None
 
         # Physical Update
-        reg.bbox = _ema_bbox(det.bbox, reg.bbox)
+        # TODO: use numpy
+        # TODO: these are parameters
+        reg.bbox = tuple(int(0.2 * d + 0.8 * p) for d, p in zip(det.bbox, reg.bbox))
         reg.confidence, reg.last_seen = det.confidence, now
 
-        if significant_shift:
-            reg.stable_frames = 0
-            reg.last_modified = now
-            if reg.state == RegionState.STABLE:
-                reg.state, reg.ocr_text = RegionState.GROWING, None
-        else:
-            reg.stable_frames += 1
-
         # Transitions
-        if reg.state == RegionState.NEW and (
-            now - reg.first_seen >= self._new_to_growing_time
-        ):
-            reg.state, reg.last_modified = RegionState.GROWING, now
-        elif reg.state == RegionState.GROWING and (
-            now - reg.last_modified >= self._stable_time_threshold
-        ):
-            self._stabilize_region(reg, frame, now)
+        if reg.state == RegionState.CANDIDATE:
+            if now - reg.first_seen >= self._stabilizing_time_threshold:
+                reg.state, reg.last_modified = RegionState.STABILIZING, now
 
-        return reg
+        elif reg.state == RegionState.STABILIZING:
+            if now - reg.last_modified >= self._stable_time_threshold:
+                self._stabilize_region(reg, frame, now)
+
+        elif reg.state == RegionState.MISSING:
+            reg.state = RegionState.STABILIZING
+            reg.last_modified = now
 
     def _stabilize_region(self, reg, frame, now):
         x1, y1, x2, y2 = reg.bbox
@@ -439,124 +397,45 @@ class RegionTracker:
             reg.state, reg.last_modified = RegionState.STABLE, now
             log.debug("Region %d → STABLE", reg.id)
 
-    def _run_round_robin_check(self, regions, frame, now):
-        if not regions:
-            return
-        num_to_check = min(len(regions), self._max_checks_per_frame)
-        for _ in range(num_to_check):
-            self._check_index %= len(regions)
-            reg = regions[self._check_index]
-            self._check_index += 1
-
-            x1, y1, x2, y2 = reg.bbox
-            crop = frame[y1:y2, x1:x2]
-            if crop.size > 0:
-                sim = self._cosine_similarity(
-                    self._embed(crop), reg.last_stable_embedding
-                )
-                if sim < self._content_change_threshold:
-                    reg.state, reg.last_modified, reg.ocr_text = (
-                        RegionState.GROWING,
-                        now,
-                        None,
-                    )
-
     def _handle_unmatched(self, active_regions, matched_reg_ids, now):
         for reg in active_regions:
             if reg.id not in matched_reg_ids:
-                if reg.state in (RegionState.STABLE, RegionState.GROWING):
-                    if now - reg.last_seen > self._grace_period_threshold:
+                if reg.state in (RegionState.STABLE, RegionState.STABILIZING):
+                    if now - reg.last_seen > self._grace_time_threshold:
                         reg.state, reg.last_modified = RegionState.MISSING, now
 
     def _create_new_regions(self, detections, matched_indices, now):
-        for di, det in enumerate(detections):
-            if di not in matched_indices:
+        for det_id, det in enumerate(detections):
+            if det_id not in matched_indices:
                 new_id = self._next_id
                 self._next_id += 1
                 self._registry[new_id] = Region(
                     id=new_id,
                     bbox=det.bbox,
                     confidence=det.confidence,
-                    state=RegionState.NEW,
+                    state=RegionState.CANDIDATE,
                     first_seen=now,
                     last_seen=now,
                     last_modified=now,
-                    stable_frames=0,
-                    missing_frames=0,
                     ocr_text=None,
                     ocr_confidence=None,
                     last_stable_crop=None,
                 )
 
-    def _prune_and_pardon(self, frame, now):
-        newly_stable, newly_erased, to_remove = [], [], []
-        for rid, reg in self._registry.items():
-            if reg.state == RegionState.STABLE and (now - reg.last_modified) < 0.1:
-                newly_stable.append(reg)
-
+    def _remove_missing_regions(self, now):
+        to_remove = []
+        for reg_id, reg in self._registry.items():
             if reg.state == RegionState.MISSING:
                 if now - reg.last_seen > self._missing_time_threshold:
-                    # DINO Pardon Check
-                    if self._dino and reg.last_stable_embedding is not None:
-                        x1, y1, x2, y2 = reg.bbox
-                        crop = frame[y1:y2, x1:x2]
-                        if (
-                            crop.size > 0
-                            and self._cosine_similarity(
-                                self._embed(crop), reg.last_stable_embedding
-                            )
-                            >= self._content_change_threshold
-                        ):
-                            reg.last_seen = now
-                            continue
+                    reg.state, reg.last_modified = RegionState.REMOVED, now
 
-                    reg.state, reg.last_modified = RegionState.ERASED, now
-                    newly_erased.append(reg)
-                    to_remove.append(rid)
+            elif reg.state == RegionState.REMOVED:
+                if now - reg.last_modified > self._removed_retention_threshold:
+                    to_remove.append(reg_id)
 
-            elif reg.state == RegionState.NEW and (
-                now - reg.last_seen > self._missing_time_threshold
-            ):
-                to_remove.append(rid)
+            elif reg.state == RegionState.CANDIDATE:
+                if now - reg.last_seen > self._missing_time_threshold:
+                    to_remove.append(reg_id)
 
-        for rid in to_remove:
-            del self._registry[rid]
-        return TrackerResult(list(self._registry.values()), newly_stable, newly_erased)
-
-
-# ---------------------------------------------------------------------------
-# Module-level singleton
-# ---------------------------------------------------------------------------
-
-_global_tracker: RegionTracker | None = None
-
-
-def init(
-    stable_time_threshold: float = 2.0,
-    missing_time_threshold: float = 2.0,
-    new_to_growing_time: float = 0.5,
-    match_threshold: float = 0.4,
-    significant_shift_iou: float = 0.85,
-    content_change_threshold: float = 0.92,
-) -> None:
-    """Create the module-level tracker singleton and load DINOv2. Call once at startup."""
-    global _global_tracker
-    _global_tracker = RegionTracker(
-        stable_time_threshold=stable_time_threshold,
-        missing_time_threshold=missing_time_threshold,
-        new_to_growing_time=new_to_growing_time,
-        match_threshold=match_threshold,
-        significant_shift_iou=significant_shift_iou,
-        content_change_threshold=content_change_threshold,
-    )
-    _global_tracker.load_dino()
-
-
-def process(detections: list[Detection], frame: np.ndarray) -> TrackerResult:
-    """Run one tracking cycle using the module-level singleton."""
-    global _global_tracker
-    if _global_tracker is None:
-        log.warning("tracker.process() called before init() — using defaults")
-        _global_tracker = RegionTracker()
-        _global_tracker.load_dino()
-    return _global_tracker.process(detections, frame)
+        for reg_id in to_remove:
+            del self._registry[reg_id]
