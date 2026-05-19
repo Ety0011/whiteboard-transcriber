@@ -76,13 +76,13 @@ def _worker_main(in_q: mp.Queue, out_q: mp.Queue, model_id: str) -> None:
             pil_img = Image.fromarray(rgb)
 
             inputs = processor(pil_img, return_tensors="pt").to(device)
-            with torch.no_grad():
+            with torch.inference_mode():
                 generate_ids = model.generate(
                     **inputs,
                     do_sample=False,
                     tokenizer=processor.tokenizer,
                     stop_strings="<|im_end|>",
-                    max_new_tokens=4096,
+                    max_new_tokens=512,
                 )
             prompt_len = inputs["input_ids"].shape[1]
             text = processor.decode(
