@@ -11,7 +11,7 @@ Keyboard controls (debug mode only):
     q  — quit
     w  — toggle Stage 1/2 corner overlay
     p  — toggle Stage 1/2 body-mask overlay
-    t  — toggle Stage 5 text line boxes
+    t  — toggle Stage 5 anchor boxes
     r  — toggle Stage 6 region tracker
 """
 
@@ -25,12 +25,11 @@ import cv2
 import numpy as np
 
 import capture
+from anchor_service.detector import AnchorDetector, AnchorType
 from board_service.reconstructor import BoardReconstructor
 from board_service.rectifier import Rectifier
 from board_service.tracker import BoardTracker
 from document import WhiteboardDoc
-from layout import LayoutRegion
-from text_detector import RegionWithLines, TextDetector
 from text_recognizer import TextRecognizer
 from tracker import Detection, RegionState, RegionTracker
 
@@ -91,16 +90,15 @@ def _draw_corners(frame: np.ndarray, corners: np.ndarray | None) -> np.ndarray:
     return frame
 
 
-def _draw_text_lines(frame: np.ndarray, regions: list[RegionWithLines]) -> np.ndarray:
-    """Draw text line bounding boxes on *frame* in board-composite coordinates."""
+def _draw_anchors(frame: np.ndarray, anchors: list) -> np.ndarray:
+    """Draw anchor bounding boxes colour-coded by type."""
     out = frame.copy()
-    for r in regions:
-        rx1, ry1, _, _ = r.bbox
-        for line in r.lines:
-            lx1, ly1, lx2, ly2 = line.bbox
-            cv2.rectangle(
-                out, (rx1 + lx1, ry1 + ly1), (rx1 + lx2, ry1 + ly2), (255, 150, 0), 1
-            )
+    for a in anchors:
+        x1, y1, x2, y2 = a.bbox
+        colour = (255, 150, 0) if a.anchor_type == AnchorType.TEXT_LINE else (0, 200, 255)
+        cv2.rectangle(out, (x1, y1), (x2, y2), colour, 1)
+        cv2.putText(out, a.anchor_type.value, (x1, y1 - 3),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, colour, 1, cv2.LINE_AA)
     return out
 
 
@@ -175,7 +173,7 @@ def main() -> None:
     board_tracker = BoardTracker()
     rectifier = Rectifier()
     reconstructor = BoardReconstructor()
-    text_detector = TextDetector()
+    anchor_detector = AnchorDetector()
     tracker = RegionTracker()
     recognizer = TextRecognizer()
     doc = WhiteboardDoc()
@@ -214,24 +212,15 @@ def main() -> None:
                     cv2.waitKey(1)
                 continue
 
-            # Stage 5 — text detection (runs every frame against latest composite)
-            h, w = composite.shape[:2]
-            regions_with_lines = text_detector.process(
-                [
-                    LayoutRegion(
-                        bbox=np.array([0, 0, w, h], dtype=np.int32),
-                        label="text",
-                        confidence=1.0,
-                        crop=composite,
-                    )
-                ]
-            )
+            # Stage 5 — anchor discovery (async, non-blocking)
+            detector_result = anchor_detector.process(composite)
             detections = [
                 Detection(
-                    bbox=line.bbox, confidence=line.confidence, line_bboxes=[line.bbox]
+                    bbox=a.bbox,
+                    confidence=a.confidence,
+                    line_bboxes=[a.bbox],
                 )
-                for region in regions_with_lines
-                for line in region.lines
+                for a in detector_result.anchors
             ]
             # Stage 6 — region tracker
             tracker_result = tracker.process(detections, composite)
@@ -253,7 +242,7 @@ def main() -> None:
 
                 vis = composite.copy()
                 if show_text_lines:
-                    vis = _draw_text_lines(vis, regions_with_lines)
+                    vis = _draw_anchors(vis, detector_result.anchors)
                 if show_tracker:
                     vis = _draw_tracker(vis, tracker_result.regions)
                 cv2.imshow("board", vis)
@@ -278,6 +267,7 @@ def main() -> None:
         pass
     finally:
         board_tracker.shutdown()
+        anchor_detector.shutdown()
         cv2.destroyAllWindows()
 
     log.info("Shutting down.")

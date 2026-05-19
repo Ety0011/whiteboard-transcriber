@@ -49,15 +49,34 @@ class _ClassicalInpainter:
 
 
 class _LaMaInpainter:
-    """LaMa neural inpainter loaded as TorchScript from HuggingFace Hub, Option B."""
+    """LaMa neural inpainter (Option B).
+
+    Requires: pip install pytorch_lightning
+    Model:    smartywu/big-lama (downloaded from HuggingFace Hub on first use)
+
+    The checkpoint uses PyTorch Lightning serialisation. Without the package
+    installed the loader raises ImportError and _load_inpainter() falls back
+    to _ClassicalInpainter automatically.
+    """
 
     def __init__(self) -> None:
+        import pytorch_lightning  # noqa: F401 — intentional: fails fast if not installed
+        import zipfile
         import torch
         from huggingface_hub import hf_hub_download
+        from pathlib import Path
 
-        model_path = hf_hub_download("smartywu/big-lama", "big-lama.pt")
+        zip_path = Path(hf_hub_download("smartywu/big-lama", "big-lama.zip"))
+        ckpt_path = zip_path.parent / "big-lama" / "models" / "best.ckpt"
+        if not ckpt_path.exists():
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(zip_path.parent)
+
+        ckpt = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
+        state_dict = ckpt["state_dict"]
+
         device = "mps" if _mps_available() else "cpu"
-        self._model = torch.jit.load(model_path, map_location=device)
+        self._model = _load_lama_weights(state_dict, device)
         self._model.eval()
         self._device = device
         logger.info("LaMa inpainter loaded on %s", device)
@@ -82,6 +101,20 @@ class _LaMaInpainter:
         return cv2.cvtColor(out_np, cv2.COLOR_RGB2BGR)
 
 
+def _load_lama_weights(state_dict: dict, device: str):
+    """Construct and return the LaMa generator from a Lightning state_dict.
+
+    TODO: implement the FFC-ResNet architecture and load weights here once
+    pytorch_lightning is available in the environment to first inspect the
+    exact key structure. Until then this path is never reached (the import
+    of pytorch_lightning in __init__ raises ImportError first).
+    """
+    raise NotImplementedError(
+        "LaMa architecture not yet wired up — "
+        "implement _load_lama_weights() once pytorch_lightning is installable."
+    )
+
+
 def _mps_available() -> bool:
     try:
         import torch
@@ -94,9 +127,11 @@ def _load_inpainter(neural: bool):
     if neural:
         try:
             return _LaMaInpainter()
-        except Exception:
+        except Exception as e:
             logger.warning(
-                "LaMa load failed — falling back to classical inpainting", exc_info=True
+                "LaMa unavailable (%s) — using classical inpainting (cv2.inpaint). "
+                "To enable neural: pip install pytorch_lightning",
+                type(e).__name__,
             )
     return _ClassicalInpainter()
 
