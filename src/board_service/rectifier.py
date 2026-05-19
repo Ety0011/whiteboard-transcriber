@@ -1,24 +1,8 @@
-"""Stage 3 — Perspective Rectification.
+"""Stage 3 — Anchor-Refined Perspective Rectification.
 
-Applies a perspective warp to both the raw camera frame and the person mask,
-mapping the whiteboard surface to a canonical fronto-parallel view at a fixed
-output resolution.
-
-The homography is derived from the four board corners produced by Stage 1
-(BoardDetector) and cached between updates — it is only recomputed when a new
-corners array arrives. Both outputs are spatially aligned because they use the
-same homography.
-
-Frame interpolation uses INTER_LINEAR; mask interpolation uses INTER_NEAREST
-to preserve binary values (no blurred edges between 0 and 1).
-
-Falls back to a simple resize when no corners have been detected yet, so
-downstream stages always receive output at the canonical size.
-
-Typical usage::
-
-    rectifier = Rectifier()
-    rect_frame, rect_mask = rectifier.process(frame, mask, corners)
+Warps the raw camera frame and body mask to a canonical 1920×1080 view.
+Homography is cached and recomputed only when corners change. Falls back
+to a simple resize before the first SAM result arrives.
 """
 
 from __future__ import annotations

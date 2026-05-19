@@ -26,10 +26,10 @@ import numpy as np
 
 import capture
 from board_reconstructor import BoardReconstructor
+from board_service.rectifier import Rectifier
 from board_service.tracker import BoardTracker
 from document import WhiteboardDoc
 from layout import LayoutRegion
-from rectifier import Rectifier
 from text_detector import RegionWithLines, TextDetector
 from text_recognizer import TextRecognizer
 from tracker import Detection, RegionState, RegionTracker
