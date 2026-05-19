@@ -31,7 +31,8 @@ from board_service.reconstructor import BoardReconstructor
 from board_service.rectifier import Rectifier
 from board_service.tracker import BoardTracker, MediaPipeBoardTracker
 from brain_service.vlm_worker import VLMWorker
-from document import WhiteboardDoc
+from ledger_service import assembly
+from ledger_service.registry import LedgerRegistry
 from tracker import Detection, RegionState, RegionTracker
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -183,7 +184,7 @@ def main() -> None:
     grouper = EntityGrouper()
     tracker = RegionTracker()
     vlm_worker = VLMWorker()
-    doc = WhiteboardDoc()
+    registry = LedgerRegistry()
     pending_ocr: dict[int, object] = {}  # region_id → Region, awaiting VLM
     log.info("Ready. Press q or Ctrl-C to stop.")
 
@@ -248,16 +249,19 @@ def main() -> None:
                     pending_ocr[region.id] = region
                     vlm_worker.submit(region.id, region.last_stable_crop)
 
-            # Poll VLM results — write markdown for any completed inferences
+            # Poll VLM results — update ledger and synthesise output files
             for result in vlm_worker.get_results():
                 region = pending_ocr.pop(result.region_id, None)
                 if region is not None:
                     tracker.mark_ocr_done(region, result.text, confidence=1.0)
-                    doc.blocks[region.id] = result.text
-                    tmp = output_path.with_suffix(".tmp")
-                    tmp.write_text(doc.to_markdown(), encoding="utf-8")
-                    tmp.rename(output_path)
-                    log.debug("VLM result region %d → %s", region.id, output_path)
+                    registry.update(region.id, region.bbox, result.text)
+                    assembly.synthesize(registry, output_path.parent)
+                    log.debug("Ledger written for region %d", region.id)
+
+            # Stage 8 — erasure events
+            for region in tracker_result.newly_erased:
+                registry.mark_erased(region.id)
+                assembly.synthesize(registry, output_path.parent)
 
             if args.debug:
                 display = frame.copy()
