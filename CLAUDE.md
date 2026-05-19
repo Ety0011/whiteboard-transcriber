@@ -15,11 +15,11 @@ This system is not a scanner; it is a **Lecture Historian**. It captures the **e
 | Component | Technology | Role |
 | :--- | :--- | :--- |
 | **Foundation** | **SAM 3.1 (Video Mode)** | Real-time board corner tracking & pixel-perfect person/shadow matting. |
-| **Neural Surface** | **Temporal-Variance EMA** | Distance-weighted EMA composite + temporal variance filter for specular suppression. |
-| **Spatial Anchors** | **Grounded-DINO 2.0** | Detects line-level "Functional Units" (TEXT_LINE, MATH_UNIT). |
+| **Neural Surface** | **Spatial-Glare EMA** | Distance-weighted EMA composite + spatial glare suppression (brightness + Laplacian). |
+| **Spatial Anchors** | **PaddleOCR PP-OCRv5_server_det** | Detects line-level `TEXT_LINE` anchors. |
 | **Grouping** | **Spatial Graph Transformer** | Clusters anchors into "Semantic Entities" based on spatial logic. |
 | **The Brain** | **GOT-OCR 2.0 (Point-Prompted)** | High-fidelity VLM OCR/LaTeX via coordinate-grounding. INT4 quantized via MLX. |
-| **Identity** | **DINOv3 Embeddings** | Stability verification and content-shift detection across write-erase cycles. |
+| **Identity** | **DINOv2 Embeddings** | Stability verification and content-shift detection across write-erase cycles. |
 | **Memory** | **Temporal Event Ledger** | Append-only UUID registry with semantic versioning. |
 
 ---
@@ -29,11 +29,11 @@ This system is not a scanner; it is a **Lecture Historian**. It captures the **e
 All inference runs on Apple Silicon via **MPS (Metal Performance Shaders)** and **MLX**.
 
 **Memory Partitioning:**
-- **CV Resident (9GB):** SAM 3.1 + Grounded-DINO 2.0 + DINOv3 — always resident in unified memory.
+- **CV Resident (9GB):** SAM 3.1 + PaddleOCR + DINOv2 — always resident in unified memory.
 - **VLM Worker (11GB):** GOT-OCR 2.0 (INT4 quantized) — runs in isolated process.
 - **OS / Buffers (4GB):** Frame queues, system overhead.
 
-**Non-Blocking Architecture:** SAM 3.1, Grounded-DINO 2.0, and GOT-OCR 2.0 each run as independent `multiprocessing.Process` workers. The main loop reads from each model's result queue and always uses the latest cached result. No stage waits on any model.
+**Non-Blocking Architecture:** SAM 3.1, PaddleOCR, and GOT-OCR 2.0 each run as independent `multiprocessing.Process` workers. The main loop reads from each model's result queue and always uses the latest cached result. No stage waits on any model.
 
 ---
 
@@ -59,25 +59,18 @@ Warps every frame to a canonical **1920×1080** fronto-parallel view. Uses OpenC
 Maintains a **Clean Board Composite** — the "Gold Standard" image fed to the VLM.
 
 **Two-layer approach:**
-1. **Distance-Weighted EMA (base layer):** Each pixel's learning rate is proportional to its distance from the Body Mask. Pixels under/near a person update slowly and are inpainted from the last known clean state. This is the same mechanism as the existing `board_reconstructor.py`.
-2. **Temporal Variance Filter (new layer):** If a pixel's intensity varies rapidly across frames *without* a corresponding change in the Body Mask, it is classified as a specular highlight or glare artifact and is suppressed in crops sent to the VLM.
+1. **Distance-Weighted EMA (base layer):** Each pixel's learning rate is proportional to its distance from the Body Mask. Pixels under/near a person update slowly and are inpainted from the last known clean state.
+2. **Spatial Glare Detection (suppression layer):** Glare pixels are identified per-frame as `brightness ≥ 248 AND |Laplacian| < 15`. They are excluded from the EMA update (composite retains the pre-glare value) and inpainted in the output using cv2.inpaint Telea or LaMa neural inpainter (requires `pytorch_lightning`).
 
-**Ghosting Defense:** A high-pass filter distinguishes "Real Ink" (sharp, high-frequency edges) from "Eraser Smudge" (low-frequency residue). Only pixels above the high-pass threshold are treated as active content.
+### Stage 5: Anchor Discovery (PaddleOCR PP-OCRv5_server_det) — Async
 
-### Stage 5: Anchor Discovery (Grounded-DINO 2.0) — Async
-
-Runs in a background process. Detects every individual mark as a **Spatial Anchor** in one of two categories:
-- `TEXT_LINE` — a line of handwritten natural language.
-- `MATH_UNIT` — a mathematical expression, equation, or formula fragment.
-
-Anchors are the atomic unit of the Ledger. Each has a bounding box in rectified space and a category label.
+Runs in a background process. Detects every individual line on the board as a `TEXT_LINE` **Spatial Anchor**. Anchors are the atomic unit of the Ledger — each has a bounding box in rectified 1920×1080 space and a confidence score.
 
 ### Stage 6: Hierarchical Grouping (Spatial Graph Transformer)
 
 Analyzes the set of Spatial Anchors and groups them into **Semantic Entities**.
 
-- A group of `MATH_UNIT` anchors stacked vertically beneath a `TEXT_LINE` header → one Semantic Entity (e.g., "The Euler Derivation").
-- A paragraph of `TEXT_LINE` anchors → one Semantic Entity.
+- A cluster of `TEXT_LINE` anchors that are spatially adjacent (same paragraph or derivation) → one Semantic Entity.
 - Each Semantic Entity is the unit that enters the Entity State Machine (Section 5) and is submitted to the VLM.
 
 ### Stage 7: Grounded Brain (GOT-OCR 2.0) — Async
@@ -86,11 +79,9 @@ Runs as a dedicated MLX process. Receives an **Entity Crop** — a high-resoluti
 
 **Point-Prompting:** Anchor coordinates are passed directly to GOT-OCR 2.0 to force the model to attend only to the relevant writing, preventing hallucinations from background noise or adjacent entities.
 
-**Structured Output:**
-- `MATH_UNIT` entities → LaTeX.
-- `TEXT_LINE` entities → Markdown.
+**Structured Output:** All entities → Markdown. VLM prompts must explicitly request Markdown to ensure consistent formatting in the Ledger.
 
-Before inference, every crop is preprocessed with **CLAHE** (Contrast Limited Adaptive Histogram Equalization) and the Stage 4 glare mask to ensure the VLM sees maximum contrast regardless of marker quality.
+Before inference, every crop is preprocessed with **CLAHE** (Contrast Limited Adaptive Histogram Equalization) to maximise contrast regardless of marker quality.
 
 ### Stage 8: Synthesis (The Ledger)
 
@@ -129,9 +120,9 @@ src/
 ├── board_service/
 │   ├── tracker.py          # Stage 1-2: SAM 3.1 (async) — corner tracking + body/shadow matting
 │   ├── rectifier.py        # Stage 3: Sub-pixel perspective warp to 1920×1080
-│   └── reconstructor.py    # Stage 4: Distance-weighted EMA + temporal variance glare filter
+│   └── reconstructor.py    # Stage 4: Distance-weighted EMA + spatial glare suppression
 ├── anchor_service/
-│   ├── detector.py         # Stage 5: Grounded-DINO 2.0 (async) — TEXT_LINE & MATH_UNIT
+│   ├── detector.py         # Stage 5: PaddleOCR PP-OCRv5_server_det (async) — TEXT_LINE anchors
 │   ├── grouper.py          # Stage 6: Spatial Graph Transformer entity clustering
 │   └── state_machine.py    # Entity lifecycle manager (DISCOVERED → ERASED)
 ├── brain_service/
@@ -149,7 +140,7 @@ src/
 
 ## 7. Implementation Rules
 
-**All Models Non-Blocking.** SAM 3.1, Grounded-DINO 2.0, and GOT-OCR 2.0 each run as independent `multiprocessing.Process` workers with input and output queues. The main loop submits work and polls results; it never blocks. If a model is busy, the main loop continues with the last cached result.
+**All Models Non-Blocking.** SAM 3.1, PaddleOCR, and GOT-OCR 2.0 each run as independent `multiprocessing.Process` workers with input and output queues. The main loop submits work and polls results; it never blocks. If a model is busy, the main loop continues with the last cached result.
 
 **Accuracy-First Preprocessing.** Before any VLM inference, crops receive CLAHE + high-pass filtering. The VLM must see crisp, high-contrast content regardless of lighting.
 
@@ -167,8 +158,8 @@ src/
 
 **VRAM Contention.** If unified memory usage approaches 22GB, reduce GOT-OCR 2.0 inference frequency before degrading SAM 3.1. Tracking integrity takes priority over OCR throughput.
 
-**Ghosting Trap.** Low-quality erasers leave faint residue. Stage 4's high-pass filter must be tuned to distinguish genuine ink (sharp, high-frequency signal) from eraser smudge (blurry, low-frequency residue). Failing to do so will cause phantom entities in the Ledger.
+**Ghosting Trap.** Low-quality erasers leave faint residue. Stage 4's glare detector (`|Laplacian| < 15`) must not confuse faint eraser smudge with glare — both are low-frequency. If the brightness threshold (≥ 248) is set too low, smudge gets treated as glare and inpainted, creating phantom clean regions. Tune brightness threshold upward if ghosting occurs.
 
 **Coordinate Drift.** Any corner displacement >2px between consecutive frames must trigger a Stage 3 homography recompute. Allowing drift to accumulate will misalign anchor coordinates with the VLM crops.
 
-**Prompt Integrity.** VLM prompts must explicitly instruct GOT-OCR 2.0 to output LaTeX for `MATH_UNIT` anchors and Markdown for `TEXT_LINE` anchors. Omitting this causes mixed-format output that breaks `assembly.py` synthesis.
+**Prompt Integrity.** VLM prompts must explicitly request Markdown output. Omitting this causes inconsistent formatting that breaks `assembly.py` synthesis.
