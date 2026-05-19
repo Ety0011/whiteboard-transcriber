@@ -75,7 +75,7 @@ def _worker_main(in_q: mp.Queue, out_q: mp.Queue, model_id: str) -> None:
             rgb = cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB)
             pil_img = Image.fromarray(rgb)
 
-            inputs = processor(pil_img, return_tensors="pt").to(device)
+            inputs = processor(pil_img, return_tensors="pt", format=True).to(device)
             with torch.inference_mode():
                 generate_ids = model.generate(
                     **inputs,
