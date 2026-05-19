@@ -39,8 +39,8 @@ class BoardReconstructor:
 
     def __init__(
         self,
-        max_lr: float = 0.2,
-        falloff_distance: float = 200.0,
+        max_lr: float = 1.0,
+        falloff_distance: float = 100.0,
         power: float = 2.0,
     ) -> None:
         """

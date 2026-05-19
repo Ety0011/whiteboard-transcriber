@@ -1,9 +1,5 @@
 """Whiteboard transcription pipeline — entry point.
 
-Chains Stages 1–7 sequentially on each frame. In normal mode shows the
-raw camera feed. With ``--debug`` all stage overlays are shown and can be
-toggled individually.
-
 Usage::
 
     python src/main.py                    # live webcam (default)
@@ -13,8 +9,8 @@ Usage::
 
 Keyboard controls (debug mode only):
     q  — quit
-    w  — toggle Stage 1 corner overlay
-    p  — toggle Stage 2 person-mask overlay
+    w  — toggle Stage 1/2 corner overlay
+    p  — toggle Stage 1/2 body-mask overlay
     t  — toggle Stage 5 text line boxes
     r  — toggle Stage 6 region tracker
 """
@@ -29,11 +25,10 @@ import cv2
 import numpy as np
 
 import capture
-from board_detector import BoardDetector
 from board_reconstructor import BoardReconstructor
+from board_service.tracker import BoardTracker
 from document import WhiteboardDoc
 from layout import LayoutRegion
-from person_masker import PersonMasker
 from rectifier import Rectifier
 from text_detector import RegionWithLines, TextDetector
 from text_recognizer import TextRecognizer
@@ -64,12 +59,9 @@ def _apply_mask_overlay(frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return cv2.addWeighted(frame, 0.65, overlay, 0.35, 0)
 
 
-def _draw_corners(frame: np.ndarray, detector: BoardDetector) -> np.ndarray:
+def _draw_corners(frame: np.ndarray, corners: np.ndarray | None) -> np.ndarray:
     """Draw the detected board quad and corner labels on *frame*."""
-    with detector._lock:
-        corners = detector._cached_corners
-
-    if detector._detecting:
+    if corners is None:
         cv2.putText(
             frame,
             "Detecting board...",
@@ -79,18 +71,6 @@ def _draw_corners(frame: np.ndarray, detector: BoardDetector) -> np.ndarray:
             (0, 180, 220),
             2,
         )
-    elif corners is None:
-        cv2.putText(
-            frame,
-            "No board detected",
-            (40, 60),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1.2,
-            (0, 180, 220),
-            2,
-        )
-
-    if corners is None:
         return frame
 
     pts = corners.astype(np.int32)
@@ -192,8 +172,7 @@ def main() -> None:
     frame_queue = capture.process(args.source)
 
     log.info("Loading models …")
-    board_detector = BoardDetector()
-    person_masker = PersonMasker()
+    board_tracker = BoardTracker()
     rectifier = Rectifier()
     reconstructor = BoardReconstructor()
     text_detector = TextDetector()
@@ -203,6 +182,7 @@ def main() -> None:
     log.info("Ready. Press q or Ctrl-C to stop.")
 
     show_corners = show_mask = show_text_lines = show_tracker = True
+    composite: np.ndarray | None = None  # last clean board composite from Stage 4
 
     try:
         while True:
@@ -211,15 +191,30 @@ def main() -> None:
                 log.info("End of stream.")
                 break
 
-            # Stage 1 — board detection (async, non-blocking)
-            corners = board_detector.process(frame)
-            # Stage 2 — person mask on raw frame
-            mask = person_masker.process(frame)
-            # Stage 3 — perspective warp
-            warped, warped_mask = rectifier.process(frame, mask, corners)
-            # Stage 4 — EMA board reconstruction
-            composite = reconstructor.process(warped, warped_mask)
-            # Stage 5 — text detection
+            # Stage 1+2 — board corners + body/shadow mask (async, non-blocking)
+            track = board_tracker.process(frame)
+            corners = track.corners
+
+            # Stages 3+4 — only run when SAM produced a fresh (matched) frame+mask.
+            # track.frame is non-None exactly once per SAM cycle; using it ensures the
+            # body mask and the frame it describes are always in sync, preventing person
+            # pixels from leaking into the board composite between SAM updates.
+            if track.frame is not None:
+                mask = track.body_mask
+                warped, warped_mask = rectifier.process(track.frame, mask, corners)
+                composite = reconstructor.process(warped, warped_mask)
+
+            if composite is None:
+                # Waiting for first SAM result — show raw feed and wait
+                if args.debug:
+                    display = frame.copy()
+                    cv2.putText(display, "Waiting for SAM...", (40, 60),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 180, 220), 2)
+                    cv2.imshow("raw", display)
+                    cv2.waitKey(1)
+                continue
+
+            # Stage 5 — text detection (runs every frame against latest composite)
             h, w = composite.shape[:2]
             regions_with_lines = text_detector.process(
                 [
@@ -250,10 +245,10 @@ def main() -> None:
 
             if args.debug:
                 display = frame.copy()
-                if show_mask:
-                    display = _apply_mask_overlay(display, mask)
+                if show_mask and track.body_mask is not None:
+                    display = _apply_mask_overlay(display, track.body_mask)
                 if show_corners:
-                    display = _draw_corners(display, board_detector)
+                    display = _draw_corners(display, corners)
                 cv2.imshow("raw", display)
 
                 vis = composite.copy()
@@ -282,6 +277,7 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        board_tracker.shutdown()
         cv2.destroyAllWindows()
 
     log.info("Shutting down.")
