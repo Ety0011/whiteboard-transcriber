@@ -25,7 +25,7 @@ import cv2
 import numpy as np
 
 import capture
-from board_reconstructor import BoardReconstructor
+from board_service.reconstructor import BoardReconstructor
 from board_service.rectifier import Rectifier
 from board_service.tracker import BoardTracker
 from document import WhiteboardDoc
