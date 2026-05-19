@@ -30,8 +30,8 @@ from anchor_service.grouper import EntityGrouper
 from board_service.reconstructor import BoardReconstructor
 from board_service.rectifier import Rectifier
 from board_service.tracker import BoardTracker, MediaPipeBoardTracker
+from brain_service.vlm_worker import VLMWorker
 from document import WhiteboardDoc
-from text_recognizer import TextRecognizer
 from tracker import Detection, RegionState, RegionTracker
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -182,8 +182,9 @@ def main() -> None:
     anchor_detector = AnchorDetector()
     grouper = EntityGrouper()
     tracker = RegionTracker()
-    recognizer = TextRecognizer()
+    vlm_worker = VLMWorker()
     doc = WhiteboardDoc()
+    pending_ocr: dict[int, object] = {}  # region_id → Region, awaiting VLM
     log.info("Ready. Press q or Ctrl-C to stop.")
 
     show_corners = show_mask = show_text_lines = show_tracker = True
@@ -241,13 +242,22 @@ def main() -> None:
             ]
             # Stage 6 → region tracker (cross-frame persistence + DINOv2 stability)
             tracker_result = tracker.process(detections, composite)
-            # Stage 7 — OCR + markdown write
-            if tracker_result.newly_stable:
-                recognizer.process(tracker_result, tracker, doc)
-                tmp = output_path.with_suffix(".tmp")
-                tmp.write_text(doc.to_markdown(), encoding="utf-8")
-                tmp.rename(output_path)
-                log.debug("Markdown written to %s", output_path)
+            # Stage 7 — submit newly stable entities to VLM (non-blocking)
+            for region in tracker_result.newly_stable:
+                if region.last_stable_crop is not None:
+                    pending_ocr[region.id] = region
+                    vlm_worker.submit(region.id, region.last_stable_crop)
+
+            # Poll VLM results — write markdown for any completed inferences
+            for result in vlm_worker.get_results():
+                region = pending_ocr.pop(result.region_id, None)
+                if region is not None:
+                    tracker.mark_ocr_done(region, result.text, confidence=1.0)
+                    doc.blocks[region.id] = result.text
+                    tmp = output_path.with_suffix(".tmp")
+                    tmp.write_text(doc.to_markdown(), encoding="utf-8")
+                    tmp.rename(output_path)
+                    log.debug("VLM result region %d → %s", region.id, output_path)
 
             if args.debug:
                 display = frame.copy()
@@ -285,6 +295,7 @@ def main() -> None:
     finally:
         board_tracker.shutdown()
         anchor_detector.shutdown()
+        vlm_worker.shutdown()
         cv2.destroyAllWindows()
 
     log.info("Shutting down.")
