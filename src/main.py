@@ -25,7 +25,7 @@ import cv2
 import numpy as np
 
 import capture
-from anchor_service.detector import AnchorDetector, AnchorType
+from anchor_service.detector import AnchorDetector
 from board_service.reconstructor import BoardReconstructor
 from board_service.rectifier import Rectifier
 from board_service.tracker import BoardTracker
@@ -91,14 +91,11 @@ def _draw_corners(frame: np.ndarray, corners: np.ndarray | None) -> np.ndarray:
 
 
 def _draw_anchors(frame: np.ndarray, anchors: list) -> np.ndarray:
-    """Draw anchor bounding boxes colour-coded by type."""
+    """Draw anchor bounding boxes on *frame*."""
     out = frame.copy()
     for a in anchors:
         x1, y1, x2, y2 = a.bbox
-        colour = (255, 150, 0) if a.anchor_type == AnchorType.TEXT_LINE else (0, 200, 255)
-        cv2.rectangle(out, (x1, y1), (x2, y2), colour, 1)
-        cv2.putText(out, a.anchor_type.value, (x1, y1 - 3),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, colour, 1, cv2.LINE_AA)
+        cv2.rectangle(out, (x1, y1), (x2, y2), (255, 150, 0), 1)
     return out
 
 

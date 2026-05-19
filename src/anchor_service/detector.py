@@ -1,10 +1,9 @@
-"""Stage 5 — Anchor Discovery (Grounded-DINO).
+"""Stage 5 — Anchor Discovery (PaddleOCR PP-OCRv5_server_det).
 
 Detects line-level Spatial Anchors on the clean board composite produced by
-Stage 4. Each anchor is classified as TEXT_LINE or MATH_UNIT.
+Stage 4. All anchors are classified as TEXT_LINE (MATH_UNIT support deferred).
 
-Model: IDEA-Research/grounding-dino-tiny via HuggingFace transformers.
-Prompt: "text line . math equation ."
+Model: PaddleOCR PP-OCRv5_server_det.
 
 Runs as a dedicated multiprocessing.Process (non-blocking). process() submits
 the latest composite via a maxsize=1 queue and returns the most recent
@@ -17,17 +16,13 @@ import enum
 import logging
 import multiprocessing as mp
 from dataclasses import dataclass, field
-from pathlib import Path
 
-import cv2
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
-_MODEL_ID = "IDEA-Research/grounding-dino-tiny"
-_TEXT_PROMPT = "text line . math equation ."
-_DEFAULT_BOX_THRESH = 0.35
-_DEFAULT_TEXT_THRESH = 0.25
+_DEFAULT_BOX_THRESH = 0.6
+_DEFAULT_UNCLIP_RATIO = 1.2
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +31,6 @@ _DEFAULT_TEXT_THRESH = 0.25
 
 class AnchorType(enum.Enum):
     TEXT_LINE = "TEXT_LINE"
-    MATH_UNIT = "MATH_UNIT"
 
 
 @dataclass
@@ -52,32 +46,68 @@ class DetectorResult:
 
 
 # ---------------------------------------------------------------------------
+# Helpers (ported from text_detector.py)
+# ---------------------------------------------------------------------------
+
+def _extract_polys(raw_results: list) -> list[tuple[list, float]]:
+    """Extract (polygon, score) pairs from raw TextDetection output."""
+    if not raw_results:
+        return []
+    results = []
+    for result in raw_results:
+        polys = result.get("dt_polys", [])
+        scores = result.get("dt_scores", [1.0] * len(polys))
+        for poly, score in zip(polys, scores):
+            results.append(
+                ([[float(pt[0]), float(pt[1])] for pt in poly], float(score))
+            )
+    return results
+
+
+def _polygon_to_bbox(polygon: list, img_h: int, img_w: int) -> np.ndarray:
+    """Convert polygon to axis-aligned bbox clamped to image bounds."""
+    pts = np.array(polygon, dtype=np.float32)
+    x1 = int(np.clip(pts[:, 0].min(), 0, img_w))
+    y1 = int(np.clip(pts[:, 1].min(), 0, img_h))
+    x2 = int(np.clip(pts[:, 0].max(), 0, img_w))
+    y2 = int(np.clip(pts[:, 1].max(), 0, img_h))
+    return np.array([x1, y1, x2, y2], dtype=np.int32)
+
+
+def _raw_to_anchors(raw: list, h: int, w: int) -> list[Anchor]:
+    anchors = []
+    for poly, score in _extract_polys(raw):
+        bbox = _polygon_to_bbox(poly, h, w)
+        x1, y1, x2, y2 = bbox
+        if x2 <= x1 or y2 <= y1:
+            continue
+        anchors.append(Anchor(bbox=bbox, confidence=score, anchor_type=AnchorType.TEXT_LINE))
+    return anchors
+
+
+# ---------------------------------------------------------------------------
 # Worker process
 # ---------------------------------------------------------------------------
 
 def _worker_main(
     in_q: mp.Queue,
     out_q: mp.Queue,
-    model_id: str,
     box_thresh: float,
-    text_thresh: float,
+    unclip_ratio: float,
 ) -> None:
-    """Grounded-DINO inference loop — runs in a dedicated child process."""
+    """PaddleOCR text detection loop — runs in a dedicated child process."""
     import logging as _log
     _log.basicConfig(level=logging.WARNING)
     log = _log.getLogger(__name__)
 
-    import torch
-    from PIL import Image
-    from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+    from paddleocr import TextDetection
 
-    device = "mps" if _mps_available() else "cpu"
-    log.warning("AnchorDetector: loading %s on %s …", model_id, device)
-
-    processor = AutoProcessor.from_pretrained(model_id)
-    model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device)
-    model.eval()
-    log.warning("AnchorDetector: model ready")
+    engine = TextDetection(
+        model_name="PP-OCRv5_server_det",
+        box_thresh=box_thresh,
+        unclip_ratio=unclip_ratio,
+    )
+    log.warning("AnchorDetector: PP-OCRv5_server_det ready")
 
     while True:
         composite = in_q.get()   # block until work arrives
@@ -86,48 +116,12 @@ def _worker_main(
 
         anchors: list[Anchor] = []
         try:
-            rgb = cv2.cvtColor(composite, cv2.COLOR_BGR2RGB)
-            pil_img = Image.fromarray(rgb)
             h, w = composite.shape[:2]
-
-            inputs = processor(
-                images=pil_img,
-                text=_TEXT_PROMPT,
-                return_tensors="pt",
-            ).to(device)
-
-            with torch.no_grad():
-                outputs = model(**inputs)
-
-            results = processor.post_process_grounded_object_detection(
-                outputs,
-                inputs.input_ids,
-                threshold=box_thresh,
-                text_threshold=text_thresh,
-                target_sizes=[(h, w)],
-            )[0]
-
-            for box, score, label in zip(
-                results["boxes"], results["scores"], results["text_labels"]
-            ):
-                anchor_type = _label_to_type(label)
-                if anchor_type is None:
-                    continue
-                x1, y1, x2, y2 = box.cpu().tolist()
-                bbox = np.array(
-                    [int(x1), int(y1), int(x2), int(y2)], dtype=np.int32
-                )
-                anchors.append(Anchor(bbox=bbox, confidence=float(score), anchor_type=anchor_type))
-
-            log.warning(
-                "AnchorDetector: %d anchors (%d TEXT, %d MATH)",
-                len(anchors),
-                sum(1 for a in anchors if a.anchor_type == AnchorType.TEXT_LINE),
-                sum(1 for a in anchors if a.anchor_type == AnchorType.MATH_UNIT),
-            )
-
+            raw = engine.predict(composite)
+            anchors = _raw_to_anchors(raw, h, w)
+            log.warning("AnchorDetector: %d TEXT_LINE anchors", len(anchors))
         except Exception:
-            log.exception("Grounded-DINO inference failed")
+            log.exception("PaddleOCR detection failed")
 
         result = DetectorResult(anchors=anchors)
         try:
@@ -140,29 +134,12 @@ def _worker_main(
             pass
 
 
-def _label_to_type(label: str) -> AnchorType | None:
-    label = label.lower()
-    if "math" in label:
-        return AnchorType.MATH_UNIT
-    if "text" in label:
-        return AnchorType.TEXT_LINE
-    return None
-
-
-def _mps_available() -> bool:
-    try:
-        import torch
-        return torch.backends.mps.is_available()
-    except Exception:
-        return False
-
-
 # ---------------------------------------------------------------------------
 # Public class
 # ---------------------------------------------------------------------------
 
 class AnchorDetector:
-    """Non-blocking Grounded-DINO anchor detector.
+    """Non-blocking PaddleOCR anchor detector.
 
     Spawns a single child process. process() always returns immediately with
     the latest DetectorResult (empty until the first inference completes).
@@ -170,18 +147,17 @@ class AnchorDetector:
 
     def __init__(
         self,
-        model_id: str = _MODEL_ID,
         box_thresh: float = _DEFAULT_BOX_THRESH,
-        text_thresh: float = _DEFAULT_TEXT_THRESH,
+        unclip_ratio: float = _DEFAULT_UNCLIP_RATIO,
     ) -> None:
         self._cached = DetectorResult()
         self._in_q: mp.Queue = mp.Queue(maxsize=1)
         self._out_q: mp.Queue = mp.Queue(maxsize=1)
         self._worker = mp.Process(
             target=_worker_main,
-            args=(self._in_q, self._out_q, model_id, box_thresh, text_thresh),
+            args=(self._in_q, self._out_q, box_thresh, unclip_ratio),
             daemon=True,
-            name="grounding-dino",
+            name="paddle-detect",
         )
         self._worker.start()
         logger.info("AnchorDetector worker started (pid=%d)", self._worker.pid)
@@ -191,12 +167,12 @@ class AnchorDetector:
         try:
             self._in_q.put_nowait(composite)
         except Exception:
-            pass  # worker busy — drop this composite
+            pass
 
         try:
             self._cached = self._out_q.get_nowait()
         except Exception:
-            pass  # no new result yet
+            pass
 
         return self._cached
 
