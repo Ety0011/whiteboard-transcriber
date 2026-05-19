@@ -1,15 +1,20 @@
 """Stage 1+2 — Board Tracking & Body Matting.
 
-Replaces board_detector.py (BoardDetector) and person_masker.py (PersonMasker).
+Two interchangeable implementations — both expose the same process()/shutdown()
+interface and return TrackerResult:
 
-A single SAM 3.1 multiprocessing worker handles both tasks per frame:
-  - Board corners via text prompt "whiteboard"
-  - Body + shadow mask via text prompts "person", "arm", "hand", "shadow"
+  BoardTracker (SAM only, default)
+    Single SAM 3.1 worker handles board corners + body/shadow mask together.
+    track.frame is non-None only on fresh SAM results (~10s cadence).
+    Stage 3+4 gates on this to prevent person-pixel leakage between cycles.
 
-process() is always non-blocking. The main loop submits the latest frame via a
-maxsize=1 queue (old frames are dropped when the worker is busy) and reads the
-latest TrackerResult from the output queue, falling back to the cached result
-when no new result is ready yet.
+  MediaPipeBoardTracker (SAM corners + MediaPipe mask)
+    SAM 3.1 corners-only worker (faster — no body prompt).
+    MediaPipe selfie segmenter runs synchronously per frame for the body mask.
+    track.frame is always the current frame → Stage 3+4 runs at full camera rate.
+    Trade-off: no shadow segmentation (MediaPipe limitation vs SAM).
+
+Switch via --masker sam|mediapipe in main.py.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 _MODEL_PATH = Path(__file__).parent.parent.parent / "models" / "sam3.1_multiplex.pt"
+_MP_MODEL_PATH = Path(__file__).parent.parent.parent / "models" / "selfie_segmenter.tflite"
 
 _BODY_PROMPTS = ["person", "arm", "hand", "shadow"]
 
@@ -36,8 +42,10 @@ class TrackerResult:
     body_mask: np.ndarray | None = None
     """uint8 H×W, value 1 = occluder or shadow, 0 = board. None until first frame."""
     frame: np.ndarray | None = None
-    """The exact frame SAM analyzed. Non-None only on fresh results (not cached repeats).
-    Use this — not the current camera frame — as input to Stage 4 so mask and frame match."""
+    """The frame body_mask was computed from. Non-None when a fresh mask is available.
+    Always use this frame (not the current camera frame) to drive Stage 3+4 so mask
+    and frame are always matched. Set every call by MediaPipeBoardTracker; set only
+    on fresh SAM cycles by BoardTracker."""
 
 
 # ---------------------------------------------------------------------------
@@ -250,3 +258,168 @@ class BoardTracker:
         if self._worker.is_alive():
             self._worker.terminate()
         logger.info("BoardTracker worker stopped")
+
+
+# ---------------------------------------------------------------------------
+# Corners-only SAM worker (used by MediaPipeBoardTracker)
+# ---------------------------------------------------------------------------
+
+
+def _corners_worker_main(
+    in_q: mp.Queue,
+    out_q: mp.Queue,
+    model_path: str,
+) -> None:
+    """SAM 3.1 board-corners-only worker — no body mask inference."""
+    import logging as _log
+    _log.basicConfig(level=logging.WARNING)
+
+    from ultralytics.models.sam import SAM3SemanticPredictor
+
+    sam = SAM3SemanticPredictor(
+        overrides=dict(
+            model=model_path,
+            task="segment",
+            mode="predict",
+            imgsz=644,
+            save=False,
+            verbose=False,
+        )
+    )
+
+    cached_corners: np.ndarray | None = None
+
+    while True:
+        frame = in_q.get()
+        if frame is None:
+            break
+
+        try:
+            board_res = sam(frame, text=["whiteboard"])
+            if board_res and board_res[0].masks is not None:
+                masks = board_res[0].masks.data.cpu().numpy()
+                if masks.shape[0] > 0:
+                    areas = masks.sum(axis=(1, 2))
+                    best = (masks[areas.argmax()] > 0.5).astype(np.uint8)
+                    new_c = _mask_to_corners(best)
+                    if new_c is not None:
+                        sorted_c = _sort_corners(new_c)
+                        if cached_corners is None or _are_corners_shifted(sorted_c, cached_corners):
+                            cached_corners = sorted_c
+        except Exception:
+            logging.getLogger(__name__).exception("SAM corners detection failed")
+
+        try:
+            out_q.get_nowait()
+        except Exception:
+            pass
+        try:
+            out_q.put_nowait(cached_corners)
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# MediaPipeBoardTracker
+# ---------------------------------------------------------------------------
+
+
+class MediaPipeBoardTracker:
+    """SAM 3.1 for board corners (async) + MediaPipe for body mask (per-frame sync).
+
+    process() always sets track.frame = current frame because the body mask is
+    computed synchronously every call. This lets Stage 3+4 run at full camera
+    rate instead of being gated on slow SAM cycles.
+
+    Trade-off vs BoardTracker: no shadow segmentation (MediaPipe detects people
+    only, not shadows or marker arms at range).
+    """
+
+    def __init__(
+        self,
+        sam_model_path: Path = _MODEL_PATH,
+        mp_model_path: Path = _MP_MODEL_PATH,
+        threshold: float = 0.5,
+        dilation_px: int = 5,
+    ) -> None:
+        import mediapipe as mp_lib
+
+        # SAM corners worker
+        self._cached_corners: np.ndarray | None = None
+        self._in_q: mp.Queue = mp.Queue(maxsize=1)
+        self._out_q: mp.Queue = mp.Queue(maxsize=1)
+        self._worker = mp.Process(
+            target=_corners_worker_main,
+            args=(self._in_q, self._out_q, str(sam_model_path)),
+            daemon=True,
+            name="sam3-corners",
+        )
+        self._worker.start()
+
+        # MediaPipe segmenter
+        self._threshold = threshold
+        base_options = mp_lib.tasks.BaseOptions(model_asset_path=str(mp_model_path))
+        options = mp_lib.tasks.vision.ImageSegmenterOptions(
+            base_options=base_options,
+            output_confidence_masks=True,
+            running_mode=mp_lib.tasks.vision.RunningMode.IMAGE,
+        )
+        self._segmenter = mp_lib.tasks.vision.ImageSegmenter.create_from_options(options)
+
+        self._kernel: np.ndarray | None = None
+        if dilation_px > 0:
+            ksize = 2 * dilation_px + 1
+            self._kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
+
+        logger.info(
+            "MediaPipeBoardTracker ready (SAM corners pid=%d, MediaPipe threshold=%.2f)",
+            self._worker.pid,
+            threshold,
+        )
+
+    def process(self, frame: np.ndarray) -> TrackerResult:
+        """Return TrackerResult with per-frame MediaPipe mask and cached SAM corners.
+
+        track.frame is always set to *frame* (mask is always fresh), so Stage 3+4
+        runs every call.
+        """
+        import mediapipe as mp_lib
+
+        # Submit frame to SAM corners worker (async, drop if busy)
+        try:
+            self._in_q.put_nowait(frame)
+        except Exception:
+            pass
+
+        # Poll latest SAM corners
+        try:
+            result = self._out_q.get_nowait()
+            if result is not None:
+                self._cached_corners = result
+        except Exception:
+            pass
+
+        # MediaPipe body mask — synchronous, ~5ms
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp_lib.Image(image_format=mp_lib.ImageFormat.SRGB, data=rgb)
+        seg_result = self._segmenter.segment(mp_image)
+        float_mask = np.array(seg_result.confidence_masks[0].numpy_view()).squeeze()
+        mask = (float_mask > self._threshold).astype(np.uint8)
+        if self._kernel is not None:
+            mask = cv2.dilate(mask, self._kernel, iterations=1)
+
+        return TrackerResult(
+            corners=self._cached_corners,
+            body_mask=mask,
+            frame=frame,
+        )
+
+    def shutdown(self) -> None:
+        try:
+            self._in_q.put_nowait(None)
+        except Exception:
+            pass
+        self._worker.join(timeout=5)
+        if self._worker.is_alive():
+            self._worker.terminate()
+        logger.info("MediaPipeBoardTracker stopped")

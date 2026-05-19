@@ -28,7 +28,7 @@ import capture
 from anchor_service.detector import AnchorDetector
 from board_service.reconstructor import BoardReconstructor
 from board_service.rectifier import Rectifier
-from board_service.tracker import BoardTracker
+from board_service.tracker import BoardTracker, MediaPipeBoardTracker
 from document import WhiteboardDoc
 from text_recognizer import TextRecognizer
 from tracker import Detection, RegionState, RegionTracker
@@ -157,6 +157,12 @@ def main() -> None:
         action="store_true",
         help="show stage overlays and enable debug logging",
     )
+    parser.add_argument(
+        "--masker",
+        choices=["sam", "mediapipe"],
+        default="sam",
+        help="body masking backend: sam (default, includes shadows) or mediapipe (faster, per-frame)",
+    )
     args = parser.parse_args()
 
     logging.getLogger().setLevel(logging.DEBUG if args.debug else logging.INFO)
@@ -167,7 +173,9 @@ def main() -> None:
     frame_queue = capture.process(args.source)
 
     log.info("Loading models …")
-    board_tracker = BoardTracker()
+    board_tracker = (
+        MediaPipeBoardTracker() if args.masker == "mediapipe" else BoardTracker()
+    )
     rectifier = Rectifier()
     reconstructor = BoardReconstructor()
     anchor_detector = AnchorDetector()
