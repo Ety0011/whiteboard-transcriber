@@ -1,211 +1,174 @@
-# CLAUDE.md
+# CLAUDE.md — Temporal Semantic Whiteboard Ledger
 
-This file provides guidance to Claude Code when working with code in this repository.
-
-## What
-
-Real-time whiteboard-to-Markdown transcription system. Captures a camera feed, removes people, reconstructs the board surface, tracks persistent text regions over time, runs OCR only when regions stabilize, and emits a continuously-updated Markdown document.
-
-University project (1-month timeline). Prioritizes **accuracy over speed** — a 1–2 second processing cycle is fine because whiteboard content changes every 5–10 seconds. Cross-platform. All processing on-device.
-
-## Tech Stack
-
-- **Language:** Python 3.11+
-- **Computer vision:** OpenCV (`cv2`)
-- **Person segmentation:** MediaPipe Selfie Segmentation
-- **Text detection:** PaddleOCR `PP-OCRv5_det_server` (via `paddleocr`)
-- **Layout classification:** PaddleOCR `RT-DETR-H_layout_17cls` — once per stable region, not every frame
-- **Change detection:** DINOv2-base (ViT-B/14, 86M params) — crop similarity on re-stabilized regions
-- **OCR recognition:** PaddleOCR `PP-OCRv5_rec` (via `paddleocr`)
-- **Text diffing:** Python `difflib` — patches Markdown on re-stabilized regions
-- **Concurrency:** `threading` + `queue.Queue`
-- **Testing:** pytest
-- **Package management:** pip + requirements.txt
-
-## Development Environment
-
-```bash
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-## Project Structure
-
-```
-whiteboard-transcriber/
-├── src/
-│   ├── main.py                   # Entry point, thread orchestration
-│   ├── capture.py                # Camera thread, frame queue
-│   ├── board_detector.py         # Stage 1: SAM 3 whiteboard localization → corners
-│   ├── person_masker.py          # Stage 2: MediaPipe person mask (raw frame)
-│   ├── rectifier.py              # Stage 3: perspective warp of frame + mask
-│   ├── board_reconstructor.py    # Stage 4: distance-weighted EMA board model
-│   ├── change_detection.py       # Gate: skip stages 5–7 if nothing changed
-│   ├── layout.py                 # PP-DocLayout region classification
-│   ├── text_detector.py          # Stage 5: PP-OCRv5 raw text line boxes every frame
-│   ├── tracker.py                # Stage 6: region lifecycle state machine
-│   ├── recognizer.py             # Stage 7: OCR on newly stable regions, text diff
-│   ├── assembly.py               # Stage 8: spatial ordering → Markdown document
-│   ├── document.py               # WhiteboardDoc — persistent Markdown output model
-│   ├── pipeline.py               # Orchestrates stages 1–8, writes Markdown to disk
-│   └── utils.py                  # Config, logging, helpers
-├── models/                       # Downloaded model weights (.gitignore'd)
-├── tests/
-│   ├── fixtures/                 # Test images of whiteboards
-│   └── test_*.py                 # One test file per stage
-├── docs/
-│   └── architecture.md
-├── output/                       # Generated Markdown files
-├── requirements.txt
-├── CLAUDE.md
-└── README.md
-```
-
-## Key Commands
-
-```bash
-python -m pytest                          # run all tests
-python -m pytest tests/test_tracker.py   # single test file
-python src/main.py                        # run the pipeline (requires webcam)
-python src/main.py --input video.mp4      # run on a video file (for testing)
-```
-
-## Architecture Overview
-
-7-stage pipeline. The whiteboard is modeled as a **persistent evolving document**, not a sequence of independent frames. All stages run sequentially in a processing thread. Camera runs in a separate daemon thread with a `Queue(maxsize=1)` for back-pressure (latest frame only).
-
-Stages 1 and 2 both operate on the **raw camera frame** (before any warp) because their models (SAM 3 and MediaPipe) were trained on natural camera images. Stage 3 then warps both the frame and the person mask into the canonical board coordinate system.
-
-| Stage | What | Library |
-|-------|------|---------|
-| 1. Board Detection | SAM 3 → whiteboard corners (async, periodic) | Ultralytics SAM 3 |
-| 2. Person Masking | Person mask on raw frame | MediaPipe |
-| 3. Rectification | Perspective warp of frame + mask → canonical view | OpenCV |
-| 4. Board Reconstruction | Distance-weighted EMA board model | OpenCV |
-| — Change Detection | Gate: skip 5–7 if board unchanged | OpenCV |
-| 5. Text Detection | Raw text line boxes every frame | PaddleOCR (`PP-OCRv5_det_server`) |
-| 6. Region Tracker | Lifecycle state machine, persistence, stability | Pure Python + DINOv2-base |
-| 7. Recognition | OCR on newly stable regions, text diff + patch | PaddleOCR |
-| 8. Document Assembly | Spatial ordering → Markdown document | Python `difflib` |
+This is the master specification for this project. All implementation decisions must align with this document.
 
 ---
 
-## Region Tracker Design (Stage 6)
+## 1. Project Vision: The "Lecture Historian"
 
-This is the core of the system. The tracker maintains a registry of persistent `Region` objects across frames. The whiteboard is treated as a persistent document — regions are long-lived entities, not per-frame detections.
-
-### Region Data Structure
-
-```python
-class Region:
-    id: int
-    bbox: np.ndarray                      # shape (4,) int32: x1, y1, x2, y2 — EMA-smoothed
-    confidence: float
-    state: RegionState                    # CANDIDATE | STABILIZING | STABLE | MISSING | REMOVED
-    first_seen: float                     # time.monotonic() timestamps
-    last_seen: float
-    last_modified: float
-    ocr_text: str | None                  # set by Recognizer via tracker.mark_ocr_done()
-    ocr_confidence: float | None
-    last_stable_crop: np.ndarray | None   # BGR uint8 crop at last stabilization
-    last_stable_center: np.ndarray | None # shape (2,) float64 centroid at stabilization
-    last_stable_embedding: torch.Tensor | None  # DINOv2 CLS token at stabilization
-    line_bboxes: list[np.ndarray]         # sub-line bboxes in board coordinates
-```
-
-### State Machine
-
-```
-CANDIDATE → STABILIZING → STABLE ←→ STABILIZING (drift resets)
-                                ↓ (unmatched > grace)
-                             MISSING → REMOVED (purged after retention period)
-                                ↑ (re-matched)
-                           STABILIZING
-```
-
-| State | Meaning | Transition |
-|-------|---------|------------|
-| CANDIDATE | Just appeared | → STABILIZING after `stabilizing_time_threshold` s of presence |
-| STABILIZING | Building stability | → STABLE after `stable_time_threshold` s without drift |
-| STABLE | Stable; OCR runs here | → STABILIZING if centroid drifts > `drift_threshold_px` (ocr_text cleared) |
-| MISSING | Unmatched too long | → STABILIZING on re-match; → REMOVED after `missing_time_threshold` s |
-| REMOVED | Awaiting purge | Deleted from registry after `removed_time_threshold` s |
-
-OCR text is **metadata**, not a lifecycle state. The Recognizer calls `tracker.mark_ocr_done(region, text, confidence)` to record it on STABLE regions.
-
-### Detection Matching
-
-Each frame, raw detections from Stage 5 are matched to existing regions:
-
-```
-score = 0.7 * IoU + 0.3 * centroid_similarity
-```
-
-- `score > 0.4` → update existing region
-- No match → create new region in NEW state
-
-### Bounding Box Smoothing
-
-Raw detector output jitters between frames. Apply EMA:
-
-```
-smoothed_bbox = 0.2 * detected_bbox + 0.8 * previous_bbox
-```
-
-### Region Persistence
-
-Unmatched regions are not removed immediately — they transition to MISSING after `grace_time_threshold` seconds. Only removed after `missing_time_threshold` additional seconds. This tolerates transient occlusion and lighting flicker.
-
-### Re-stabilization and Text Diffing
-
-When a STABLE region's centroid drifts beyond `drift_threshold_px` from `last_stable_center` (professor modified something), it resets to STABILIZING and `ocr_text` is cleared. Once it re-stabilizes:
-
-1. Re-OCR the region crop using `line_bboxes` for line-level granularity.
-2. Diff new text against the previous `ocr_text` using `difflib.unified_diff`.
-3. Patch `WhiteboardDoc.blocks[region_id]` with only the changed lines.
-4. Call `tracker.mark_ocr_done(region, text, confidence)` to update Region metadata.
-
-Markdown updates are surgical — existing content is never blindly overwritten.
-
-### Layout Classification
-
-`PP-DocLayout_plus-L` (via `layout.py`) classifies regions as text / table / formula / figure. It runs on the board composite image periodically (async child process, same pattern as text detection). Its output determines which regions Stage 7 OCRs and how. It does NOT run every frame.
+This system is not a scanner; it is a **Lecture Historian**. It captures the **evolution of knowledge** across a session. By utilizing Hierarchical Visual Grounding and Vision-Language Models (VLMs), it transforms a physical whiteboard into an append-only **Temporal Ledger**. Even when a professor erases the board, the information is preserved, timestamped, and semantically integrated into a final **Chronological Study Guide**.
 
 ---
 
-## Coding Rules
+## 2. Tech Stack
 
-- Each stage is a module in `src/` with a clear `process()` function
-- Functions take NumPy arrays (images) as input and return structured results — no global mutable state
-- Use type hints on all function signatures
-- Keep each module independently testable with fixture images — no camera required for tests
-- Use `logging` module, not `print()`, for debug output
-- Write docstrings on every public function
-- Commit messages: conventional commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`)
-- Always work on a feature branch — never commit directly to `main`
-- One module per file — don't combine stages
+| Component | Technology | Role |
+| :--- | :--- | :--- |
+| **Foundation** | **SAM 3.1 (Video Mode)** | Real-time board corner tracking & pixel-perfect person/shadow matting. |
+| **Neural Surface** | **Temporal-Variance EMA** | Distance-weighted EMA composite + temporal variance filter for specular suppression. |
+| **Spatial Anchors** | **Grounded-DINO 2.0** | Detects line-level "Functional Units" (TEXT_LINE, MATH_UNIT). |
+| **Grouping** | **Spatial Graph Transformer** | Clusters anchors into "Semantic Entities" based on spatial logic. |
+| **The Brain** | **GOT-OCR 2.0 (Point-Prompted)** | High-fidelity VLM OCR/LaTeX via coordinate-grounding. INT4 quantized via MLX. |
+| **Identity** | **DINOv3 Embeddings** | Stability verification and content-shift detection across write-erase cycles. |
+| **Memory** | **Temporal Event Ledger** | Append-only UUID registry with semantic versioning. |
 
-## Coding Style
+---
 
-- Follow PEP 8
-- Max line length: 100 characters
-- Imports: stdlib → third-party → local, separated by blank lines
-- Use `pathlib.Path` for file paths, not string concatenation
-- NumPy arrays are `np.ndarray`, images are BGR uint8 (OpenCV convention) unless documented otherwise
+## 3. Hardware Target: MacBook Pro M4 — 24GB Unified Memory
 
-## Warnings
+All inference runs on Apple Silicon via **MPS (Metal Performance Shaders)** and **MLX**.
 
-- **PP-OCRv5 detection returns polygons**, not rectangles. Convert to axis-aligned bboxes using min/max of the 4 point coordinates before storing or cropping.
-- **PaddleOCR is slow to initialize** (~3–5 seconds loading models). Create all PaddleOCR instances once at startup, not per frame.
-- **DINOv2 model loading takes a few seconds.** Load once at startup. Use `torch.no_grad()` for all inference — you never train.
-- **MediaPipe expects RGB input.** Always `cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)` before calling `segmenter.process()`. Forgetting this produces garbage masks silently.
-- **DINOv2 expects RGB input, normalized.** Convert from BGR, resize to a multiple of 14, normalize with ImageNet mean/std. Don't feed it raw OpenCV arrays.
-- **Board reconstruction uses distance-weighted EMA, not MOG2.** The learning rate drops to zero near person pixels, so occluded board regions are frozen at their last known value rather than corrupted by the person's appearance.
-- **`Queue(maxsize=1)` drops frames intentionally.** Use `put_nowait()` with a try/except or `get()` the old frame first. This is correct behavior, not a bug.
-- **Model files are large.** Do not commit them to git. Add `models/` to `.gitignore`. PaddleOCR and DINOv2 download weights automatically on first run.
-- **PaddlePaddle is a separate ML framework from PyTorch.** Both will be installed. PaddleOCR uses PaddlePaddle; DINOv2 uses PyTorch. This is intentional — they don't conflict but the install is large.
+**Memory Partitioning:**
+- **CV Resident (9GB):** SAM 3.1 + Grounded-DINO 2.0 + DINOv3 — always resident in unified memory.
+- **VLM Worker (11GB):** GOT-OCR 2.0 (INT4 quantized) — runs in isolated process.
+- **OS / Buffers (4GB):** Frame queues, system overhead.
 
-## Architecture Reference
+**Non-Blocking Architecture:** SAM 3.1, Grounded-DINO 2.0, and GOT-OCR 2.0 each run as independent `multiprocessing.Process` workers. The main loop reads from each model's result queue and always uses the latest cached result. No stage waits on any model.
 
-Full design spec, latency budgets, model details, and risk mitigations: `docs/architecture.md`
+---
+
+## 4. The 7-Stage Architecture
+
+### Stage 1 & 2: Dynamic Tracking & Matting (SAM 3.1) — Async
+
+SAM 3.1 runs in **Video Tracking Mode** in a background process. It simultaneously:
+- Locks onto board corners with sub-pixel precision, even through camera micro-vibrations.
+- Segments all foreground occlusions: the professor, arms, markers, **and shadows**.
+- Produces a 16-bit alpha mask ("Body Mask") used by Stage 4 for inpainting and by Stage 6 for gesture rejection.
+
+**Gesture Suppression:** Body Mask pixels never contribute to the board model, even when the occluder is motionless.
+
+### Stage 3: Anchor-Refined Rectification
+
+Warps every frame to a canonical **1920×1080** fronto-parallel view. Uses OpenCV perspective transform with the latest board corners from Stage 1. When Spatial Anchors from Stage 5 are available, they serve as additional control points to micro-correct homography drift between corner updates, neutralizing camera vibrations.
+
+> **Coordinate Space Rule:** All stages from Stage 3 onward operate exclusively in the 1920×1080 rectified coordinate space.
+
+### Stage 4: Specular-Free Neural Reconstruction
+
+Maintains a **Clean Board Composite** — the "Gold Standard" image fed to the VLM.
+
+**Two-layer approach:**
+1. **Distance-Weighted EMA (base layer):** Each pixel's learning rate is proportional to its distance from the Body Mask. Pixels under/near a person update slowly and are inpainted from the last known clean state. This is the same mechanism as the existing `board_reconstructor.py`.
+2. **Temporal Variance Filter (new layer):** If a pixel's intensity varies rapidly across frames *without* a corresponding change in the Body Mask, it is classified as a specular highlight or glare artifact and is suppressed in crops sent to the VLM.
+
+**Ghosting Defense:** A high-pass filter distinguishes "Real Ink" (sharp, high-frequency edges) from "Eraser Smudge" (low-frequency residue). Only pixels above the high-pass threshold are treated as active content.
+
+### Stage 5: Anchor Discovery (Grounded-DINO 2.0) — Async
+
+Runs in a background process. Detects every individual mark as a **Spatial Anchor** in one of two categories:
+- `TEXT_LINE` — a line of handwritten natural language.
+- `MATH_UNIT` — a mathematical expression, equation, or formula fragment.
+
+Anchors are the atomic unit of the Ledger. Each has a bounding box in rectified space and a category label.
+
+### Stage 6: Hierarchical Grouping (Spatial Graph Transformer)
+
+Analyzes the set of Spatial Anchors and groups them into **Semantic Entities**.
+
+- A group of `MATH_UNIT` anchors stacked vertically beneath a `TEXT_LINE` header → one Semantic Entity (e.g., "The Euler Derivation").
+- A paragraph of `TEXT_LINE` anchors → one Semantic Entity.
+- Each Semantic Entity is the unit that enters the Entity State Machine (Section 5) and is submitted to the VLM.
+
+### Stage 7: Grounded Brain (GOT-OCR 2.0) — Async
+
+Runs as a dedicated MLX process. Receives an **Entity Crop** — a high-resolution region of the Clean Board Composite — along with the bounding-box coordinates of the constituent Spatial Anchors.
+
+**Point-Prompting:** Anchor coordinates are passed directly to GOT-OCR 2.0 to force the model to attend only to the relevant writing, preventing hallucinations from background noise or adjacent entities.
+
+**Structured Output:**
+- `MATH_UNIT` entities → LaTeX.
+- `TEXT_LINE` entities → Markdown.
+
+Before inference, every crop is preprocessed with **CLAHE** (Contrast Limited Adaptive Histogram Equalization) and the Stage 4 glare mask to ensure the VLM sees maximum contrast regardless of marker quality.
+
+### Stage 8: Synthesis (The Ledger)
+
+Generates two output files from the UUID Ledger:
+- **`live.md`** — spatial snapshot of all currently `ACTIVE` entities, updated after every VLM result.
+- **`lecture_history.md`** — full chronological ledger. Every entity is present, including `ERASED` ones. Corrections appear as diff blocks: `→ Correction at HH:MM: "[old]" → "[new]"`.
+
+---
+
+## 5. The Heart: The Entity State Machine
+
+The Ledger tracks each **Semantic Entity** through a strict 7-state lifecycle. Transition logic is handled by `anchor_service/state_machine.py`.
+
+| State | Definition | Transition Trigger |
+| :--- | :--- | :--- |
+| **DISCOVERED** | New anchor cluster found by Stage 5. | Stage 6 creates a new Semantic Entity. |
+| **STABILIZING** | Pixels are constant; DINOv3 confirms no feature drift. | $N$ consecutive frames below movement threshold. |
+| **READABLE** | Stage 4 confirms no glare or occlusion over the entity. | Quality check passes AND Body Mask does not overlap entity. |
+| **INFERRING** | Entity crop submitted to GOT-OCR 2.0. | Non-blocking submission to VLM queue. |
+| **ACTIVE** | Content OCR'd; entity is visible on the physical board. | VLM result received and written to Ledger. |
+| **VERSIONED** | A subset of anchors in the entity changed (e.g., a typo corrected). | Sub-pixel shift or new anchor within existing group. |
+| **ERASED** | All anchors in the group match the background color. | Stage 5 confirms anchors absent for $M$ frames. |
+
+**Gesture Rejection:** While the Body Mask overlaps an entity, the stabilization timer is **frozen**. The entity cannot transition from `STABILIZING` to `READABLE` until the occlusion clears.
+
+**VERSIONED semantics:** Only the changed anchors trigger re-inference. The UUID is preserved. The Ledger records an "Update" event with the diff. The original text is retained in `lecture_history.md`.
+
+---
+
+## 6. Project Structure
+
+```text
+src/
+├── main.py                 # Pipeline orchestrator — async model coordination & UI
+├── capture.py              # Frame ingestion (Queue maxsize=1, always latest frame)
+├── board_service/
+│   ├── tracker.py          # Stage 1-2: SAM 3.1 (async) — corner tracking + body/shadow matting
+│   ├── rectifier.py        # Stage 3: Sub-pixel perspective warp to 1920×1080
+│   └── reconstructor.py    # Stage 4: Distance-weighted EMA + temporal variance glare filter
+├── anchor_service/
+│   ├── detector.py         # Stage 5: Grounded-DINO 2.0 (async) — TEXT_LINE & MATH_UNIT
+│   ├── grouper.py          # Stage 6: Spatial Graph Transformer entity clustering
+│   └── state_machine.py    # Entity lifecycle manager (DISCOVERED → ERASED)
+├── brain_service/
+│   ├── vlm_worker.py       # Stage 7: GOT-OCR 2.0 (async MLX process)
+│   └── preprocessor.py     # CLAHE & glare suppression for VLM crops
+├── ledger_service/
+│   ├── registry.py         # UUID Ledger — source of truth, append-only
+│   └── assembly.py         # Stage 8: live.md + lecture_history.md synthesis
+└── utils/
+    ├── hardware.py         # Apple Silicon MPS/MLX memory management
+    └── types.py            # Dataclasses: LedgerEntry, EntityState, AnchorGroup, AnchorType
+```
+
+---
+
+## 7. Implementation Rules
+
+**All Models Non-Blocking.** SAM 3.1, Grounded-DINO 2.0, and GOT-OCR 2.0 each run as independent `multiprocessing.Process` workers with input and output queues. The main loop submits work and polls results; it never blocks. If a model is busy, the main loop continues with the last cached result.
+
+**Accuracy-First Preprocessing.** Before any VLM inference, crops receive CLAHE + high-pass filtering. The VLM must see crisp, high-contrast content regardless of lighting.
+
+**Append-Only History.** When an entity enters `ERASED`, its `erased_at` timestamp is written. It moves to the "Archives" section of `lecture_history.md` but is never deleted from the Ledger.
+
+**Spatial Identity.** An entity's UUID is tied to its Spatial Anchor Group, not its content. If a professor erases a formula and rewrites the same formula in a different position, it receives a **new UUID**. If the professor corrects a typo in-place, the **UUID is preserved** and the Ledger records a VERSIONED event.
+
+**Surgical Versioning.** A single-anchor change triggers re-inference of only the affected entity, not the entire board. The correction appears as a diff in `lecture_history.md`.
+
+**Coordinate Integrity.** All geometry — bounding boxes, anchor coordinates, homography points — must be expressed in the 1920×1080 rectified coordinate space. Raw frame coordinates are never passed downstream of Stage 3.
+
+---
+
+## 8. Critical Warnings
+
+**VRAM Contention.** If unified memory usage approaches 22GB, reduce GOT-OCR 2.0 inference frequency before degrading SAM 3.1. Tracking integrity takes priority over OCR throughput.
+
+**Ghosting Trap.** Low-quality erasers leave faint residue. Stage 4's high-pass filter must be tuned to distinguish genuine ink (sharp, high-frequency signal) from eraser smudge (blurry, low-frequency residue). Failing to do so will cause phantom entities in the Ledger.
+
+**Coordinate Drift.** Any corner displacement >2px between consecutive frames must trigger a Stage 3 homography recompute. Allowing drift to accumulate will misalign anchor coordinates with the VLM crops.
+
+**Prompt Integrity.** VLM prompts must explicitly instruct GOT-OCR 2.0 to output LaTeX for `MATH_UNIT` anchors and Markdown for `TEXT_LINE` anchors. Omitting this causes mixed-format output that breaks `assembly.py` synthesis.
