@@ -26,6 +26,7 @@ import numpy as np
 
 import capture
 from anchor_service.detector import AnchorDetector
+from anchor_service.grouper import EntityGrouper
 from board_service.reconstructor import BoardReconstructor
 from board_service.rectifier import Rectifier
 from board_service.tracker import BoardTracker, MediaPipeBoardTracker
@@ -162,7 +163,7 @@ def main() -> None:
         choices=["sam", "mediapipe"],
         default="sam",
         help="body masking backend: sam (default, includes shadows) or mediapipe (faster, per-frame)",
-    )
+    )  # cant just swap them, later stages need to be tweaked for each of those
     args = parser.parse_args()
 
     logging.getLogger().setLevel(logging.DEBUG if args.debug else logging.INFO)
@@ -179,6 +180,7 @@ def main() -> None:
     rectifier = Rectifier()
     reconstructor = BoardReconstructor()
     anchor_detector = AnchorDetector()
+    grouper = EntityGrouper()
     tracker = RegionTracker()
     recognizer = TextRecognizer()
     doc = WhiteboardDoc()
@@ -211,23 +213,33 @@ def main() -> None:
                 # Waiting for first SAM result — show raw feed and wait
                 if args.debug:
                     display = frame.copy()
-                    cv2.putText(display, "Waiting for SAM...", (40, 60),
-                                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 180, 220), 2)
+                    cv2.putText(
+                        display,
+                        "Waiting for SAM...",
+                        (40, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1.2,
+                        (0, 180, 220),
+                        2,
+                    )
                     cv2.imshow("raw", display)
                     cv2.waitKey(1)
                 continue
 
             # Stage 5 — anchor discovery (async, non-blocking)
             detector_result = anchor_detector.process(composite)
+
+            # Stage 6 — group anchors into Semantic Entities
+            groups = grouper.process(detector_result.anchors)
             detections = [
                 Detection(
-                    bbox=a.bbox,
-                    confidence=a.confidence,
-                    line_bboxes=[a.bbox],
+                    bbox=g.bbox,
+                    confidence=g.confidence,
+                    line_bboxes=[a.bbox for a in g.anchors],
                 )
-                for a in detector_result.anchors
+                for g in groups
             ]
-            # Stage 6 — region tracker
+            # Stage 6 → region tracker (cross-frame persistence + DINOv2 stability)
             tracker_result = tracker.process(detections, composite)
             # Stage 7 — OCR + markdown write
             if tracker_result.newly_stable:
