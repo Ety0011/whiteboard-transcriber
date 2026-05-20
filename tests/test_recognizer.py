@@ -13,7 +13,7 @@ import numpy as np
 
 from src.document import WhiteboardDoc
 from src.text_recognizer import TextRecognizer
-from src.tracker import Region, RegionState, TrackerResult
+from src.anchor_service.entity_lifecycle import SemanticEntity as Region, EntityState as RegionState, EntityUpdate as TrackerResult
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -33,7 +33,7 @@ def _make_region(
         id=region_id,
         bbox=bbox_arr,
         confidence=0.9,
-        state=RegionState.STABLE,
+        state=RegionState.READABLE,
         first_seen=time.monotonic(),
         last_modified=time.monotonic(),
         last_seen=time.monotonic(),
@@ -51,8 +51,8 @@ def _make_tracker_result(
     stable = newly_stable or []
     erased = newly_erased or []
     return TrackerResult(
-        regions=stable + erased,
-        newly_stable=stable,
+        entities=stable + erased,
+        newly_readable=stable,
         newly_erased=erased,
     )
 

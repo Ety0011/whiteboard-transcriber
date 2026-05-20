@@ -26,6 +26,7 @@ import numpy as np
 
 import capture
 from anchor_service.detector import AnchorDetector
+from anchor_service.entity_lifecycle import EntityRegistry, EntityState
 from anchor_service.grouper import EntityGrouper
 from board_service.reconstructor import BoardReconstructor
 from board_service.rectifier import Rectifier
@@ -33,7 +34,6 @@ from board_service.tracker import BoardTracker, MediaPipeBoardTracker
 from brain_service.vlm_worker import VLMWorker
 from ledger_service import assembly
 from ledger_service.registry import LedgerRegistry
-from tracker import Detection, RegionState, RegionTracker
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
@@ -45,11 +45,14 @@ log = logging.getLogger(__name__)
 _LABELS = ["TL", "TR", "BR", "BL"]
 
 _STATE_COLOURS = {
-    RegionState.CANDIDATE: (255, 255, 0),
-    RegionState.STABILIZING: (0, 165, 255),
-    RegionState.STABLE: (0, 255, 0),
-    RegionState.MISSING: (200, 0, 200),
-    RegionState.REMOVED: (0, 0, 255),
+    EntityState.DISCOVERED:  (255, 255, 0),
+    EntityState.STABILIZING: (0, 165, 255),
+    EntityState.READABLE:    (0, 255, 0),
+    EntityState.INFERRING:   (180, 255, 180),
+    EntityState.ACTIVE:      (0, 200, 0),
+    EntityState.VERSIONED:   (0, 130, 255),
+    EntityState.MISSING:     (200, 0, 200),
+    EntityState.ERASED:      (0, 0, 255),
 }
 
 
@@ -107,7 +110,7 @@ def _draw_tracker(frame: np.ndarray, regions: list) -> np.ndarray:
     for reg in regions:
         x1, y1, x2, y2 = reg.bbox
         colour = _STATE_COLOURS.get(reg.state, (255, 255, 255))
-        thickness = 1 if reg.state == RegionState.MISSING else 2
+        thickness = 1 if reg.state == EntityState.MISSING else 2
         cv2.rectangle(out, (x1, y1), (x2, y2), colour, thickness)
 
         ocr_tag = "OK" if reg.ocr_text else "..."
@@ -182,7 +185,7 @@ def main() -> None:
     reconstructor = BoardReconstructor()
     anchor_detector = AnchorDetector()
     grouper = EntityGrouper()
-    tracker = RegionTracker()
+    tracker = EntityRegistry()
     vlm_worker = VLMWorker()
     registry = LedgerRegistry()
     pending_ocr: dict[int, object] = {}  # region_id → Region, awaiting VLM
@@ -233,34 +236,27 @@ def main() -> None:
 
             # Stage 6 — group anchors into Semantic Entities
             groups = grouper.process(detector_result.anchors)
-            detections = [
-                Detection(
-                    bbox=g.bbox,
-                    confidence=g.confidence,
-                    line_bboxes=[a.bbox for a in g.anchors],
-                )
-                for g in groups
-            ]
-            # Stage 6 → region tracker (cross-frame persistence + DINOv2 stability)
-            tracker_result = tracker.process(detections, composite)
-            # Stage 7 — submit newly stable entities to VLM (non-blocking)
-            for region in tracker_result.newly_stable:
-                if region.last_stable_crop is not None:
-                    pending_ocr[region.id] = region
-                    vlm_worker.submit(region.id, region.last_stable_crop)
+            # Stage 6 → entity lifecycle (cross-frame persistence + DINOv2 stability)
+            tracker_result = tracker.process(groups, composite)
+            # Stage 7 — submit newly readable entities to VLM (non-blocking)
+            for entity in tracker_result.newly_readable:
+                if entity.last_stable_crop is not None:
+                    tracker.mark_inferring(entity)
+                    pending_ocr[entity.id] = entity
+                    vlm_worker.submit(entity.id, entity.last_stable_crop)
 
             # Poll VLM results — update ledger and synthesise output files
             for result in vlm_worker.get_results():
-                region = pending_ocr.pop(result.region_id, None)
-                if region is not None:
-                    tracker.mark_ocr_done(region, result.text, confidence=1.0)
-                    registry.update(region.id, region.bbox, result.text)
+                entity = pending_ocr.pop(result.region_id, None)
+                if entity is not None:
+                    tracker.mark_active(entity, result.text, confidence=1.0)
+                    registry.update(entity.id, entity.bbox, result.text)
                     assembly.synthesize(registry, output_path.parent)
-                    log.debug("Ledger written for region %d", region.id)
+                    log.debug("Ledger written for entity %d", entity.id)
 
             # Stage 8 — erasure events
-            for region in tracker_result.newly_erased:
-                registry.mark_erased(region.id)
+            for entity in tracker_result.newly_erased:
+                registry.mark_erased(entity.id)
                 assembly.synthesize(registry, output_path.parent)
 
             if args.debug:
@@ -275,7 +271,7 @@ def main() -> None:
                 if show_text_lines:
                     vis = _draw_anchors(vis, detector_result.anchors)
                 if show_tracker:
-                    vis = _draw_tracker(vis, tracker_result.regions)
+                    vis = _draw_tracker(vis, tracker_result.entities)
                 cv2.imshow("board", vis)
 
                 key = cv2.waitKey(1) & 0xFF

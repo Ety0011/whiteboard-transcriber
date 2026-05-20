@@ -124,7 +124,7 @@ src/
 ├── anchor_service/
 │   ├── detector.py         # Stage 5: PaddleOCR PP-OCRv5_server_det (async) — TEXT_LINE anchors
 │   ├── grouper.py          # Stage 6: Spatial Graph Transformer entity clustering
-│   └── state_machine.py    # Entity lifecycle manager (DISCOVERED → ERASED)
+│   └── entity_lifecycle.py # Entity lifecycle manager (DISCOVERED → ERASED)
 ├── brain_service/
 │   ├── vlm_worker.py       # Stage 7: GOT-OCR 2.0 (async MLX process)
 │   └── preprocessor.py     # CLAHE & glare suppression for VLM crops
