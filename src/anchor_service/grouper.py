@@ -13,7 +13,7 @@ Stateless and synchronous — runs in the main process in O(N log N).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -22,16 +22,16 @@ from anchor_service.detector import Anchor
 
 @dataclass
 class EntityGroup:
-    anchors: list[Anchor]   # constituent anchors, top-to-bottom
-    bbox: np.ndarray        # (4,) int32: min(x1), min(y1), max(x2), max(y2)
-    confidence: float       # max confidence across constituent anchors
+    anchors: list[Anchor]  # constituent anchors, top-to-bottom
+    bbox: np.ndarray  # (4,) int32: min(x1), min(y1), max(x2), max(y2)
+    confidence: float  # max confidence across constituent anchors
 
 
 class EntityGrouper:
     """Stateless spatial proximity grouper.
 
     Two anchors merge into the same entity when:
-      - vertical gap < gap_ratio × mean line-height of the current group
+      - vertical gap < max_v_gap × mean line-height of the current group
       - horizontal overlap > min_h_overlap fraction of the incoming anchor width
 
     Both conditions must hold — this prevents merging horizontally separated
@@ -40,10 +40,10 @@ class EntityGrouper:
 
     def __init__(
         self,
-        gap_ratio: float = 0.8,
+        max_v_gap: float = 0.8,
         min_h_overlap: float = 0.2,
     ) -> None:
-        self._gap_ratio = gap_ratio
+        self._max_v_gap = max_v_gap
         self._min_h_overlap = min_h_overlap
 
     def process(self, anchors: list[Anchor]) -> list[EntityGroup]:
@@ -66,27 +66,31 @@ class EntityGrouper:
 
         for anchor in sorted_anchors[1:]:
             x1, y1, x2, y2 = anchor.bbox.tolist()
-            current = groups[-1]
 
-            # Current group's merged extents
-            gx1 = min(a.bbox[0] for a in current)
-            gy2 = max(a.bbox[3] for a in current)
-            gx2 = max(a.bbox[2] for a in current)
+            best_idx: int | None = None
+            best_gap: float = float("inf")
 
-            # Mean line height of current group
-            mean_h = np.mean([a.bbox[3] - a.bbox[1] for a in current])
+            for i, current in enumerate(groups):
+                gx1 = min(a.bbox[0] for a in current)
+                gy2 = max(a.bbox[3] for a in current)
+                gx2 = max(a.bbox[2] for a in current)
+                mean_h = float(np.mean([a.bbox[3] - a.bbox[1] for a in current]))
 
-            vertical_gap = y1 - gy2
+                vertical_gap = y1 - gy2
+                h_overlap = max(0, min(x2, gx2) - max(x1, gx1))
+                anchor_width = x2 - x1 + 1e-6
+                h_overlap_ratio = h_overlap / anchor_width
 
-            h_overlap = max(0, min(x2, gx2) - max(x1, gx1))
-            anchor_width = x2 - x1 + 1e-6
-            h_overlap_ratio = h_overlap / anchor_width
+                if (
+                    vertical_gap < self._max_v_gap * mean_h
+                    and h_overlap_ratio > self._min_h_overlap
+                    and vertical_gap < best_gap
+                ):
+                    best_idx = i
+                    best_gap = vertical_gap
 
-            if (
-                vertical_gap < self._gap_ratio * mean_h
-                and h_overlap_ratio > self._min_h_overlap
-            ):
-                current.append(anchor)
+            if best_idx is not None:
+                groups[best_idx].append(anchor)
             else:
                 groups.append([anchor])
 
@@ -96,7 +100,12 @@ class EntityGrouper:
 def _make_group(anchors: list[Anchor]) -> EntityGroup:
     bboxes = np.stack([a.bbox for a in anchors])
     merged = np.array(
-        [bboxes[:, 0].min(), bboxes[:, 1].min(), bboxes[:, 2].max(), bboxes[:, 3].max()],
+        [
+            bboxes[:, 0].min(),
+            bboxes[:, 1].min(),
+            bboxes[:, 2].max(),
+            bboxes[:, 3].max(),
+        ],
         dtype=np.int32,
     )
     return EntityGroup(
