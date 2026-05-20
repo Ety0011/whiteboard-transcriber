@@ -55,13 +55,13 @@ Owns all geometry for the pipeline. Each time a new board mask arrives from Stag
 
 > **Coordinate Space Rule:** All stages from Stage 3 onward operate exclusively in the 1920×1080 rectified coordinate space.
 
-### Stage 4: Specular-Free Neural Reconstruction
+### Stage 4: Specular-Free Board Reconstruction
 
 Maintains a **Clean Board Composite** — the "Gold Standard" image fed to the VLM.
 
 **Two-layer approach:**
-1. **Distance-Weighted EMA (base layer):** Each pixel's learning rate is proportional to its distance from the Body Mask. Pixels under/near a person update slowly and are inpainted from the last known clean state.
-2. **Spatial Glare Detection (suppression layer):** Glare pixels are identified per-frame as `brightness ≥ 248 AND |Laplacian| < 15`. They are excluded from the EMA update (composite retains the pre-glare value) and inpainted in the output using cv2.inpaint Telea or LaMa neural inpainter (requires `pytorch_lightning`).
+1. **Distance-Weighted EMA (base layer):** `lr(x) = max_lr × (dist(x) / falloff_distance) ^ power`. Pixels under/near the person mask have lr≈0 and are frozen at their last known composite value, preserving written content under occlusions.
+2. **Spatial Glare Detection (suppression layer):** Glare pixels are identified per-frame as `brightness ≥ 248 AND |Laplacian| < 15`. They are excluded from the EMA update (composite retains the pre-glare value) and inpainted using `cv2.inpaint` (Telea, zero-VRAM classical CPU inpainting).
 
 ### Stage 5: Anchor Discovery (PaddleOCR PP-OCRv5_server_det) — Async
 
