@@ -31,6 +31,7 @@ def _preprocess_crop(bgr: np.ndarray) -> np.ndarray:
     lab[:, :, 0] = clahe.apply(lab[:, :, 0])
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
+
 logger = logging.getLogger(__name__)
 
 _MODEL_ID = "stepfun-ai/GOT-OCR-2.0-hf"
@@ -104,7 +105,9 @@ def _worker_main(in_q: mp.Queue, out_q: mp.Queue, model_id: str) -> None:
 
             log.warning(
                 "Transcriber: entity %d → %d chars: %r",
-                entity_id, len(text), text[:60],
+                entity_id,
+                len(text),
+                text[:60],
             )
         except Exception:
             log.exception("Transcriber: inference failed for entity %d", entity_id)
@@ -113,7 +116,8 @@ def _worker_main(in_q: mp.Queue, out_q: mp.Queue, model_id: str) -> None:
             out_q.put_nowait(TranscriptionResult(entity_id=entity_id, text=text))
         except Exception:
             log.warning(
-                "Transcriber: output queue full, result for entity %d dropped", entity_id
+                "Transcriber: output queue full, result for entity %d dropped",
+                entity_id,
             )
 
 
@@ -181,3 +185,27 @@ class Transcriber:
         if self._worker.is_alive():
             self._worker.terminate()
         logger.info("Transcriber stopped")
+
+
+class MockTranscriber:
+    """Zero-RAM mock — no subprocess, no model, returns placeholder immediately.
+
+    Drop-in replacement for Transcriber during development or when the VLM
+    memory budget is needed by other pipeline stages.
+    """
+
+    def __init__(self) -> None:
+        self._pending: list[TranscriptionResult] = []
+        logger.info("MockTranscriber active — GOT-OCR 2.0 not loaded")
+
+    def submit(self, entity_id: int, crop: np.ndarray) -> None:
+        self._pending.append(
+            TranscriptionResult(entity_id=entity_id, text="[mock OCR]")
+        )
+
+    def get_results(self) -> list[TranscriptionResult]:
+        results, self._pending = self._pending, []
+        return results
+
+    def shutdown(self) -> None:
+        pass
