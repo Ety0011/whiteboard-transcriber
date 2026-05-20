@@ -21,13 +21,11 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_BOX_THRESH = 0.6
-_DEFAULT_UNCLIP_RATIO = 1.2
-
 
 # ---------------------------------------------------------------------------
 # Public types
 # ---------------------------------------------------------------------------
+
 
 class AnchorType(enum.Enum):
     TEXT_LINE = "TEXT_LINE"
@@ -35,7 +33,7 @@ class AnchorType(enum.Enum):
 
 @dataclass
 class Anchor:
-    bbox: np.ndarray   # (4,) int32: x1, y1, x2, y2 in rectified 1920×1080 space
+    bbox: np.ndarray  # (4,) int32: x1, y1, x2, y2 in rectified 1920×1080 space
     confidence: float
     anchor_type: AnchorType
 
@@ -48,6 +46,7 @@ class DetectorResult:
 # ---------------------------------------------------------------------------
 # Helpers (ported from text_detector.py)
 # ---------------------------------------------------------------------------
+
 
 def _extract_polys(raw_results: list) -> list[tuple[list, float]]:
     """Extract (polygon, score) pairs from raw TextDetection output."""
@@ -81,13 +80,16 @@ def _raw_to_anchors(raw: list, h: int, w: int) -> list[Anchor]:
         x1, y1, x2, y2 = bbox
         if x2 <= x1 or y2 <= y1:
             continue
-        anchors.append(Anchor(bbox=bbox, confidence=score, anchor_type=AnchorType.TEXT_LINE))
+        anchors.append(
+            Anchor(bbox=bbox, confidence=score, anchor_type=AnchorType.TEXT_LINE)
+        )
     return anchors
 
 
 # ---------------------------------------------------------------------------
 # Worker process
 # ---------------------------------------------------------------------------
+
 
 def _worker_main(
     in_q: mp.Queue,
@@ -97,6 +99,7 @@ def _worker_main(
 ) -> None:
     """PaddleOCR text detection loop — runs in a dedicated child process."""
     import logging as _log
+
     _log.basicConfig(level=logging.WARNING)
     log = _log.getLogger(__name__)
 
@@ -110,8 +113,8 @@ def _worker_main(
     log.warning("AnchorDetector: PP-OCRv5_server_det ready")
 
     while True:
-        composite = in_q.get()   # block until work arrives
-        if composite is None:    # shutdown sentinel
+        composite = in_q.get()  # block until work arrives
+        if composite is None:  # shutdown sentinel
             break
 
         anchors: list[Anchor] = []
@@ -138,6 +141,7 @@ def _worker_main(
 # Public class
 # ---------------------------------------------------------------------------
 
+
 class AnchorDetector:
     """Non-blocking PaddleOCR anchor detector.
 
@@ -147,8 +151,8 @@ class AnchorDetector:
 
     def __init__(
         self,
-        box_thresh: float = _DEFAULT_BOX_THRESH,
-        unclip_ratio: float = _DEFAULT_UNCLIP_RATIO,
+        box_thresh: float = 0.6,  # min confidence to keep a detected box
+        unclip_ratio: float = 1.2,  # bbox expansion factor — larger = wider boxes
     ) -> None:
         self._cached = DetectorResult()
         self._in_q: mp.Queue = mp.Queue(maxsize=1)
