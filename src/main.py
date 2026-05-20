@@ -26,7 +26,7 @@ import numpy as np
 
 import capture
 from anchor_service.detector import AnchorDetector
-from anchor_service.entity_lifecycle import EntityRegistry, EntityState
+from anchor_service.entity_registry import EntityRegistry, EntityState
 from anchor_service.grouper import EntityGrouper
 from board_service.reconstructor import BoardReconstructor
 from board_service.rectifier import Rectifier

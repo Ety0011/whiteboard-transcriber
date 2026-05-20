@@ -1,4 +1,4 @@
-"""Entity Lifecycle Manager — cross-frame persistence and state machine.
+"""Entity Registry — cross-frame persistence and lifecycle management.
 
 Maintains a persistent registry of SemanticEntity objects across frames. Each
 frame, grouped anchors are matched to existing entities using IoU + centroid
@@ -16,24 +16,12 @@ import enum
 import logging
 import math
 import time
-import warnings
 
-import cv2
 import numpy as np
-import torch
-import torch.nn.functional as F
 
 from anchor_service.grouper import EntityGroup
 
 log = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-_IMAGENET_MEAN = (0.485, 0.456, 0.406)
-_IMAGENET_STD = (0.229, 0.224, 0.225)
-
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -44,7 +32,7 @@ class EntityState(enum.Enum):
     """Lifecycle states for a tracked semantic entity (CLAUDE.md Section 5)."""
 
     DISCOVERED  = "DISCOVERED"   # new anchor cluster found
-    STABILIZING = "STABILIZING"  # pixels constant, DINOv2 verifying no drift
+    STABILIZING = "STABILIZING"  # pixels constant across N frames
     READABLE    = "READABLE"     # no glare/occlusion; ready for VLM submission
     INFERRING   = "INFERRING"    # crop submitted to GOT-OCR 2.0, awaiting result
     ACTIVE      = "ACTIVE"       # OCR complete; entity visible on board
@@ -72,7 +60,6 @@ class SemanticEntity:
     ocr_confidence: float | None
     last_stable_crop: np.ndarray | None  # BGR uint8 crop at last stabilization
     last_stable_center: np.ndarray | None = None  # shape (2,) float64 cx,cy
-    last_stable_embedding: torch.Tensor | None = None  # cached DINOv2 embedding
     line_bboxes: list[np.ndarray] = dataclasses.field(default_factory=list)
     _consecutive_visible: int = dataclasses.field(default=0, repr=False)
 
@@ -131,40 +118,6 @@ def _match_score(
 
 
 # ---------------------------------------------------------------------------
-# DINOv2 preprocessing
-# ---------------------------------------------------------------------------
-
-
-def _preprocess_crop(crop_bgr: np.ndarray) -> torch.Tensor:
-    """Convert a BGR uint8 crop to a DINOv2-ready (1,3,H,W) float32 tensor.
-
-    Steps:
-      1. BGR → RGB
-      2. Resize so both dimensions are multiples of 14 (minimum 14×14)
-      3. Normalize [0,255] → [0.0,1.0] then apply ImageNet mean/std
-      4. Add batch dimension
-
-    Args:
-        crop_bgr: BGR uint8 numpy array from OpenCV.
-
-    Returns:
-        Float32 tensor of shape (1, 3, H', W').
-    """
-    rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
-    h, w = rgb.shape[:2]
-    new_h = max(14, (h // 14) * 14)
-    new_w = max(14, (w // 14) * 14)
-    if new_h != h or new_w != w:
-        rgb = cv2.resize(rgb, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-
-    t = torch.from_numpy(rgb).permute(2, 0, 1).float() / 255.0
-    mean = torch.tensor(_IMAGENET_MEAN, dtype=torch.float32).view(3, 1, 1)
-    std = torch.tensor(_IMAGENET_STD, dtype=torch.float32).view(3, 1, 1)
-    t = (t - mean) / std
-    return t.unsqueeze(0)
-
-
-# ---------------------------------------------------------------------------
 # EntityRegistry
 # ---------------------------------------------------------------------------
 
@@ -175,8 +128,7 @@ class EntityRegistry:
 
     Matches grouped anchors from Stage 6 to existing entities, applies EMA
     bbox smoothing, advances the state machine, and exposes newly readable or
-    erased entities each frame. DINOv2-base detects content change on
-    READABLE/INFERRING/ACTIVE entities.
+    erased entities each frame.
 
     Args:
         stabilizing_time_threshold: Seconds of presence required DISCOVERED → STABILIZING.
@@ -208,38 +160,6 @@ class EntityRegistry:
 
         self._registry: dict[int, SemanticEntity] = {}
         self._next_id: int = 0
-
-        warnings.filterwarnings("ignore", message="xFormers is not available")
-        log.info("Loading DINOv2-base (ViT-B/14) …")
-        self._dino: torch.nn.Module = torch.hub.load(
-            "facebookresearch/dinov2",
-            "dinov2_vitb14",
-            pretrained=True,
-        )
-        self._dino.eval()
-        log.info("DINOv2-base loaded.")
-
-    def _embed(self, crop_bgr: np.ndarray) -> torch.Tensor:
-        """Return the L2-normalized DINOv2 CLS token embedding for *crop_bgr*.
-
-        Args:
-            crop_bgr: BGR uint8 numpy array.
-
-        Returns:
-            Float32 tensor of shape (768,), L2-normalized.
-        """
-        t = _preprocess_crop(crop_bgr)
-        with torch.no_grad():
-            feats = self._dino.forward_features(t)
-        cls_token = feats["x_norm_clstoken"].squeeze(0)
-        return F.normalize(cls_token, dim=0)
-
-    def _cosine_similarity(self, a: torch.Tensor, b: torch.Tensor) -> float:
-        """Cosine similarity of two embedding vectors.
-
-        Clamps to [-1, 1] to handle floating-point rounding on L2-normalized inputs.
-        """
-        return float(torch.dot(a, b).clamp(-1.0, 1.0))
 
     def mark_inferring(self, entity: SemanticEntity) -> None:
         """Transition entity READABLE → INFERRING when crop submitted to VLM."""
@@ -378,7 +298,6 @@ class EntityRegistry:
         if crop.size > 0:
             ent.last_stable_crop = crop.copy()
             ent.last_stable_center = (ent.bbox[:2] + ent.bbox[2:]) / 2.0
-            ent.last_stable_embedding = self._embed(crop)
             ent.state, ent.last_modified = EntityState.READABLE, now
             log.debug("Entity %d → READABLE", ent.id)
 

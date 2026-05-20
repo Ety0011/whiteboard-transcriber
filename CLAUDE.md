@@ -19,7 +19,6 @@ This system is not a scanner; it is a **Lecture Historian**. It captures the **e
 | **Spatial Anchors** | **PaddleOCR PP-OCRv5_server_det** | Detects line-level `TEXT_LINE` anchors. |
 | **Grouping** | **Spatial Graph Transformer** | Clusters anchors into "Semantic Entities" based on spatial logic. |
 | **The Brain** | **GOT-OCR 2.0 (Point-Prompted)** | High-fidelity VLM OCR/LaTeX via coordinate-grounding. INT4 quantized via MLX. |
-| **Identity** | **DINOv2 Embeddings** | Stability verification and content-shift detection across write-erase cycles. |
 | **Memory** | **Temporal Event Ledger** | Append-only UUID registry with semantic versioning. |
 
 ---
@@ -29,7 +28,7 @@ This system is not a scanner; it is a **Lecture Historian**. It captures the **e
 All inference runs on Apple Silicon via **MPS (Metal Performance Shaders)** and **MLX**.
 
 **Memory Partitioning:**
-- **CV Resident (9GB):** SAM 3.1 + PaddleOCR + DINOv2 — always resident in unified memory.
+- **CV Resident (9GB):** SAM 3.1 + PaddleOCR — always resident in unified memory.
 - **VLM Worker (11GB):** GOT-OCR 2.0 (INT4 quantized) — runs in isolated process.
 - **OS / Buffers (4GB):** Frame queues, system overhead.
 
@@ -98,7 +97,7 @@ The Ledger tracks each **Semantic Entity** through a strict 7-state lifecycle. T
 | State | Definition | Transition Trigger |
 | :--- | :--- | :--- |
 | **DISCOVERED** | New anchor cluster found by Stage 5. | Stage 6 creates a new Semantic Entity. |
-| **STABILIZING** | Pixels are constant; DINOv3 confirms no feature drift. | $N$ consecutive frames below movement threshold. |
+| **STABILIZING** | Pixels are constant across $N$ consecutive frames. | $N$ consecutive frames below movement threshold. |
 | **READABLE** | Stage 4 confirms no glare or occlusion over the entity. | Quality check passes AND Body Mask does not overlap entity. |
 | **INFERRING** | Entity crop submitted to GOT-OCR 2.0. | Non-blocking submission to VLM queue. |
 | **ACTIVE** | Content OCR'd; entity is visible on the physical board. | VLM result received and written to Ledger. |
@@ -124,7 +123,7 @@ src/
 ├── anchor_service/
 │   ├── detector.py         # Stage 5: PaddleOCR PP-OCRv5_server_det (async) — TEXT_LINE anchors
 │   ├── grouper.py          # Stage 6: Spatial Graph Transformer entity clustering
-│   └── entity_lifecycle.py # Entity lifecycle manager (DISCOVERED → ERASED)
+│   └── entity_registry.py  # Entity lifecycle manager (DISCOVERED → ERASED)
 ├── brain_service/
 │   ├── vlm_worker.py       # Stage 7: GOT-OCR 2.0 (async MLX process)
 │   └── preprocessor.py     # CLAHE & glare suppression for VLM crops
