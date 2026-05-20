@@ -1,7 +1,7 @@
 """Stage 8 — Ledger Registry.
 
 Append-only in-memory record of every Semantic Entity seen during a session.
-Entries are keyed by region_id and track the full text version history plus
+Entries are keyed by entity_id and track the full text version history plus
 erasure timestamp. Nothing is ever deleted — erasure is recorded, not enacted.
 """
 
@@ -21,7 +21,7 @@ class TextVersion:
 
 @dataclass
 class LedgerEntry:
-    region_id: int
+    entity_id: int
     bbox: np.ndarray              # (4,) int32: x1,y1,x2,y2 in rectified space
     first_seen: float             # time.monotonic()
     versions: list[TextVersion]   # index 0 = first OCR; append-only
@@ -44,30 +44,30 @@ class LedgerRegistry:
     # Mutations
     # ------------------------------------------------------------------
 
-    def update(self, region_id: int, bbox: np.ndarray, text: str) -> None:
-        """Record a new or updated OCR result for *region_id*.
+    def update(self, entity_id: int, bbox: np.ndarray, text: str) -> None:
+        """Record a new or updated OCR result for *entity_id*.
 
         - New region → creates entry with first version.
         - Existing region, different text → appends VERSIONED event.
         - Existing region, identical text → no-op.
         """
         now = time.monotonic()
-        if region_id not in self._entries:
-            self._entries[region_id] = LedgerEntry(
-                region_id=region_id,
+        if entity_id not in self._entries:
+            self._entries[entity_id] = LedgerEntry(
+                entity_id=entity_id,
                 bbox=bbox.copy(),
                 first_seen=now,
                 versions=[TextVersion(text=text, timestamp=now)],
             )
         else:
-            entry = self._entries[region_id]
+            entry = self._entries[entity_id]
             if entry.versions[-1].text != text:
                 entry.versions.append(TextVersion(text=text, timestamp=now))
 
-    def mark_erased(self, region_id: int) -> None:
-        """Record that *region_id* is no longer visible on the board."""
-        if region_id in self._entries and self._entries[region_id].erased_at is None:
-            self._entries[region_id].erased_at = time.monotonic()
+    def mark_erased(self, entity_id: int) -> None:
+        """Record that *entity_id* is no longer visible on the board."""
+        if entity_id in self._entries and self._entries[entity_id].erased_at is None:
+            self._entries[entity_id].erased_at = time.monotonic()
 
     # ------------------------------------------------------------------
     # Queries

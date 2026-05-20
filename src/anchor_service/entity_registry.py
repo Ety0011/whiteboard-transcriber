@@ -90,7 +90,7 @@ def _iou(a: np.ndarray, b: np.ndarray) -> float:
 def _centroid_similarity(
     a: np.ndarray,
     b: np.ndarray,
-    frame_diag: float,
+    frame_diagonal: float,
 ) -> float:
     """Centroid proximity normalized to [0, 1] via frame diagonal."""
     cx_a = (a[0] + a[2]) / 2.0
@@ -98,18 +98,18 @@ def _centroid_similarity(
     cx_b = (b[0] + b[2]) / 2.0
     cy_b = (b[1] + b[3]) / 2.0
     dist = math.sqrt((cx_a - cx_b) ** 2 + (cy_a - cy_b) ** 2)
-    return max(0.0, 1.0 - dist / frame_diag) if frame_diag > 0 else 0.0
+    return max(0.0, 1.0 - dist / frame_diagonal) if frame_diagonal > 0 else 0.0
 
 
 def _match_score(
     det_bbox: np.ndarray,
     reg_bbox: np.ndarray,
-    frame_diag: float,
+    frame_diagonal: float,
 ) -> float:
     # TODO: put coefficients as parameters
     """Combined detection-to-entity match score: 0.7*IoU + 0.3*centroid_similarity."""
     return 0.7 * _iou(det_bbox, reg_bbox) + 0.3 * _centroid_similarity(
-        det_bbox, reg_bbox, frame_diag
+        det_bbox, reg_bbox, frame_diagonal
     )
 
 
@@ -163,7 +163,7 @@ class EntityRegistry:
         entity.last_modified = time.monotonic()
         log.debug("Entity %d → ACTIVE: %r", entity.id, text[:30])
 
-    def process(
+    def tick(
         self,
         groups: list[EntityGroup],
         frame: np.ndarray,
@@ -179,21 +179,21 @@ class EntityRegistry:
         """
         now = time.monotonic()
         h, w = frame.shape[:2]
-        frame_diag = math.sqrt(h * h + w * w)
+        frame_diagonal = math.sqrt(h * h + w * w)
 
         active_entities = [
             e for e in self._registry.values() if e.state != EntityState.ERASED
         ]
 
-        assignments, matched_grp, matched_ent = self._get_assignments(
-            groups, active_entities, frame_diag
+        assignments, matched_group_ids, matched_entity_ids = self._get_assignments(
+            groups, active_entities, frame_diagonal
         )
 
         for grp_id, ent_id in assignments.items():
             self._update_entity(groups[grp_id], self._registry[ent_id], frame, now)
 
-        self._erase_unmatched(active_entities, matched_ent, now)
-        self._create_new_entities(groups, matched_grp, now)
+        self._erase_unmatched(active_entities, matched_entity_ids, now)
+        self._create_new_entities(groups, matched_group_ids, now)
         self._prune_tombstones(now)
 
         return EntityUpdate(
@@ -215,26 +215,26 @@ class EntityRegistry:
     # -----------------------------------------------------------------------
 
     # TODO: if board moves too much we lose all assignments
-    def _get_assignments(self, groups, active_entities, diag):
+    def _get_assignments(self, groups, active_entities, frame_diagonal):
         candidates = []
         for grp_id, grp in enumerate(groups):
             for ent in active_entities:
-                score = _match_score(grp.bbox, ent.bbox, diag)
+                score = _match_score(grp.bbox, ent.bbox, frame_diagonal)
                 if score > self._match_threshold:
                     candidates.append((score, grp_id, ent.id))
 
         candidates.sort(key=lambda x: -x[0])
 
-        matched_grp: set[int] = set()
-        matched_ent: set[int] = set()
+        matched_group_ids: set[int] = set()
+        matched_entity_ids: set[int] = set()
         assignments: dict[int, int] = {}
 
         for _, grp_id, ent_id in candidates:
-            if grp_id not in matched_grp and ent_id not in matched_ent:
+            if grp_id not in matched_group_ids and ent_id not in matched_entity_ids:
                 assignments[grp_id] = ent_id
-                matched_grp.add(grp_id)
-                matched_ent.add(ent_id)
-        return assignments, matched_grp, matched_ent
+                matched_group_ids.add(grp_id)
+                matched_entity_ids.add(ent_id)
+        return assignments, matched_group_ids, matched_entity_ids
 
     def _update_entity(self, grp: EntityGroup, ent: SemanticEntity, frame, now):
         """Advance state machine for a single matched entity."""

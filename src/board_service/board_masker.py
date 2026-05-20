@@ -107,7 +107,7 @@ class BoardMasker:
         self._worker.start()
         logger.info("BoardMasker worker started (pid=%d)", self._worker.pid)
 
-    def process(self, frame: np.ndarray) -> np.ndarray | None:
+    def segment(self, frame: np.ndarray) -> np.ndarray | None:
         """Submit *frame* for async SAM inference; return fresh board mask or None.
 
         Non-blocking. Returns a uint8 H×W mask (1=board, 0=background) when SAM
@@ -120,9 +120,9 @@ class BoardMasker:
             pass
 
         try:
-            fresh = self._out_q.get_nowait()
-            self._cached = fresh
-            return fresh
+            new_mask = self._out_q.get_nowait()
+            self._cached = new_mask
+            return new_mask
         except Exception:
             return None
 

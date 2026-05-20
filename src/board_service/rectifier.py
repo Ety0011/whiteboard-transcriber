@@ -30,9 +30,9 @@ def _mask_to_corners(mask: np.ndarray) -> np.ndarray | None:
     if not contours:
         return None
     hull = cv2.convexHull(max(contours, key=cv2.contourArea))
-    peri = cv2.arcLength(hull, True)
+    perimeter = cv2.arcLength(hull, True)
     for eps in (0.02, 0.04, 0.06, 0.08, 0.10):
-        approx = cv2.approxPolyDP(hull, eps * peri, True)
+        approx = cv2.approxPolyDP(hull, eps * perimeter, True)
         if len(approx) == 4:
             return approx.reshape(4, 2).astype(np.float32)
     return None
@@ -40,14 +40,14 @@ def _mask_to_corners(mask: np.ndarray) -> np.ndarray | None:
 
 def _sort_corners(pts: np.ndarray) -> np.ndarray:
     """Reorder four corner points to TL / TR / BR / BL."""
-    rect = np.zeros((4, 2), dtype=np.float32)
-    s = pts.sum(axis=1)
-    rect[0] = pts[np.argmin(s)]
-    rect[2] = pts[np.argmax(s)]
-    d = np.diff(pts, axis=1).ravel()
-    rect[1] = pts[np.argmin(d)]
-    rect[3] = pts[np.argmax(d)]
-    return rect
+    sorted_corners = np.zeros((4, 2), dtype=np.float32)
+    coord_sum = pts.sum(axis=1)
+    sorted_corners[0] = pts[np.argmin(coord_sum)]
+    sorted_corners[2] = pts[np.argmax(coord_sum)]
+    coord_diff = np.diff(pts, axis=1).ravel()
+    sorted_corners[1] = pts[np.argmin(coord_diff)]
+    sorted_corners[3] = pts[np.argmax(coord_diff)]
+    return sorted_corners
 
 
 def _are_corners_shifted(
@@ -107,7 +107,7 @@ class Rectifier:
         """Latest derived corners in raw-frame space (debug overlay use only)."""
         return self._cached_corners
 
-    def process(
+    def rectify(
         self,
         frame: np.ndarray,
         board_mask: np.ndarray | None,

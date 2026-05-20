@@ -52,15 +52,15 @@ class EntityGrouper:
 
     def __init__(
         self,
-        v_expand: float = 0.5,  # vertical padding each side, as fraction of mean line height
-        h_expand: float = 0.1,  # horizontal padding, fraction of mean line width
+        vertical_expand_ratio: float = 0.5,    # fraction of line height, each side
+        horizontal_expand_ratio: float = 0.1,  # horizontal padding, fraction of line width
         iou_threshold: float = 0.02,  # min IoU of expanded bboxes to merge
     ) -> None:
-        self._v_expand = v_expand
-        self._h_expand = h_expand
+        self._vertical_expand_ratio = vertical_expand_ratio
+        self._horizontal_expand_ratio = horizontal_expand_ratio
         self._iou_threshold = iou_threshold
 
-    def process(self, anchors: list[Anchor]) -> list[EntityGroup]:
+    def group(self, anchors: list[Anchor]) -> list[EntityGroup]:
         """Cluster *anchors* into EntityGroups using Union-Find clustering.
 
         Args:
@@ -72,19 +72,19 @@ class EntityGrouper:
         if not anchors:
             return []
 
-        n = len(anchors)
-        uf = UnionFind(n)
+        num_anchors = len(anchors)
+        union_find = UnionFind(num_anchors)
 
         # Pairwise comparison to find connected components
-        for i in range(n):
-            for j in range(i + 1, n):
+        for i in range(num_anchors):
+            for j in range(i + 1, num_anchors):
                 if self._should_merge(anchors[i], anchors[j]):
-                    uf.union(i, j)
+                    union_find.union(i, j)
 
         # Assemble the disjoint sets
         sets: dict[int, list[Anchor]] = {}
-        for i in range(n):
-            root = uf.find(i)
+        for i in range(num_anchors):
+            root = union_find.find(i)
             if root not in sets:
                 sets[root] = []
             sets[root].append(anchors[i])
@@ -102,26 +102,26 @@ class EntityGrouper:
         ax1, ay1, ax2, ay2 = a.bbox.tolist()
         bx1, by1, bx2, by2 = b.bbox.tolist()
 
-        ae = (
-            ax1 - self._h_expand * (ax2 - ax1),
-            ay1 - self._v_expand * (ay2 - ay1),
-            ax2 + self._h_expand * (ax2 - ax1),
-            ay2 + self._v_expand * (ay2 - ay1),
+        a_expanded = (
+            ax1 - self._horizontal_expand_ratio * (ax2 - ax1),
+            ay1 - self._vertical_expand_ratio * (ay2 - ay1),
+            ax2 + self._horizontal_expand_ratio * (ax2 - ax1),
+            ay2 + self._vertical_expand_ratio * (ay2 - ay1),
         )
-        be = (
-            bx1 - self._h_expand * (bx2 - bx1),
-            by1 - self._v_expand * (by2 - by1),
-            bx2 + self._h_expand * (bx2 - bx1),
-            by2 + self._v_expand * (by2 - by1),
+        b_expanded = (
+            bx1 - self._horizontal_expand_ratio * (bx2 - bx1),
+            by1 - self._vertical_expand_ratio * (by2 - by1),
+            bx2 + self._horizontal_expand_ratio * (bx2 - bx1),
+            by2 + self._vertical_expand_ratio * (by2 - by1),
         )
 
-        ix1, iy1 = max(ae[0], be[0]), max(ae[1], be[1])
-        ix2, iy2 = min(ae[2], be[2]), min(ae[3], be[3])
+        ix1, iy1 = max(a_expanded[0], b_expanded[0]), max(a_expanded[1], b_expanded[1])
+        ix2, iy2 = min(a_expanded[2], b_expanded[2]), min(a_expanded[3], b_expanded[3])
         inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
         if inter == 0.0:
             return False
-        area_a = (ae[2] - ae[0]) * (ae[3] - ae[1])
-        area_b = (be[2] - be[0]) * (be[3] - be[1])
+        area_a = (a_expanded[2] - a_expanded[0]) * (a_expanded[3] - a_expanded[1])
+        area_b = (b_expanded[2] - b_expanded[0]) * (b_expanded[3] - b_expanded[1])
         return inter / (area_a + area_b - inter) > self._iou_threshold
 
     def _make_group(self, group_anchors: list[Anchor]) -> EntityGroup:

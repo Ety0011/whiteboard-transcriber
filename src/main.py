@@ -12,7 +12,7 @@ Keyboard controls (debug mode only):
     w  — toggle Stage 1/2 corner overlay
     p  — toggle Stage 1/2 body-mask overlay
     t  — toggle Stage 5 anchor boxes
-    r  — toggle Stage 6 region tracker
+    r  — toggle Stage 6 entity overlay
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ def _draw_anchors(frame: np.ndarray, anchors: list) -> np.ndarray:
     return out
 
 
-def _draw_tracker(frame: np.ndarray, regions: list) -> np.ndarray:
+def _draw_entities(frame: np.ndarray, regions: list) -> np.ndarray:
     """Draw tracked regions with ID, state, confidence, and OCR text."""
     out = frame.copy()
     for reg in regions:
@@ -166,7 +166,7 @@ def main() -> None:
     output_path = Path("output/whiteboard.md")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    frame_queue = capture.process(args.source)
+    frame_queue = capture.start(args.source)
 
     log.info("Loading models …")
     board_masker = BoardMasker()
@@ -175,10 +175,10 @@ def main() -> None:
     reconstructor = BoardReconstructor()
     anchor_detector = AnchorDetector()
     grouper = EntityGrouper()
-    tracker = EntityRegistry()
-    vlm_worker = Transcriber()
-    registry = LedgerRegistry()
-    pending_ocr: dict[int, object] = {}  # region_id → Region, awaiting VLM
+    entity_registry = EntityRegistry()
+    transcriber = Transcriber()
+    ledger = LedgerRegistry()
+    pending_ocr: dict[int, object] = {}  # entity_id → SemanticEntity, awaiting VLM
     log.info("Ready. Press q or Ctrl-C to stop.")
 
     show_corners = show_mask = show_text_lines = show_tracker = True
@@ -191,40 +191,40 @@ def main() -> None:
                 break
 
             # Stage 1 — board mask (SAM, async, ~10s cadence)
-            board_mask = board_masker.process(frame)
+            board_mask = board_masker.segment(frame)
             # Stage 2 — person mask (MediaPipe, sync, per-frame)
-            person_mask = person_masker.process(frame)
+            person_mask = person_masker.segment(frame)
             # Stage 3+4 — rectify every frame using cached homography
-            rect_frame, rect_mask = rectifier.process(frame, board_mask, person_mask)
-            composite = reconstructor.process(rect_frame, rect_mask)
+            rect_frame, rect_mask = rectifier.rectify(frame, board_mask, person_mask)
+            composite = reconstructor.update(rect_frame, rect_mask)
 
             # Stage 5 — anchor discovery (async, non-blocking)
-            detector_result = anchor_detector.process(composite)
+            detector_result = anchor_detector.detect(composite)
 
             # Stage 6 — group anchors into Semantic Entities
-            groups = grouper.process(detector_result.anchors)
-            # Stage 6 → entity lifecycle (cross-frame persistence + DINOv2 stability)
-            tracker_result = tracker.process(groups, composite)
+            groups = grouper.group(detector_result.anchors)
+            # Stage 6 → entity lifecycle (cross-frame persistence)
+            entity_update = entity_registry.tick(groups, composite)
             # Stage 7 — submit newly dispatched entities to VLM (non-blocking)
-            for entity in tracker_result.newly_inferring:
+            for entity in entity_update.newly_inferring:
                 if entity.last_group is not None:
                     masked_crop = get_masked_crop(entity.last_group, composite)
                     pending_ocr[entity.id] = entity
-                    vlm_worker.submit(entity.id, masked_crop)
+                    transcriber.submit(entity.id, masked_crop)
 
             # Poll VLM results — update ledger and synthesise output files
-            for result in vlm_worker.get_results():
-                entity = pending_ocr.pop(result.region_id, None)
+            for result in transcriber.get_results():
+                entity = pending_ocr.pop(result.entity_id, None)
                 if entity is not None:
-                    tracker.mark_active(entity, result.text, confidence=1.0)
-                    registry.update(entity.id, entity.bbox, result.text)
-                    assembly.synthesize(registry, output_path.parent)
+                    entity_registry.mark_active(entity, result.text, confidence=1.0)
+                    ledger.update(entity.id, entity.bbox, result.text)
+                    assembly.synthesize(ledger, output_path.parent)
                     log.debug("Ledger written for entity %d", entity.id)
 
             # Stage 8 — erasure events
-            for entity in tracker_result.newly_erased:
-                registry.mark_erased(entity.id)
-                assembly.synthesize(registry, output_path.parent)
+            for entity in entity_update.newly_erased:
+                ledger.mark_erased(entity.id)
+                assembly.synthesize(ledger, output_path.parent)
 
             if args.debug:
                 display = frame.copy()
@@ -234,12 +234,16 @@ def main() -> None:
                     display = _draw_corners(display, rectifier.cached_corners)
                 cv2.imshow("raw", display)
 
-                vis = composite.copy()
+                board_display = composite.copy()
                 if show_text_lines:
-                    vis = _draw_anchors(vis, detector_result.anchors)
+                    board_display = _draw_anchors(
+                        board_display, detector_result.anchors
+                    )
                 if show_tracker:
-                    vis = _draw_tracker(vis, tracker_result.entities)
-                cv2.imshow("board", vis)
+                    board_display = _draw_entities(
+                        board_display, entity_update.entities
+                    )
+                cv2.imshow("board", board_display)
 
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord("q"):
@@ -262,7 +266,7 @@ def main() -> None:
     finally:
         board_masker.shutdown()
         anchor_detector.shutdown()
-        vlm_worker.shutdown()
+        transcriber.shutdown()
         cv2.destroyAllWindows()
 
     log.info("Shutting down.")

@@ -9,7 +9,7 @@ Device: MPS (Apple Silicon) if available, otherwise CPU.
 Dtype: float16 to fit within the 11GB VLM memory budget.
 
 Queue design:
-  in_q  (maxsize=10): (region_id: int, crop: np.ndarray) — accepts multiple
+  in_q  (maxsize=10): (entity_id: int, crop: np.ndarray) — accepts multiple
         newly-stable regions from a single frame without dropping them.
   out_q (maxsize=30): TranscriptionResult objects — drained by get_results() each frame.
 """
@@ -38,7 +38,7 @@ _MODEL_ID = "stepfun-ai/GOT-OCR-2.0-hf"
 
 @dataclass
 class TranscriptionResult:
-    region_id: int
+    entity_id: int
     text: str
 
 
@@ -80,7 +80,7 @@ def _worker_main(in_q: mp.Queue, out_q: mp.Queue, model_id: str) -> None:
         if item is None:  # shutdown sentinel
             break
 
-        region_id, crop = item
+        entity_id, crop = item
         text = ""
         try:
             enhanced = _preprocess_crop(crop)
@@ -104,16 +104,16 @@ def _worker_main(in_q: mp.Queue, out_q: mp.Queue, model_id: str) -> None:
 
             log.warning(
                 "Transcriber: region %d → %d chars: %r",
-                region_id, len(text), text[:60],
+                entity_id, len(text), text[:60],
             )
         except Exception:
-            log.exception("Transcriber: inference failed for region %d", region_id)
+            log.exception("Transcriber: inference failed for region %d", entity_id)
 
         try:
-            out_q.put_nowait(TranscriptionResult(region_id=region_id, text=text))
+            out_q.put_nowait(TranscriptionResult(entity_id=entity_id, text=text))
         except Exception:
             log.warning(
-                "Transcriber: output queue full, result for region %d dropped", region_id
+                "Transcriber: output queue full, result for region %d dropped", entity_id
             )
 
 
@@ -150,15 +150,15 @@ class Transcriber:
         self._worker.start()
         logger.info("Transcriber started (pid=%d)", self._worker.pid)
 
-    def submit(self, region_id: int, crop: np.ndarray) -> None:
+    def submit(self, entity_id: int, crop: np.ndarray) -> None:
         """Enqueue *crop* for transcription. Non-blocking; logs if queue full."""
         try:
-            self._in_q.put_nowait((region_id, crop))
+            self._in_q.put_nowait((entity_id, crop))
         except Exception:
             logger.warning(
                 "Transcriber input queue full — region %d dropped. "
                 "Will process on next stable cycle.",
-                region_id,
+                entity_id,
             )
 
     def get_results(self) -> list[TranscriptionResult]:

@@ -62,7 +62,7 @@ class BoardReconstructor:
             power,
         )
 
-    def process(self, frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    def update(self, frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
         """Update the board model and return the clean, specular-free composite.
 
         Args:
@@ -79,8 +79,8 @@ class BoardReconstructor:
             self._composite = frame_float.copy()
         else:
             # Combine body mask and glare mask
-            norm_glare = (glare_mask > 0).astype(np.uint8)
-            occlusion = np.clip(mask.astype(np.uint8) + norm_glare, 0, 1)
+            glare_binary = (glare_mask > 0).astype(np.uint8)
+            occlusion = np.clip(mask.astype(np.uint8) + glare_binary, 0, 1)
 
             # Distance transform to scale learning rate near the occlusion boundaries
             visible = (occlusion == 0).astype(np.uint8)
@@ -110,8 +110,8 @@ def _detect_glare(frame: np.ndarray) -> np.ndarray:
     """Return binary mask of specular glare: bright AND smooth pixels."""
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     bright = (gray >= _GLARE_BRIGHTNESS).astype(np.uint8)
-    lap = cv2.Laplacian(gray, cv2.CV_32F)
-    smooth = (np.abs(lap) < _GLARE_EDGE_MAX).astype(np.uint8)
+    laplacian = cv2.Laplacian(gray, cv2.CV_32F)
+    smooth = (np.abs(laplacian) < _GLARE_EDGE_MAX).astype(np.uint8)
 
     # Return as a 0 or 255 mask expected by cv2.inpaint
     return (bright & smooth).astype(np.uint8) * 255

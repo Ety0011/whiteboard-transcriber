@@ -102,7 +102,7 @@ def _worker_main(
 
     from paddleocr import TextDetection
 
-    engine = TextDetection(
+    detector = TextDetection(
         model_name="PP-OCRv5_server_det",
         box_thresh=box_thresh,
         unclip_ratio=unclip_ratio,
@@ -117,7 +117,7 @@ def _worker_main(
         anchors: list[Anchor] = []
         try:
             h, w = composite.shape[:2]
-            raw = engine.predict(composite)
+            raw = detector.predict(composite)
             anchors = _raw_to_anchors(raw, h, w)
             log.warning("AnchorDetector: %d TEXT_LINE anchors", len(anchors))
         except Exception:
@@ -162,7 +162,7 @@ class AnchorDetector:
         self._worker.start()
         logger.info("AnchorDetector worker started (pid=%d)", self._worker.pid)
 
-    def process(self, composite: np.ndarray) -> DetectorResult:
+    def detect(self, composite: np.ndarray) -> DetectorResult:
         """Submit composite for async detection; return latest cached result."""
         try:
             self._in_q.put_nowait(composite)

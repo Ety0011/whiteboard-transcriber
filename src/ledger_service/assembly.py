@@ -35,7 +35,7 @@ def _render_live(registry: LedgerRegistry) -> str:
     for entry in active:
         ts = registry.mono_to_wall_str(entry.first_seen)
         text = entry.versions[-1].text
-        lines.append(f"## [{ts}] Region {entry.region_id}\n")
+        lines.append(f"## [{ts}] Entity {entry.entity_id}\n")
         lines.append(f"{text}\n")
     return "\n".join(lines)
 
@@ -72,9 +72,9 @@ def _render_entry(
 
     if archived and entry.erased_at is not None:
         ts_end = registry.mono_to_wall_str(entry.erased_at)
-        header = f"{heading_prefix} [{ts_start}–{ts_end}] Region {entry.region_id} *(erased)*"
+        header = f"{heading_prefix} [{ts_start}–{ts_end}] Entity {entry.entity_id} *(erased)*"
     else:
-        header = f"{heading_prefix} [{ts_start}] Region {entry.region_id}"
+        header = f"{heading_prefix} [{ts_start}] Entity {entry.entity_id}"
 
     latest_text = entry.versions[-1].text
     parts = [header, "", latest_text]

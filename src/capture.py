@@ -30,7 +30,7 @@ log = logging.getLogger(__name__)
 _IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"})
 
 
-def process(source: str | None = None) -> queue.Queue[np.ndarray | None]:
+def start(source: str | None = None) -> queue.Queue[np.ndarray | None]:
     """Start the capture daemon and return the shared frame queue.
 
     Args:

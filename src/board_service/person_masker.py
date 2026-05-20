@@ -64,7 +64,7 @@ class PersonMasker:
             dilation_px,
         )
 
-    def process(self, frame: np.ndarray) -> np.ndarray:
+    def segment(self, frame: np.ndarray) -> np.ndarray:
         """Return a fresh uint8 H×W person mask for *frame*.
 
         Args:
