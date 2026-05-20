@@ -103,17 +103,17 @@ def _worker_main(in_q: mp.Queue, out_q: mp.Queue, model_id: str) -> None:
             ).strip()
 
             log.warning(
-                "Transcriber: region %d → %d chars: %r",
+                "Transcriber: entity %d → %d chars: %r",
                 entity_id, len(text), text[:60],
             )
         except Exception:
-            log.exception("Transcriber: inference failed for region %d", entity_id)
+            log.exception("Transcriber: inference failed for entity %d", entity_id)
 
         try:
             out_q.put_nowait(TranscriptionResult(entity_id=entity_id, text=text))
         except Exception:
             log.warning(
-                "Transcriber: output queue full, result for region %d dropped", entity_id
+                "Transcriber: output queue full, result for entity %d dropped", entity_id
             )
 
 
@@ -156,7 +156,7 @@ class Transcriber:
             self._in_q.put_nowait((entity_id, crop))
         except Exception:
             logger.warning(
-                "Transcriber input queue full — region %d dropped. "
+                "Transcriber input queue full — entity %d dropped. "
                 "Will process on next stable cycle.",
                 entity_id,
             )

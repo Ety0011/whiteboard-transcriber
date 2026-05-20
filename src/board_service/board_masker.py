@@ -87,7 +87,7 @@ class BoardMasker:
     """Non-blocking SAM 3.1 board segmentation.
 
     Spawns a child process running SAM 3.1 to segment the whiteboard region.
-    process() returns the latest board mask when SAM produces a fresh result,
+    segment() returns the latest board mask when SAM produces a fresh result,
     or None between cycles. The rectifier caches homography across None returns.
 
     Args:

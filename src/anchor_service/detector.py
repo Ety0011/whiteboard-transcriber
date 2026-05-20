@@ -5,7 +5,7 @@ Stage 4. All anchors are classified as TEXT_LINE (MATH_UNIT support deferred).
 
 Model: PaddleOCR PP-OCRv5_server_det.
 
-Runs as a dedicated multiprocessing.Process (non-blocking). process() submits
+Runs as a dedicated multiprocessing.Process (non-blocking). detect() submits
 the latest composite via a maxsize=1 queue and returns the most recent
 DetectorResult immediately. Stale composites are dropped automatically.
 """
@@ -141,7 +141,7 @@ def _worker_main(
 class AnchorDetector:
     """Non-blocking PaddleOCR anchor detector.
 
-    Spawns a single child process. process() always returns immediately with
+    Spawns a single child process. detect() always returns immediately with
     the latest DetectorResult (empty until the first inference completes).
     """
 

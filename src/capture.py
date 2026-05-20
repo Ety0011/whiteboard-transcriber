@@ -9,8 +9,8 @@ receiving frames without special-casing.
 
 Usage::
 
-    q = capture.process()                  # default webcam
-    q = capture.process("recording.mp4")   # video file
+    q = capture.start()                    # default webcam
+    q = capture.start("recording.mp4")    # video file
     frame = q.get()                        # blocks until a frame is ready
 """
 

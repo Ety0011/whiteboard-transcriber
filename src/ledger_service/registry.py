@@ -47,9 +47,9 @@ class LedgerRegistry:
     def update(self, entity_id: int, bbox: np.ndarray, text: str) -> None:
         """Record a new or updated OCR result for *entity_id*.
 
-        - New region → creates entry with first version.
-        - Existing region, different text → appends VERSIONED event.
-        - Existing region, identical text → no-op.
+        - New entity → creates entry with first version.
+        - Existing entity, different text → appends VERSIONED event.
+        - Existing entity, identical text → no-op.
         """
         now = time.monotonic()
         if entity_id not in self._entries:
