@@ -32,7 +32,7 @@ from board_service.board_masker import BoardMasker
 from board_service.person_masker import PersonMasker
 from board_service.reconstructor import BoardReconstructor
 from board_service.rectifier import Rectifier
-from brain_service.vlm_worker import VLMWorker
+from brain_service.transcriber import Transcriber
 from ledger_service import assembly
 from ledger_service.registry import LedgerRegistry
 
@@ -176,7 +176,7 @@ def main() -> None:
     anchor_detector = AnchorDetector()
     grouper = EntityGrouper()
     tracker = EntityRegistry()
-    vlm_worker = VLMWorker()
+    vlm_worker = Transcriber()
     registry = LedgerRegistry()
     pending_ocr: dict[int, object] = {}  # region_id → Region, awaiting VLM
     log.info("Ready. Press q or Ctrl-C to stop.")

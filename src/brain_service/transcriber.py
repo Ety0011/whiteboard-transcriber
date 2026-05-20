@@ -1,4 +1,4 @@
-"""Stage 7 — GOT-OCR 2.0 VLM Brain (async multiprocessing worker).
+"""Stage 7 — GOT-OCR 2.0 Transcriber (async multiprocessing worker).
 
 Receives Semantic Entity crops from Stage 6 and returns structured Markdown
 text. Runs as a dedicated multiprocessing.Process so the main CV pipeline is
@@ -11,7 +11,7 @@ Dtype: float16 to fit within the 11GB VLM memory budget.
 Queue design:
   in_q  (maxsize=10): (region_id: int, crop: np.ndarray) — accepts multiple
         newly-stable regions from a single frame without dropping them.
-  out_q (maxsize=30): VLMResult objects — drained by get_results() each frame.
+  out_q (maxsize=30): TranscriptionResult objects — drained by get_results() each frame.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ _MODEL_ID = "stepfun-ai/GOT-OCR-2.0-hf"
 
 
 @dataclass
-class VLMResult:
+class TranscriptionResult:
     region_id: int
     text: str
 
@@ -59,7 +59,7 @@ def _worker_main(in_q: mp.Queue, out_q: mp.Queue, model_id: str) -> None:
     from transformers import AutoModelForCausalLM, AutoProcessor
 
     device = "mps" if _mps_available() else "cpu"
-    log.warning("VLMWorker: loading %s on %s …", model_id, device)
+    log.warning("Transcriber: loading %s on %s …", model_id, device)
 
     processor = AutoProcessor.from_pretrained(model_id)
     model = (
@@ -73,7 +73,7 @@ def _worker_main(in_q: mp.Queue, out_q: mp.Queue, model_id: str) -> None:
         .eval()
     )
 
-    log.warning("VLMWorker: model ready on %s", device)
+    log.warning("Transcriber: model ready on %s", device)
 
     while True:
         item = in_q.get()  # block until work arrives
@@ -103,19 +103,17 @@ def _worker_main(in_q: mp.Queue, out_q: mp.Queue, model_id: str) -> None:
             ).strip()
 
             log.warning(
-                "VLMWorker: region %d → %d chars: %r",
-                region_id,
-                len(text),
-                text[:60],
+                "Transcriber: region %d → %d chars: %r",
+                region_id, len(text), text[:60],
             )
         except Exception:
-            log.exception("VLMWorker: inference failed for region %d", region_id)
+            log.exception("Transcriber: inference failed for region %d", region_id)
 
         try:
-            out_q.put_nowait(VLMResult(region_id=region_id, text=text))
+            out_q.put_nowait(TranscriptionResult(region_id=region_id, text=text))
         except Exception:
             log.warning(
-                "VLMWorker: output queue full, result for region %d dropped", region_id
+                "Transcriber: output queue full, result for region %d dropped", region_id
             )
 
 
@@ -133,11 +131,11 @@ def _mps_available() -> bool:
 # ---------------------------------------------------------------------------
 
 
-class VLMWorker:
-    """Non-blocking GOT-OCR 2.0 worker.
+class Transcriber:
+    """Non-blocking GOT-OCR 2.0 transcriber.
 
     submit() enqueues a crop for inference. get_results() drains all
-    completed inferences available this frame. Both are non-blocking.
+    completed transcriptions available this frame. Both are non-blocking.
     """
 
     def __init__(self, model_id: str = _MODEL_ID) -> None:
@@ -150,21 +148,21 @@ class VLMWorker:
             name="got-ocr",
         )
         self._worker.start()
-        logger.info("VLMWorker started (pid=%d)", self._worker.pid)
+        logger.info("Transcriber started (pid=%d)", self._worker.pid)
 
     def submit(self, region_id: int, crop: np.ndarray) -> None:
-        """Enqueue *crop* for VLM inference. Non-blocking; logs if queue full."""
+        """Enqueue *crop* for transcription. Non-blocking; logs if queue full."""
         try:
             self._in_q.put_nowait((region_id, crop))
         except Exception:
             logger.warning(
-                "VLMWorker input queue full — region %d dropped. "
-                "VLM may be behind; will process on next stable cycle.",
+                "Transcriber input queue full — region %d dropped. "
+                "Will process on next stable cycle.",
                 region_id,
             )
 
-    def get_results(self) -> list[VLMResult]:
-        """Drain all completed inferences available right now. Non-blocking."""
+    def get_results(self) -> list[TranscriptionResult]:
+        """Drain all completed transcriptions available right now. Non-blocking."""
         results = []
         while True:
             try:
@@ -182,4 +180,4 @@ class VLMWorker:
         self._worker.join(timeout=10)
         if self._worker.is_alive():
             self._worker.terminate()
-        logger.info("VLMWorker stopped")
+        logger.info("Transcriber stopped")
