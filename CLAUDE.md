@@ -96,17 +96,12 @@ The Ledger tracks each **Semantic Entity** through a strict 7-state lifecycle. T
 
 | State | Definition | Transition Trigger |
 | :--- | :--- | :--- |
-| **DISCOVERED** | New anchor cluster found by Stage 5. | Stage 6 creates a new Semantic Entity. |
-| **STABILIZING** | Pixels are constant across $N$ consecutive frames. | $N$ consecutive frames below movement threshold. |
-| **READABLE** | Stage 4 confirms no glare or occlusion over the entity. | Quality check passes AND Body Mask does not overlap entity. |
-| **INFERRING** | Entity crop submitted to GOT-OCR 2.0. | Non-blocking submission to VLM queue. |
-| **ACTIVE** | Content OCR'd; entity is visible on the physical board. | VLM result received and written to Ledger. |
-| **VERSIONED** | A subset of anchors in the entity changed (e.g., a typo corrected). | Sub-pixel shift or new anchor within existing group. |
-| **ERASED** | All anchors in the group match the background color. | Stage 5 confirms anchors absent for $M$ frames. |
+| **STABILIZING** | Ink is settling; entity present but not yet stable. | New entity detected, or edit/drift detected on existing entity. |
+| **INFERRING** | Crop captured and submitted to GOT-OCR 2.0. | `stable_time_threshold` elapsed with no significant change. |
+| **ACTIVE** | OCR complete; entity visible and live in outputs. | VLM result received and written to Ledger. |
+| **ERASED** | Anchors absent from clean board composite. | Entity not matched by any anchor group in current frame. |
 
-**Gesture Rejection:** While the Body Mask overlaps an entity, the stabilization timer is **frozen**. The entity cannot transition from `STABILIZING` to `READABLE` until the occlusion clears.
-
-**VERSIONED semantics:** Only the changed anchors trigger re-inference. The UUID is preserved. The Ledger records an "Update" event with the diff. The original text is retained in `lecture_history.md`.
+**Edit detection:** If an `ACTIVE` or `INFERRING` entity's centroid drifts beyond `drift_threshold_px`, it resets to `STABILIZING` with its UUID preserved and `ocr_text` cleared.
 
 ---
 
@@ -123,7 +118,7 @@ src/
 ├── anchor_service/
 │   ├── detector.py         # Stage 5: PaddleOCR PP-OCRv5_server_det (async) — TEXT_LINE anchors
 │   ├── grouper.py          # Stage 6: Spatial Graph Transformer entity clustering
-│   └── entity_registry.py  # Entity lifecycle manager (DISCOVERED → ERASED)
+│   └── entity_registry.py  # Entity lifecycle manager (STABILIZING → ERASED)
 ├── brain_service/
 │   ├── vlm_worker.py       # Stage 7: GOT-OCR 2.0 (async MLX process)
 │   └── preprocessor.py     # CLAHE & glare suppression for VLM crops

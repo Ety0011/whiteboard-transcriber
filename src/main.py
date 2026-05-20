@@ -45,13 +45,9 @@ log = logging.getLogger(__name__)
 _LABELS = ["TL", "TR", "BR", "BL"]
 
 _STATE_COLOURS = {
-    EntityState.DISCOVERED:  (255, 255, 0),
     EntityState.STABILIZING: (0, 165, 255),
-    EntityState.READABLE:    (0, 255, 0),
     EntityState.INFERRING:   (180, 255, 180),
     EntityState.ACTIVE:      (0, 200, 0),
-    EntityState.VERSIONED:   (0, 130, 255),
-    EntityState.MISSING:     (200, 0, 200),
     EntityState.ERASED:      (0, 0, 255),
 }
 
@@ -110,7 +106,7 @@ def _draw_tracker(frame: np.ndarray, regions: list) -> np.ndarray:
     for reg in regions:
         x1, y1, x2, y2 = reg.bbox
         colour = _STATE_COLOURS.get(reg.state, (255, 255, 255))
-        thickness = 1 if reg.state == EntityState.MISSING else 2
+        thickness = 1 if reg.state == EntityState.ERASED else 2
         cv2.rectangle(out, (x1, y1), (x2, y2), colour, thickness)
 
         ocr_tag = "OK" if reg.ocr_text else "..."
@@ -238,10 +234,9 @@ def main() -> None:
             groups = grouper.process(detector_result.anchors)
             # Stage 6 → entity lifecycle (cross-frame persistence + DINOv2 stability)
             tracker_result = tracker.process(groups, composite)
-            # Stage 7 — submit newly readable entities to VLM (non-blocking)
-            for entity in tracker_result.newly_readable:
+            # Stage 7 — submit newly dispatched entities to VLM (non-blocking)
+            for entity in tracker_result.newly_inferring:
                 if entity.last_stable_crop is not None:
-                    tracker.mark_inferring(entity)
                     pending_ocr[entity.id] = entity
                     vlm_worker.submit(entity.id, entity.last_stable_crop)
 
