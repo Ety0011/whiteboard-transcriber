@@ -28,9 +28,10 @@ import capture
 from anchor_service.detector import AnchorDetector
 from anchor_service.entity_registry import EntityRegistry, EntityState
 from anchor_service.grouper import EntityGrouper
+from board_service.board_masker import BoardMasker
+from board_service.person_masker import PersonMasker
 from board_service.reconstructor import BoardReconstructor
 from board_service.rectifier import Rectifier
-from board_service.tracker import BoardTracker, MediaPipeBoardTracker
 from brain_service.vlm_worker import VLMWorker
 from ledger_service import assembly
 from ledger_service.registry import LedgerRegistry
@@ -158,12 +159,6 @@ def main() -> None:
         action="store_true",
         help="show stage overlays and enable debug logging",
     )
-    parser.add_argument(
-        "--masker",
-        choices=["sam", "mediapipe"],
-        default="sam",
-        help="body masking backend: sam (default, includes shadows) or mediapipe (faster, per-frame)",
-    )  # cant just swap them, later stages need to be tweaked for each of those
     args = parser.parse_args()
 
     logging.getLogger().setLevel(logging.DEBUG if args.debug else logging.INFO)
@@ -174,9 +169,8 @@ def main() -> None:
     frame_queue = capture.process(args.source)
 
     log.info("Loading models …")
-    board_tracker = (
-        MediaPipeBoardTracker() if args.masker == "mediapipe" else BoardTracker()
-    )
+    board_masker = BoardMasker()
+    person_masker = PersonMasker()
     rectifier = Rectifier()
     reconstructor = BoardReconstructor()
     anchor_detector = AnchorDetector()
@@ -188,7 +182,6 @@ def main() -> None:
     log.info("Ready. Press q or Ctrl-C to stop.")
 
     show_corners = show_mask = show_text_lines = show_tracker = True
-    composite: np.ndarray | None = None  # last clean board composite from Stage 4
 
     try:
         while True:
@@ -197,35 +190,13 @@ def main() -> None:
                 log.info("End of stream.")
                 break
 
-            # Stage 1+2 — board corners + body/shadow mask (async, non-blocking)
-            track = board_tracker.process(frame)
-            corners = track.corners
-
-            # Stages 3+4 — only run when SAM produced a fresh (matched) frame+mask.
-            # track.frame is non-None exactly once per SAM cycle; using it ensures the
-            # body mask and the frame it describes are always in sync, preventing person
-            # pixels from leaking into the board composite between SAM updates.
-            if track.frame is not None:
-                mask = track.body_mask
-                warped, warped_mask = rectifier.process(track.frame, mask, corners)
-                composite = reconstructor.process(warped, warped_mask)
-
-            if composite is None:
-                # Waiting for first SAM result — show raw feed and wait
-                if args.debug:
-                    display = frame.copy()
-                    cv2.putText(
-                        display,
-                        "Waiting for SAM...",
-                        (40, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        1.2,
-                        (0, 180, 220),
-                        2,
-                    )
-                    cv2.imshow("raw", display)
-                    cv2.waitKey(1)
-                continue
+            # Stage 1 — board mask (SAM, async, ~10s cadence)
+            board_mask = board_masker.process(frame)
+            # Stage 2 — person mask (MediaPipe, sync, per-frame)
+            person_mask = person_masker.process(frame)
+            # Stage 3+4 — rectify every frame using cached homography
+            rect_frame, rect_mask = rectifier.process(frame, board_mask, person_mask)
+            composite = reconstructor.process(rect_frame, rect_mask)
 
             # Stage 5 — anchor discovery (async, non-blocking)
             detector_result = anchor_detector.process(composite)
@@ -256,10 +227,10 @@ def main() -> None:
 
             if args.debug:
                 display = frame.copy()
-                if show_mask and track.body_mask is not None:
-                    display = _apply_mask_overlay(display, track.body_mask)
-                if show_corners:
-                    display = _draw_corners(display, corners)
+                if show_mask:
+                    display = _apply_mask_overlay(display, person_mask)
+                if show_corners and rectifier.cached_corners is not None:
+                    display = _draw_corners(display, rectifier.cached_corners)
                 cv2.imshow("raw", display)
 
                 vis = composite.copy()
@@ -288,7 +259,7 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        board_tracker.shutdown()
+        board_masker.shutdown()
         anchor_detector.shutdown()
         vlm_worker.shutdown()
         cv2.destroyAllWindows()

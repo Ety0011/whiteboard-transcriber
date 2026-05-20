@@ -14,7 +14,8 @@ This system is not a scanner; it is a **Lecture Historian**. It captures the **e
 
 | Component | Technology | Role |
 | :--- | :--- | :--- |
-| **Foundation** | **SAM 3.1 (Video Mode)** | Real-time board corner tracking & pixel-perfect person/shadow matting. |
+| **Board Sensing** | **SAM 3.1 (Video Mode)** | Async board region segmentation — board mask drives homography in Stage 3. |
+| **Person Sensing** | **MediaPipe Selfie Segmenter** | Sync per-frame person mask — warped to rectified space and used by Stage 4. |
 | **Neural Surface** | **Spatial-Glare EMA** | Distance-weighted EMA composite + spatial glare suppression (brightness + Laplacian). |
 | **Spatial Anchors** | **PaddleOCR PP-OCRv5_server_det** | Detects line-level `TEXT_LINE` anchors. |
 | **Grouping** | **Spatial Graph Transformer** | Clusters anchors into "Semantic Entities" based on spatial logic. |
@@ -38,18 +39,19 @@ All inference runs on Apple Silicon via **MPS (Metal Performance Shaders)** and 
 
 ## 4. The 7-Stage Architecture
 
-### Stage 1 & 2: Dynamic Tracking & Matting (SAM 3.1) — Async
+### Stage 1: Board Masking (SAM 3.1) — Async
 
-SAM 3.1 runs in **Video Tracking Mode** in a background process. It simultaneously:
-- Locks onto board corners with sub-pixel precision, even through camera micro-vibrations.
-- Segments all foreground occlusions: the professor, arms, markers, **and shadows**.
-- Produces a 16-bit alpha mask ("Body Mask") used by Stage 4 for inpainting and by Stage 6 for gesture rejection.
+SAM 3.1 runs in a background process (`board_masker.py`), segmenting the whiteboard region each cycle (~10s cadence). Outputs a raw board mask in camera-frame space. Corner extraction and homography computation are **not** done here — that is Stage 3's responsibility.
 
-**Gesture Suppression:** Body Mask pixels never contribute to the board model, even when the occluder is motionless.
+### Stage 2: Person Masking (MediaPipe) — Sync
 
-### Stage 3: Anchor-Refined Rectification
+MediaPipe selfie segmenter runs synchronously every frame (`person_masker.py`). Outputs a person mask in camera-frame space at ~5ms per frame. No background process — always fresh for the current frame.
 
-Warps every frame to a canonical **1920×1080** fronto-parallel view. Uses OpenCV perspective transform with the latest board corners from Stage 1. When Spatial Anchors from Stage 5 are available, they serve as additional control points to micro-correct homography drift between corner updates, neutralizing camera vibrations.
+**Gesture Suppression:** Person mask pixels never contribute to the board model, even when the occluder is motionless.
+
+### Stage 3: Rectification
+
+Owns all geometry for the pipeline. Each time a new board mask arrives from Stage 1, corners are extracted via contour approximation and the homography is recomputed and cached. Every frame, the cached homography warps both the raw frame and the person mask to the canonical **1920×1080** fronto-parallel view.
 
 > **Coordinate Space Rule:** All stages from Stage 3 onward operate exclusively in the 1920×1080 rectified coordinate space.
 
@@ -112,8 +114,9 @@ src/
 ├── main.py                 # Pipeline orchestrator — async model coordination & UI
 ├── capture.py              # Frame ingestion (Queue maxsize=1, always latest frame)
 ├── board_service/
-│   ├── tracker.py          # Stage 1-2: SAM 3.1 (async) — corner tracking + body/shadow matting
-│   ├── rectifier.py        # Stage 3: Sub-pixel perspective warp to 1920×1080
+│   ├── board_masker.py     # Stage 1: SAM 3.1 (async) — board region mask
+│   ├── person_masker.py    # Stage 2: MediaPipe (sync) — person mask per frame
+│   ├── rectifier.py        # Stage 3: Corner extraction + H cache + warp to 1920×1080
 │   └── reconstructor.py    # Stage 4: Distance-weighted EMA + spatial glare suppression
 ├── anchor_service/
 │   ├── detector.py         # Stage 5: PaddleOCR PP-OCRv5_server_det (async) — TEXT_LINE anchors
