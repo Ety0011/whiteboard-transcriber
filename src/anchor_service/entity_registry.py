@@ -56,6 +56,7 @@ class SemanticEntity:
     ocr_confidence: float | None
     last_stable_crop: np.ndarray | None  # BGR uint8 crop captured at inference dispatch
     last_stable_center: np.ndarray | None = None  # shape (2,) float64 cx,cy
+    last_group: EntityGroup | None = None  # EntityGroup snapshot at inference dispatch
     line_bboxes: list[np.ndarray] = dataclasses.field(default_factory=list)
 
 
@@ -256,15 +257,16 @@ class EntityRegistry:
 
         if ent.state == EntityState.STABILIZING:
             if now - ent.last_modified >= self._stable_time_threshold:
-                self._dispatch_for_inference(ent, frame, now)
+                self._dispatch_for_inference(ent, grp, frame, now)
 
-    def _dispatch_for_inference(self, ent: SemanticEntity, frame, now):
+    def _dispatch_for_inference(self, ent: SemanticEntity, grp: EntityGroup, frame, now):
         """Capture crop and transition STABILIZING → INFERRING."""
         x1, y1, x2, y2 = ent.bbox
         crop = frame[y1:y2, x1:x2]
         if crop.size > 0:
             ent.last_stable_crop = crop.copy()
             ent.last_stable_center = (ent.bbox[:2] + ent.bbox[2:]) / 2.0
+            ent.last_group = grp
             ent.state, ent.last_modified = EntityState.INFERRING, now
             log.debug("Entity %d → INFERRING", ent.id)
 

@@ -27,7 +27,7 @@ import numpy as np
 import capture
 from anchor_service.detector import AnchorDetector
 from anchor_service.entity_registry import EntityRegistry, EntityState
-from anchor_service.grouper import EntityGrouper
+from anchor_service.grouper import EntityGrouper, get_masked_crop
 from board_service.board_masker import BoardMasker
 from board_service.person_masker import PersonMasker
 from board_service.reconstructor import BoardReconstructor
@@ -207,9 +207,10 @@ def main() -> None:
             tracker_result = tracker.process(groups, composite)
             # Stage 7 — submit newly dispatched entities to VLM (non-blocking)
             for entity in tracker_result.newly_inferring:
-                if entity.last_stable_crop is not None:
+                if entity.last_group is not None:
+                    masked_crop = get_masked_crop(entity.last_group, composite)
                     pending_ocr[entity.id] = entity
-                    vlm_worker.submit(entity.id, entity.last_stable_crop)
+                    vlm_worker.submit(entity.id, masked_crop)
 
             # Poll VLM results — update ledger and synthesise output files
             for result in vlm_worker.get_results():

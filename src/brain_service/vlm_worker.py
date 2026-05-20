@@ -37,9 +37,11 @@ class VLMResult:
 # Worker process
 # ---------------------------------------------------------------------------
 
+
 def _worker_main(in_q: mp.Queue, out_q: mp.Queue, model_id: str) -> None:
     """GOT-OCR inference loop — runs in a dedicated child process."""
     import logging as _log
+
     _log.basicConfig(level=logging.WARNING)
     log = _log.getLogger(__name__)
 
@@ -54,18 +56,22 @@ def _worker_main(in_q: mp.Queue, out_q: mp.Queue, model_id: str) -> None:
     log.warning("VLMWorker: loading %s on %s …", model_id, device)
 
     processor = AutoProcessor.from_pretrained(model_id)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        dtype=torch.float16,
-        low_cpu_mem_usage=True,
-        use_safetensors=True,
-    ).to(device).eval()
+    model = (
+        AutoModelForCausalLM.from_pretrained(
+            model_id,
+            dtype=torch.float16,
+            low_cpu_mem_usage=True,
+            use_safetensors=True,
+        )
+        .to(device)
+        .eval()
+    )
 
     log.warning("VLMWorker: model ready on %s", device)
 
     while True:
-        item = in_q.get()   # block until work arrives
-        if item is None:    # shutdown sentinel
+        item = in_q.get()  # block until work arrives
+        if item is None:  # shutdown sentinel
             break
 
         region_id, crop = item
@@ -92,7 +98,9 @@ def _worker_main(in_q: mp.Queue, out_q: mp.Queue, model_id: str) -> None:
 
             log.warning(
                 "VLMWorker: region %d → %d chars: %r",
-                region_id, len(text), text[:60],
+                region_id,
+                len(text),
+                text[:60],
             )
         except Exception:
             log.exception("VLMWorker: inference failed for region %d", region_id)
@@ -100,12 +108,15 @@ def _worker_main(in_q: mp.Queue, out_q: mp.Queue, model_id: str) -> None:
         try:
             out_q.put_nowait(VLMResult(region_id=region_id, text=text))
         except Exception:
-            log.warning("VLMWorker: output queue full, result for region %d dropped", region_id)
+            log.warning(
+                "VLMWorker: output queue full, result for region %d dropped", region_id
+            )
 
 
 def _mps_available() -> bool:
     try:
         import torch
+
         return torch.backends.mps.is_available()
     except Exception:
         return False
@@ -114,6 +125,7 @@ def _mps_available() -> bool:
 # ---------------------------------------------------------------------------
 # Public class
 # ---------------------------------------------------------------------------
+
 
 class VLMWorker:
     """Non-blocking GOT-OCR 2.0 worker.

@@ -1,14 +1,10 @@
 """Stage 6 — Hierarchical Entity Grouper.
 
 Clusters line-level Spatial Anchors from Stage 5 into Semantic Entities using
-spatial proximity. Lines that are vertically close and horizontally aligned are
-merged into one EntityGroup with a single merged bounding box.
+pairwise Union-Find clustering to robustly handle multi-column layouts.
 
-This replaces the one-anchor-per-Detection mapping in the pipeline. Each
-EntityGroup becomes one Detection fed to the region tracker, so OCR crops
-cover full multi-line blocks rather than individual lines.
-
-Stateless and synchronous — runs in the main process in O(N log N).
+Includes a visual masking utility to white-out any unrelated text that falls
+inside a group's expanded axis-aligned bounding box.
 """
 
 from __future__ import annotations
@@ -22,94 +18,176 @@ from anchor_service.detector import Anchor
 
 @dataclass
 class EntityGroup:
-    anchors: list[Anchor]  # constituent anchors, top-to-bottom
+    anchors: list[Anchor]  # constituent anchors
     bbox: np.ndarray  # (4,) int32: min(x1), min(y1), max(x2), max(y2)
     confidence: float  # max confidence across constituent anchors
+
+
+class UnionFind:
+    """Lightweight Disjoint-Set Forest for pairwise clustering."""
+
+    def __init__(self, n: int) -> None:
+        self.parent = list(range(n))
+
+    def find(self, i: int) -> int:
+        if self.parent[i] == i:
+            return i
+        self.parent[i] = self.find(self.parent[i])
+        return self.parent[i]
+
+    def union(self, i: int, j: int) -> bool:
+        root_i = self.find(i)
+        root_j = self.find(j)
+        if root_i != root_j:
+            self.parent[root_i] = root_j
+            return True
+        return False
 
 
 class EntityGrouper:
     """Stateless spatial proximity grouper.
 
-    Two anchors merge into the same entity when:
-      - vertical gap < max_v_gap × mean line-height of the current group
-      - horizontal overlap > min_h_overlap fraction of the incoming anchor width
-
-    Both conditions must hold — this prevents merging horizontally separated
-    columns that happen to sit at the same vertical position.
+    Clusters line anchors based on pairwise vertical adjacency and horizontal overlap.
     """
 
     def __init__(
         self,
-        max_v_gap: float = 0.8,
-        min_h_overlap: float = 0.2,
+        v_expand: float = 0.5,  # vertical padding each side, as fraction of mean line height
+        h_expand: float = 0.1,  # horizontal padding, fraction of mean line width
+        iou_threshold: float = 0.02,  # min IoU of expanded bboxes to merge
     ) -> None:
-        self._max_v_gap = max_v_gap
-        self._min_h_overlap = min_h_overlap
+        self._v_expand = v_expand
+        self._h_expand = h_expand
+        self._iou_threshold = iou_threshold
 
     def process(self, anchors: list[Anchor]) -> list[EntityGroup]:
-        """Cluster *anchors* into EntityGroups and return them top-to-bottom.
+        """Cluster *anchors* into EntityGroups using Union-Find clustering.
 
         Args:
             anchors: Detected anchors from Stage 5 (any order).
 
         Returns:
-            List of EntityGroup objects, each spanning one Semantic Entity.
-            Empty list when *anchors* is empty.
+            List of EntityGroup objects, sorted top-to-bottom.
         """
         if not anchors:
             return []
 
-        # Sort top-to-bottom by vertical centre
-        sorted_anchors = sorted(anchors, key=lambda a: (a.bbox[1] + a.bbox[3]) / 2.0)
+        n = len(anchors)
+        uf = UnionFind(n)
 
-        groups: list[list[Anchor]] = [[sorted_anchors[0]]]
+        # Pairwise comparison to find connected components
+        for i in range(n):
+            for j in range(i + 1, n):
+                if self._should_merge(anchors[i], anchors[j]):
+                    uf.union(i, j)
 
-        for anchor in sorted_anchors[1:]:
-            x1, y1, x2, y2 = anchor.bbox.tolist()
+        # Assemble the disjoint sets
+        sets: dict[int, list[Anchor]] = {}
+        for i in range(n):
+            root = uf.find(i)
+            if root not in sets:
+                sets[root] = []
+            sets[root].append(anchors[i])
 
-            best_idx: int | None = None
-            best_gap: float = float("inf")
+        # Build EntityGroups
+        groups = []
+        for group_anchors in sets.values():
+            groups.append(self._make_group(group_anchors))
 
-            for i, current in enumerate(groups):
-                gx1 = min(a.bbox[0] for a in current)
-                gy2 = max(a.bbox[3] for a in current)
-                gx2 = max(a.bbox[2] for a in current)
-                mean_h = float(np.mean([a.bbox[3] - a.bbox[1] for a in current]))
+        # Sort groups top-to-bottom by vertical centre
+        return sorted(groups, key=lambda g: (g.bbox[1] + g.bbox[3]) / 2.0)
 
-                vertical_gap = y1 - gy2
-                h_overlap = max(0, min(x2, gx2) - max(x1, gx1))
-                anchor_width = x2 - x1 + 1e-6
-                h_overlap_ratio = h_overlap / anchor_width
+    def _should_merge(self, a: Anchor, b: Anchor) -> bool:
+        """Return True if two anchors should be merged into the same semantic group."""
+        ax1, ay1, ax2, ay2 = a.bbox.tolist()
+        bx1, by1, bx2, by2 = b.bbox.tolist()
 
-                if (
-                    vertical_gap < self._max_v_gap * mean_h
-                    and h_overlap_ratio > self._min_h_overlap
-                    and vertical_gap < best_gap
-                ):
-                    best_idx = i
-                    best_gap = vertical_gap
+        ae = (
+            ax1 - self._h_expand * (ax2 - ax1),
+            ay1 - self._v_expand * (ay2 - ay1),
+            ax2 + self._h_expand * (ax2 - ax1),
+            ay2 + self._v_expand * (ay2 - ay1),
+        )
+        be = (
+            bx1 - self._h_expand * (bx2 - bx1),
+            by1 - self._v_expand * (by2 - by1),
+            bx2 + self._h_expand * (bx2 - bx1),
+            by2 + self._v_expand * (by2 - by1),
+        )
 
-            if best_idx is not None:
-                groups[best_idx].append(anchor)
-            else:
-                groups.append([anchor])
+        ix1, iy1 = max(ae[0], be[0]), max(ae[1], be[1])
+        ix2, iy2 = min(ae[2], be[2]), min(ae[3], be[3])
+        inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+        if inter == 0.0:
+            return False
+        area_a = (ae[2] - ae[0]) * (ae[3] - ae[1])
+        area_b = (be[2] - be[0]) * (be[3] - be[1])
+        return inter / (area_a + area_b - inter) > self._iou_threshold
 
-        return [_make_group(g) for g in groups]
+    def _make_group(self, group_anchors: list[Anchor]) -> EntityGroup:
+        bboxes = np.stack([a.bbox for a in group_anchors])
+        merged = np.array(
+            [
+                bboxes[:, 0].min(),
+                bboxes[:, 1].min(),
+                bboxes[:, 2].max(),
+                bboxes[:, 3].max(),
+            ],
+            dtype=np.int32,
+        )
+        return EntityGroup(
+            anchors=group_anchors,
+            bbox=merged,
+            confidence=float(max(a.confidence for a in group_anchors)),
+        )
 
 
-def _make_group(anchors: list[Anchor]) -> EntityGroup:
-    bboxes = np.stack([a.bbox for a in anchors])
-    merged = np.array(
-        [
-            bboxes[:, 0].min(),
-            bboxes[:, 1].min(),
-            bboxes[:, 2].max(),
-            bboxes[:, 3].max(),
-        ],
-        dtype=np.int32,
-    )
-    return EntityGroup(
-        anchors=anchors,
-        bbox=merged,
-        confidence=float(max(a.confidence for a in anchors)),
-    )
+# ---------------------------------------------------------------------------
+# SOTA Visual Masking Helper
+# ---------------------------------------------------------------------------
+
+
+def get_masked_crop(
+    group: EntityGroup,
+    full_image: np.ndarray,
+    bg_color: tuple[int, int, int] = (255, 255, 255),
+) -> np.ndarray:
+    """Create a crop containing ONLY the pixels of this group's constituent anchors.
+
+    Everything else inside the group's rectangular bounding box is guaranteed
+    to be pure whiteboard background. No external anchors list is needed.
+    """
+    gx1, gy1, gx2, gy2 = group.bbox.tolist()
+    h, w = full_image.shape[:2]
+
+    # 1. Create a blank, pure-white canvas of the exact group bounding box size
+    crop_h = max(1, int(gy2 - gy1))
+    crop_w = max(1, int(gx2 - gx1))
+    crop = np.full((crop_h, crop_w, 3), bg_color, dtype=np.uint8)
+
+    # 2. Copy ONLY our own group's anchors onto the canvas
+    for anchor in group.anchors:
+        ax1, ay1, ax2, ay2 = anchor.bbox.tolist()
+
+        # Clamp boundaries to the physical image limits
+        ax1_c = max(0, min(w, int(ax1)))
+        ay1_c = max(0, min(h, int(ay1)))
+        ax2_c = max(0, min(w, int(ax2)))
+        ay2_c = max(0, min(h, int(ay2)))
+
+        if ax2_c <= ax1_c or ay2_c <= ay1_c:
+            continue
+
+        # Extract the precise ink pixels of this line anchor
+        ink_slice = full_image[ay1_c:ay2_c, ax1_c:ax2_c]
+
+        # Calculate relative coordinates on the crop canvas
+        lx1 = int(ax1_c - gx1)
+        ly1 = int(ay1_c - gy1)
+        lx2 = lx1 + ink_slice.shape[1]
+        ly2 = ly1 + ink_slice.shape[0]
+
+        # Copy the ink directly onto the clean white canvas
+        crop[ly1:ly2, lx1:lx2] = ink_slice
+
+    return crop
