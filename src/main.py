@@ -32,9 +32,9 @@ from board_service.board_masker import BoardMasker
 from board_service.person_masker import PersonMasker
 from board_service.reconstructor import BoardReconstructor
 from board_service.rectifier import Rectifier
-from brain_service.transcriber import Transcriber
 from ledger_service import assembly
 from ledger_service.registry import LedgerRegistry
+from transcriber_service.transcriber import MockTranscriber
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
@@ -43,13 +43,13 @@ log = logging.getLogger(__name__)
 # Debug drawing helpers
 # ---------------------------------------------------------------------------
 
-_LABELS = ["TL", "TR", "BR", "BL"]
+_CORNER_LABELS = ["TL", "TR", "BR", "BL"]
 
-_STATE_COLOURS = {
+_STATE_COLORS = {
     EntityState.STABILIZING: (0, 165, 255),
-    EntityState.INFERRING:   (180, 255, 180),
-    EntityState.ACTIVE:      (0, 200, 0),
-    EntityState.ERASED:      (0, 0, 255),
+    EntityState.INFERRING:   (0, 200, 255),
+    EntityState.ACTIVE:      (0, 230, 0),
+    EntityState.ERASED:      (0, 0, 220),
 }
 
 
@@ -61,7 +61,6 @@ def _apply_mask_overlay(frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
 
 
 def _draw_corners(frame: np.ndarray, corners: np.ndarray | None) -> np.ndarray:
-    """Draw the detected board quad and corner labels on *frame*."""
     if corners is None:
         cv2.putText(
             frame,
@@ -71,53 +70,58 @@ def _draw_corners(frame: np.ndarray, corners: np.ndarray | None) -> np.ndarray:
             1.2,
             (0, 180, 220),
             2,
+            cv2.LINE_AA,
         )
         return frame
 
     pts = corners.astype(np.int32)
     cv2.polylines(
-        frame, [pts.reshape(-1, 1, 2)], isClosed=True, color=(0, 0, 220), thickness=3
+        frame, [pts.reshape(-1, 1, 2)], isClosed=True, color=(0, 0, 220), thickness=3,
+        lineType=cv2.LINE_AA,
     )
     for i, (x, y) in enumerate(pts):
-        cv2.circle(frame, (int(x), int(y)), 12, (0, 200, 0), -1)
+        cv2.circle(frame, (int(x), int(y)), 12, (0, 200, 0), -1, cv2.LINE_AA)
         cv2.putText(
             frame,
-            _LABELS[i],
+            _CORNER_LABELS[i],
             (int(x) + 14, int(y) - 10),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.8,
             (255, 255, 255),
             2,
+            cv2.LINE_AA,
         )
     return frame
 
 
 def _draw_anchors(frame: np.ndarray, anchors: list) -> np.ndarray:
-    """Draw anchor bounding boxes on *frame*."""
-    out = frame.copy()
+    overlay = frame.copy()
     for a in anchors:
         x1, y1, x2, y2 = a.bbox
-        cv2.rectangle(out, (x1, y1), (x2, y2), (255, 150, 0), 1)
-    return out
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), (255, 150, 0), -1)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 150, 0), 1, cv2.LINE_AA)
+    cv2.addWeighted(overlay, 0.15, frame, 0.85, 0, frame)
+    return frame
 
 
 def _draw_entities(frame: np.ndarray, regions: list) -> np.ndarray:
-    """Draw tracked regions with ID, state, confidence, and OCR text."""
-    out = frame.copy()
+    overlay = frame.copy()
     for reg in regions:
         x1, y1, x2, y2 = reg.bbox
-        colour = _STATE_COLOURS.get(reg.state, (255, 255, 255))
-        thickness = 1 if reg.state == EntityState.ERASED else 2
-        cv2.rectangle(out, (x1, y1), (x2, y2), colour, thickness)
+        color = _STATE_COLORS.get(reg.state, (255, 255, 255))
 
-        ocr_tag = "OK" if reg.ocr_text else "..."
-        label = f"ID:{reg.id} {reg.state.value} {reg.confidence:.2f} [{ocr_tag}]"
-        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
-        cv2.rectangle(out, (x1, y1), (x1 + tw + 4, y1 + th + 6), colour, -1)
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
+
+        text_content = (reg.ocr_text or "")[:30]
+        display_label = f"[{reg.state.value}] {text_content}"
+        (tw, th), _ = cv2.getTextSize(display_label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+
+        cv2.rectangle(frame, (x1, y1 - th - 6), (x1 + tw + 6, y1), color, -1)
         cv2.putText(
-            out,
-            label,
-            (x1 + 2, y1 + th + 2),
+            frame,
+            display_label,
+            (x1 + 3, y1 - 4),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.4,
             (0, 0, 0),
@@ -125,19 +129,8 @@ def _draw_entities(frame: np.ndarray, regions: list) -> np.ndarray:
             cv2.LINE_AA,
         )
 
-        if reg.ocr_text:
-            for i, line in enumerate(reg.ocr_text.splitlines()):
-                cv2.putText(
-                    out,
-                    line[:80],
-                    (x1, y2 + 14 + i * 14),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.38,
-                    (0, 255, 0),
-                    1,
-                    cv2.LINE_AA,
-                )
-    return out
+    cv2.addWeighted(overlay, 0.25, frame, 0.75, 0, frame)
+    return frame
 
 
 # ---------------------------------------------------------------------------
@@ -176,12 +169,13 @@ def main() -> None:
     anchor_detector = AnchorDetector()
     grouper = EntityGrouper()
     entity_registry = EntityRegistry()
-    transcriber = Transcriber()
+    transcriber = MockTranscriber()
     ledger = LedgerRegistry()
     pending_ocr: dict[int, object] = {}  # entity_id → SemanticEntity, awaiting VLM
     log.info("Ready. Press q or Ctrl-C to stop.")
 
     show_corners = show_mask = show_text_lines = show_tracker = True
+    frame_count = 0
 
     try:
         while True:
@@ -189,6 +183,8 @@ def main() -> None:
             if frame is None:
                 log.info("End of stream.")
                 break
+
+            frame_count += 1
 
             # Stage 1 — board mask (SAM, async, ~10s cadence)
             board_mask = board_masker.segment(frame)
@@ -232,6 +228,16 @@ def main() -> None:
                     display = _apply_mask_overlay(display, person_mask)
                 if show_corners and rectifier.cached_corners is not None:
                     display = _draw_corners(display, rectifier.cached_corners)
+                cv2.putText(
+                    display,
+                    f"Frame: {frame_count} | STAGE 1+2: INPUT TRACKING",
+                    (20, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 255, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
                 cv2.imshow("raw", display)
 
                 board_display = composite.copy()

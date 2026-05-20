@@ -59,8 +59,7 @@ def _are_corners_shifted(
 
     def _area(p: np.ndarray) -> float:
         return 0.5 * abs(
-            np.dot(p[:, 0], np.roll(p[:, 1], 1))
-            - np.dot(p[:, 1], np.roll(p[:, 0], 1))
+            np.dot(p[:, 0], np.roll(p[:, 1], 1)) - np.dot(p[:, 1], np.roll(p[:, 0], 1))
         )
 
     def _ratio(p: np.ndarray) -> float:
@@ -132,7 +131,6 @@ class Rectifier:
         w, h = self._output_size
 
         if self._homography is None:
-            logger.debug("No board detected yet — returning resized frame and mask")
             return (
                 cv2.resize(frame, (w, h)),
                 cv2.resize(person_mask, (w, h), interpolation=cv2.INTER_NEAREST),
