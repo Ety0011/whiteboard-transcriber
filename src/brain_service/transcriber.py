@@ -131,6 +131,30 @@ def _mps_available() -> bool:
 # ---------------------------------------------------------------------------
 
 
+class MockTranscriber:
+    """Zero-RAM mock — no subprocess, no model, returns placeholder immediately.
+
+    Drop-in replacement for Transcriber during development or when the VLM
+    memory budget is needed by other pipeline stages.
+    """
+
+    def __init__(self) -> None:
+        self._pending: list[TranscriptionResult] = []
+        logger.info("MockTranscriber active — GOT-OCR 2.0 not loaded")
+
+    def submit(self, entity_id: int, crop: np.ndarray) -> None:
+        self._pending.append(
+            TranscriptionResult(entity_id=entity_id, text="[mock OCR]")
+        )
+
+    def get_results(self) -> list[TranscriptionResult]:
+        results, self._pending = self._pending, []
+        return results
+
+    def shutdown(self) -> None:
+        pass
+
+
 class Transcriber:
     """Non-blocking GOT-OCR 2.0 transcriber.
 
