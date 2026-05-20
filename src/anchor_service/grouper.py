@@ -52,12 +52,15 @@ class EntityGrouper:
 
     def __init__(
         self,
-        vertical_expand_ratio: float = 0.5,    # fraction of line height, each side
-        horizontal_expand_ratio: float = 0.1,  # horizontal padding, fraction of line width
-        iou_threshold: float = 0.02,  # min IoU of expanded bboxes to merge
+        # px to extend each line up/down before IoU test — bridges inter-line gaps
+        vertical_expand_px: float = 20.0,
+        # px to extend each line left/right before IoU test
+        horizontal_expand_px: float = 0.0,
+        # min IoU to merge two (expanded) anchors
+        iou_threshold: float = 0.02,
     ) -> None:
-        self._vertical_expand_ratio = vertical_expand_ratio
-        self._horizontal_expand_ratio = horizontal_expand_ratio
+        self._vertical_expand_px = vertical_expand_px
+        self._horizontal_expand_px = horizontal_expand_px
         self._iou_threshold = iou_threshold
 
     def group(self, anchors: list[Anchor]) -> list[EntityGroup]:
@@ -102,26 +105,22 @@ class EntityGrouper:
         ax1, ay1, ax2, ay2 = a.bbox.tolist()
         bx1, by1, bx2, by2 = b.bbox.tolist()
 
-        a_expanded = (
-            ax1 - self._horizontal_expand_ratio * (ax2 - ax1),
-            ay1 - self._vertical_expand_ratio * (ay2 - ay1),
-            ax2 + self._horizontal_expand_ratio * (ax2 - ax1),
-            ay2 + self._vertical_expand_ratio * (ay2 - ay1),
-        )
-        b_expanded = (
-            bx1 - self._horizontal_expand_ratio * (bx2 - bx1),
-            by1 - self._vertical_expand_ratio * (by2 - by1),
-            bx2 + self._horizontal_expand_ratio * (bx2 - bx1),
-            by2 + self._vertical_expand_ratio * (by2 - by1),
-        )
+        ax1e = ax1 - self._horizontal_expand_px
+        ax2e = ax2 + self._horizontal_expand_px
+        ay1e = ay1 - self._vertical_expand_px
+        ay2e = ay2 + self._vertical_expand_px
+        bx1e = bx1 - self._horizontal_expand_px
+        bx2e = bx2 + self._horizontal_expand_px
+        by1e = by1 - self._vertical_expand_px
+        by2e = by2 + self._vertical_expand_px
 
-        ix1, iy1 = max(a_expanded[0], b_expanded[0]), max(a_expanded[1], b_expanded[1])
-        ix2, iy2 = min(a_expanded[2], b_expanded[2]), min(a_expanded[3], b_expanded[3])
+        ix1, iy1 = max(ax1e, bx1e), max(ay1e, by1e)
+        ix2, iy2 = min(ax2e, bx2e), min(ay2e, by2e)
         inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
         if inter == 0.0:
             return False
-        area_a = (a_expanded[2] - a_expanded[0]) * (a_expanded[3] - a_expanded[1])
-        area_b = (b_expanded[2] - b_expanded[0]) * (b_expanded[3] - b_expanded[1])
+        area_a = (ax2e - ax1e) * (ay2e - ay1e)
+        area_b = (bx2e - bx1e) * (by2e - by1e)
         return inter / (area_a + area_b - inter) > self._iou_threshold
 
     def _make_group(self, group_anchors: list[Anchor]) -> EntityGroup:
