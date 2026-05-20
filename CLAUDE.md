@@ -16,7 +16,7 @@ This system is not a scanner; it is a **Lecture Historian**. It captures the **e
 | :--- | :--- | :--- |
 | **Board Sensing** | **SAM 3.1 (Semantic Text Prompt)** | Async board region segmentation via `text=["whiteboard"]` — board mask drives homography in Stage 3. |
 | **Person Sensing** | **MediaPipe Selfie Segmenter** | Sync per-frame person mask — warped to rectified space and used by Stage 4. |
-| **Neural Surface** | **Spatial-Glare EMA** | Distance-weighted EMA composite + spatial glare suppression (brightness + Laplacian). |
+| **Neural Surface** | **Distance-Weighted EMA** | Per-pixel learning rate scaled by distance from the person mask — freezes occluded pixels, updates visible ones. |
 | **Spatial Anchors** | **PaddleOCR PP-OCRv5_server_det** | Detects line-level `TEXT_LINE` anchors. |
 | **Grouping** | **Union-Find IoU Clustering** | Clusters anchors into "Semantic Entities" via pairwise IoU on expanded bboxes. |
 | **The Brain** | **GOT-OCR 2.0 (Masked Crop)** | High-fidelity VLM OCR/LaTeX on per-entity masked crops. float16 via HuggingFace Transformers on MPS. |
@@ -59,9 +59,7 @@ Owns all geometry for the pipeline. Each time a new board mask arrives from Stag
 
 Maintains a **Clean Board Composite** — the "Gold Standard" image fed to the VLM.
 
-**Two-layer approach:**
-1. **Distance-Weighted EMA (base layer):** `lr(x) = max_lr × (dist(x) / falloff_distance) ^ power`. Pixels under/near the person mask have lr≈0 and are frozen at their last known composite value, preserving written content under occlusions.
-2. **Spatial Glare Detection (suppression layer):** Glare pixels are identified per-frame as `brightness ≥ 248 AND |Laplacian| < 15`. They are excluded from the EMA update (composite retains the pre-glare value) and inpainted using `cv2.inpaint` (Telea, zero-VRAM classical CPU inpainting).
+**Distance-Weighted EMA:** `lr(x) = max_lr × (dist(x) / falloff_distance) ^ power`. Pixels under/near the person mask have lr≈0 and are frozen at their last known composite value, preserving written content under occlusions.
 
 ### Stage 5: Anchor Discovery (PaddleOCR PP-OCRv5_server_det) — Async
 
@@ -115,13 +113,13 @@ src/
 │   ├── board_masker.py     # Stage 1: SAM 3.1 (async) — board region mask
 │   ├── person_masker.py    # Stage 2: MediaPipe (sync) — person mask per frame
 │   ├── rectifier.py        # Stage 3: Corner extraction + H cache + warp to 1920×1080
-│   └── reconstructor.py    # Stage 4: Distance-weighted EMA + spatial glare suppression
+│   └── reconstructor.py    # Stage 4: Distance-weighted EMA (person mask occlusion handling)
 ├── anchor_service/
 │   ├── detector.py         # Stage 5: PaddleOCR PP-OCRv5_server_det (async) — TEXT_LINE anchors
 │   ├── grouper.py          # Stage 6: Union-Find IoU clustering + masked crop helper
 │   └── entity_registry.py  # Entity lifecycle manager + state machine (STABILIZING → ERASED)
-├── brain_service/
-│   └── transcriber.py      # Stage 7: GOT-OCR 2.0 (async HF process) + _preprocess_crop (CLAHE)
+├── transcriber_service/
+│   └── transcriber.py      # Stage 7: GOT-OCR 2.0 (async HF process) + MockTranscriber + _preprocess_crop (CLAHE)
 └── ledger_service/
     ├── registry.py         # Append-only session ledger (LedgerRegistry)
     └── assembly.py         # Stage 8: live.md + lecture_history.md synthesis
@@ -148,7 +146,5 @@ src/
 ## 8. Critical Warnings
 
 **VRAM Contention.** If unified memory usage approaches 22GB, reduce GOT-OCR 2.0 inference frequency before degrading SAM 3.1. Tracking integrity takes priority over OCR throughput.
-
-**Ghosting Trap.** Low-quality erasers leave faint residue. Stage 4's glare detector (`|Laplacian| < 15`) must not confuse faint eraser smudge with glare — both are low-frequency. If the brightness threshold (≥ 248) is set too low, smudge gets treated as glare and inpainted, creating phantom clean regions. Tune brightness threshold upward if ghosting occurs.
 
 **Coordinate Drift.** Homography recompute triggers when ≥2 corners shift >50px or the new quad is larger than the cached one (area ratio ≥0.98). Allowing drift to accumulate will misalign anchor coordinates with the VLM crops.
