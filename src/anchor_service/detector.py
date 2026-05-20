@@ -1,9 +1,11 @@
-"""Stage 5 — Anchor Discovery (PaddleOCR PP-OCRv5_server_det).
+"""Stage 5 — Layout Discovery (PaddleOCR-VL-1.5 / MLX Native).
 
-Detects line-level Spatial Anchors on the clean board composite produced by
-Stage 4. All anchors are classified as TEXT_LINE (MATH_UNIT support deferred).
+Detects all text regions on the clean board composite via the native
+"Spotting:" task of PaddlePaddle/PaddleOCR-VL-1.5. Each detected polygon
+is wrapped into a tight axis-aligned LayoutRegion (x1,y1,x2,y2) in the
+rectified 1920×1080 coordinate space.
 
-Model: PaddleOCR PP-OCRv5_server_det.
+Model: mlx-community/PaddleOCR-VL-1.5-8bit (~1.1GB, bfloat16, Apple Silicon).
 
 Runs as a dedicated multiprocessing.Process (non-blocking). detect() submits
 the latest composite via a maxsize=1 queue and returns the most recent
@@ -15,115 +17,172 @@ from __future__ import annotations
 import enum
 import logging
 import multiprocessing as mp
+import re
 from dataclasses import dataclass, field
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_BOX_THRESH = 0.6
-_DEFAULT_UNCLIP_RATIO = 1.2
+_MODEL_ID = "mlx-community/PaddleOCR-VL-1.5-8bit"
+_IMG_H, _IMG_W = 1080, 1920
 
 
 # ---------------------------------------------------------------------------
 # Public types
 # ---------------------------------------------------------------------------
 
+
 class AnchorType(enum.Enum):
-    TEXT_LINE = "TEXT_LINE"
+    TEXT_CLUSTER = "TEXT_CLUSTER"
+    MATH_BLOCK = "MATH_BLOCK"
+    DIAGRAM = "DIAGRAM"
 
 
 @dataclass
-class Anchor:
-    bbox: np.ndarray   # (4,) int32: x1, y1, x2, y2 in rectified 1920×1080 space
+class LayoutRegion:
+    bbox: np.ndarray  # (4,) int32: x1, y1, x2, y2 — rectified 1920×1080
+    raw_polygon: np.ndarray | None  # (N, 2) int32: absolute polygon vertices
     confidence: float
     anchor_type: AnchorType
+    label: str  # canonical label ("TEXT_CLUSTER" etc.)
+    text: str  # raw layout text content string
 
 
 @dataclass
 class DetectorResult:
-    anchors: list[Anchor] = field(default_factory=list)
+    regions: list[LayoutRegion] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
-# Helpers (ported from text_detector.py)
+# Helpers
 # ---------------------------------------------------------------------------
 
-def _extract_polys(raw_results: list) -> list[tuple[list, float]]:
-    """Extract (polygon, score) pairs from raw TextDetection output."""
-    if not raw_results:
-        return []
-    results = []
-    for result in raw_results:
-        polys = result.get("dt_polys", [])
-        scores = result.get("dt_scores", [1.0] * len(polys))
-        for poly, score in zip(polys, scores):
-            results.append(
-                ([[float(pt[0]), float(pt[1])] for pt in poly], float(score))
-            )
-    return results
 
+def parse_spotting_output(raw_text: str, h: int, w: int) -> list[LayoutRegion]:
+    """Parse coordinate tokens from PaddleOCR-VL-1.5 matching [X, Y] format."""
+    regions: list[LayoutRegion] = []
+    tokens_pattern = re.compile(r"((?:<\|LOC_\d+\|>)+)")
+    parts = tokens_pattern.split(raw_text)
 
-def _polygon_to_bbox(polygon: list, img_h: int, img_w: int) -> np.ndarray:
-    """Convert polygon to axis-aligned bbox clamped to image bounds."""
-    pts = np.array(polygon, dtype=np.float32)
-    x1 = int(np.clip(pts[:, 0].min(), 0, img_w))
-    y1 = int(np.clip(pts[:, 1].min(), 0, img_h))
-    x2 = int(np.clip(pts[:, 0].max(), 0, img_w))
-    y2 = int(np.clip(pts[:, 1].max(), 0, img_h))
-    return np.array([x1, y1, x2, y2], dtype=np.int32)
+    for i in range(0, len(parts) - 1, 2):
+        content = parts[i].strip()
+        loc_block = parts[i + 1]
 
+        if not content or not loc_block:
+            continue
 
-def _raw_to_anchors(raw: list, h: int, w: int) -> list[Anchor]:
-    anchors = []
-    for poly, score in _extract_polys(raw):
-        bbox = _polygon_to_bbox(poly, h, w)
-        x1, y1, x2, y2 = bbox
+        coords = [int(val) for val in re.findall(r"\d+", loc_block)]
+        if len(coords) < 6 or len(coords) % 2 != 0:
+            continue
+
+        poly_pts = []
+        for j in range(0, len(coords), 2):
+            token_x, token_y = coords[j], coords[j + 1]
+
+            # Direct linear percentage mapping to high-resolution model workspace coordinates
+            abs_x = int((token_x / 1000.0) * w)
+            abs_y = int((token_y / 1000.0) * h)
+
+            abs_x = max(0, min(w, abs_x))
+            abs_y = max(0, min(h, abs_y))
+            poly_pts.append([abs_x, abs_y])
+
+        raw_polygon = np.array(poly_pts, dtype=np.int32)
+
+        x1 = int(np.clip(raw_polygon[:, 0].min(), 0, w))
+        y1 = int(np.clip(raw_polygon[:, 1].min(), 0, h))
+        x2 = int(np.clip(raw_polygon[:, 0].max(), 0, w))
+        y2 = int(np.clip(raw_polygon[:, 1].max(), 0, h))
+
         if x2 <= x1 or y2 <= y1:
             continue
-        anchors.append(Anchor(bbox=bbox, confidence=score, anchor_type=AnchorType.TEXT_LINE))
-    return anchors
+
+        bbox = np.array([x1, y1, x2, y2], dtype=np.int32)
+
+        if "$$" in content or "\\(" in content or "e^{" in content or "=" in content:
+            anchor_type = AnchorType.MATH_BLOCK
+        elif len(content) < 3 and not content.isalnum():
+            anchor_type = AnchorType.DIAGRAM
+        else:
+            anchor_type = AnchorType.TEXT_CLUSTER
+
+        regions.append(
+            LayoutRegion(
+                bbox=bbox,
+                raw_polygon=raw_polygon,
+                confidence=1.0,
+                anchor_type=anchor_type,
+                label=anchor_type.value,
+                text=content,
+            )
+        )
+
+    return regions
 
 
 # ---------------------------------------------------------------------------
 # Worker process
 # ---------------------------------------------------------------------------
 
-def _worker_main(
-    in_q: mp.Queue,
-    out_q: mp.Queue,
-    box_thresh: float,
-    unclip_ratio: float,
-) -> None:
-    """PaddleOCR text detection loop — runs in a dedicated child process."""
+
+def _worker_main(in_q: mp.Queue, out_q: mp.Queue) -> None:
+    """PaddleOCR-VL-1.5 spotting loop — runs natively on Apple Silicon via MLX."""
     import logging as _log
+
     _log.basicConfig(level=logging.WARNING)
     log = _log.getLogger(__name__)
 
-    from paddleocr import TextDetection
+    from mlx_vlm import generate, load
+    from mlx_vlm.prompt_utils import apply_chat_template
+    from PIL import Image
 
-    detector = TextDetection(
-        model_name="PP-OCRv5_server_det",
-        box_thresh=box_thresh,
-        unclip_ratio=unclip_ratio,
+    log.warning("AnchorDetector: Loading native MLX component: %s", _MODEL_ID)
+    model, processor = load(_MODEL_ID)
+    config = model.config
+    log.warning(
+        "AnchorDetector: MLX pipeline initialized successfully on Apple Silicon."
     )
-    log.warning("AnchorDetector: PP-OCRv5_server_det ready")
 
     while True:
-        composite = in_q.get()   # block until work arrives
-        if composite is None:    # shutdown sentinel
+        composite = in_q.get()
+        if composite is None:
             break
 
-        anchors: list[Anchor] = []
+        regions: list[LayoutRegion] = []
         try:
-            h, w = composite.shape[:2]
-            raw = detector.predict(composite)
-            anchors = _raw_to_anchors(raw, h, w)
-            log.warning("AnchorDetector: %d TEXT_LINE anchors", len(anchors))
-        except Exception:
-            log.exception("PaddleOCR detection failed")
+            import cv2 as _cv2
 
-        result = DetectorResult(anchors=anchors)
+            h, w = composite.shape[:2]
+            rgb = _cv2.cvtColor(composite, _cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(rgb)
+
+            prompt = "Spotting:"
+            formatted_prompt = apply_chat_template(
+                processor, config, prompt, num_images=1
+            )
+
+            gen_result = generate(
+                model,
+                processor,
+                formatted_prompt,
+                pil_img,
+                max_tokens=512,
+                verbose=False,
+            )
+
+            raw_text = (
+                gen_result.text if hasattr(gen_result, "text") else str(gen_result)
+            )
+            raw_text = raw_text.strip()
+
+            regions = parse_spotting_output(raw_text, h, w)
+        except Exception:
+            log.exception(
+                "AnchorDetector: MLX inference pass dropped frame due to failure"
+            )
+
+        result = DetectorResult(regions=regions)
         try:
             out_q.get_nowait()
         except Exception:
@@ -138,26 +197,23 @@ def _worker_main(
 # Public class
 # ---------------------------------------------------------------------------
 
+
 class AnchorDetector:
-    """Non-blocking PaddleOCR anchor detector.
+    """Non-blocking PaddleOCR-VL-1.5 visual grounding detector.
 
     Spawns a single child process. detect() always returns immediately with
     the latest DetectorResult (empty until the first inference completes).
     """
 
-    def __init__(
-        self,
-        box_thresh: float = _DEFAULT_BOX_THRESH,
-        unclip_ratio: float = _DEFAULT_UNCLIP_RATIO,
-    ) -> None:
+    def __init__(self) -> None:
         self._cached = DetectorResult()
         self._in_q: mp.Queue = mp.Queue(maxsize=1)
         self._out_q: mp.Queue = mp.Queue(maxsize=1)
         self._worker = mp.Process(
             target=_worker_main,
-            args=(self._in_q, self._out_q, box_thresh, unclip_ratio),
+            args=(self._in_q, self._out_q),
             daemon=True,
-            name="paddle-detect",
+            name="paddleocr-vl",
         )
         self._worker.start()
         logger.info("AnchorDetector worker started (pid=%d)", self._worker.pid)
