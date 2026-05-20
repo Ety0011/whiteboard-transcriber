@@ -20,7 +20,16 @@ import logging
 import multiprocessing as mp
 from dataclasses import dataclass
 
+import cv2
 import numpy as np
+
+
+def _preprocess_crop(bgr: np.ndarray) -> np.ndarray:
+    """CLAHE contrast enhancement on L channel before VLM inference."""
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +54,9 @@ def _worker_main(in_q: mp.Queue, out_q: mp.Queue, model_id: str) -> None:
     _log.basicConfig(level=logging.WARNING)
     log = _log.getLogger(__name__)
 
-    import cv2
     import torch
     from PIL import Image
     from transformers import AutoModelForCausalLM, AutoProcessor
-
-    from brain_service.preprocessor import preprocess_crop
 
     device = "mps" if _mps_available() else "cpu"
     log.warning("VLMWorker: loading %s on %s …", model_id, device)
@@ -77,7 +83,7 @@ def _worker_main(in_q: mp.Queue, out_q: mp.Queue, model_id: str) -> None:
         region_id, crop = item
         text = ""
         try:
-            enhanced = preprocess_crop(crop)
+            enhanced = _preprocess_crop(crop)
             rgb = cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB)
             pil_img = Image.fromarray(rgb)
 
