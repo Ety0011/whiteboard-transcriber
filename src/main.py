@@ -43,8 +43,7 @@ from layout_service import (
     XYCutGrouper,
     YOLODetector,
 )
-from ledger_service import assembly
-from ledger_service.registry import LedgerRegistry
+from ledger import Ledger
 from registry import Registry
 from renderer import Renderer
 from transcriber_service.transcriber import MockTranscriber
@@ -78,9 +77,6 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    output_path = Path("output/whiteboard.md")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
     frame_queue = capture.start(args.source)
 
     log.info("Loading models …")
@@ -105,7 +101,7 @@ def main() -> None:
     discovery = Discovery(factory=factories[args.detector])
     registry = Registry()
     transcriber = MockTranscriber()
-    ledger = LedgerRegistry()
+    ledger = Ledger(output_dir=Path("output"))
     renderer = Renderer()
     pending_ocr: dict[int, object] = {}
     log.info("Ready. Model: %s | Press q or Ctrl-C to stop.", args.detector)
@@ -162,13 +158,11 @@ def main() -> None:
                 if entity is not None:
                     registry.mark_active(entity, result.text, confidence=1.0)
                     ledger.update(entity.id, entity.bbox, result.text)
-                    assembly.synthesize(ledger, output_path.parent)
                     log.debug("Ledger written for entity %d", entity.id)
 
             # Stage 8 — erasure events
             for entity in entity_update.newly_erased:
                 ledger.mark_erased(entity.id)
-                assembly.synthesize(ledger, output_path.parent)
 
             # Render
             renderer.render_board(
