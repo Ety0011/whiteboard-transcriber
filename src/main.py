@@ -48,7 +48,7 @@ from registry import Registry
 from renderer import Renderer
 from transcriber import Transcriber
 from transcriber_service import (
-    GotOcrTranscriber,
+    GotTranscriber,
     MockTranscriber,
     PaddleVLTranscriber,
 )
@@ -82,7 +82,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--transcriber",
-        choices=["mock", "got_ocr", "paddlevl"],
+        choices=["mock", "got", "paddlevl"],
         default="paddlevl",
         help="Stage 7 OCR backend",
     )
@@ -111,7 +111,7 @@ def main() -> None:
 
     transcriber_factories = {
         "mock": MockTranscriber,
-        "got_ocr": GotOcrTranscriber,
+        "got": GotTranscriber,
         "paddlevl": PaddleVLTranscriber,
     }
 

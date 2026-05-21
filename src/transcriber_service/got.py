@@ -23,7 +23,7 @@ def _preprocess_crop(bgr: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
-class GotOcrTranscriber(BaseTranscriber):
+class GotTranscriber(BaseTranscriber):
     """GOT-OCR 2.0 — high-fidelity OCR/LaTeX on whiteboard entity crops."""
 
     def __init__(self, model_id: str = _MODEL_ID) -> None:
@@ -78,6 +78,7 @@ class GotOcrTranscriber(BaseTranscriber):
     def _mps_available() -> bool:
         try:
             import torch
+
             return torch.backends.mps.is_available()
         except Exception:
             return False
