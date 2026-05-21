@@ -170,17 +170,19 @@ class Ledger:
         parts = [f"## {ts}", "", entry.versions[-1].text]
 
         if len(entry.versions) > 1:
+            n = len(entry.versions) - 1
+            label = f"{n} revision" if n == 1 else f"{n} revisions"
             parts.append("")
-            for v in entry.versions[:-1]:
-                lines = v.text.splitlines()
-                if len(lines) <= 1:
-                    escaped = v.text.replace('"', '\\"')
-                    parts.append(f'> *Revised from:* "{escaped}"')
-                else:
-                    parts.append("> *Revised from:*")
-                    parts.append(">")
-                    for line in lines:
-                        parts.append(f"> {line}")
+            parts.append("<details>")
+            parts.append(f"<summary>{label}</summary>")
+            parts.append("")
+            for i, v in enumerate(entry.versions[:-1], start=1):
+                compact = "<br>".join(
+                    line for line in v.text.splitlines() if line.strip()
+                )
+                parts.append(f"{i}. {compact}")
+            parts.append("")
+            parts.append("</details>")
 
         parts.append("")
         return "\n".join(parts)
