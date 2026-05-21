@@ -4,7 +4,7 @@ import numpy as np
 from .base import BaseLayoutDetector
 
 
-class WhiteboardStrokeClusterer(BaseLayoutDetector):
+class ConnectedComponentBFSDetector(BaseLayoutDetector):
     """
     SOTA Whiteboard-specific Layout Engine.
     Uses Connected Component Extraction + BFS Spatial Distance-based Clustering.
@@ -20,7 +20,7 @@ class WhiteboardStrokeClusterer(BaseLayoutDetector):
 
     def load(self):
         print(
-            "[WhiteboardStrokeClusterer] Initializing hardware-accelerated spatial clustering..."
+            "[ConnectedComponentBFSDetector] Initializing spatial clustering..."
         )
 
     def detect(self, frame: np.ndarray) -> list[dict]:

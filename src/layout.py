@@ -10,6 +10,8 @@ Usage:
     python -m src.layout video.mp4 --model paddleocrvl
     python -m src.layout video.mp4 --model hierarchical_union_find
     python -m src.layout video.mp4 --model dbscan
+    python -m src.layout video.mp4 --model hdbscan
+    python -m src.layout video.mp4 --model xycut
 """
 
 import argparse
@@ -22,13 +24,16 @@ from board_service.person_masker import PersonMasker
 from board_service.reconstructor import BoardReconstructor
 from board_service.rectifier import Rectifier
 from layout_service import (
-    DBSCANGroupDetector,
-    HierarchicalGroupDetector,
+    AnchorBasedLayoutDetector,
+    AnisotropicSpatialClusterer,
+    ConnectedComponentBFSDetector,
+    DBSCANClusterer,
     PaddleOCRVLDetector,
     PPDocLayoutV3Detector,
+    RecursiveXYCutClusterer,
     Stage5LayoutDiscovery,
     Stage6TemporalRegistry,
-    WhiteboardStrokeClusterer,
+    UnionFindClusterer,
     YOLOLayoutDetector,
 )
 
@@ -57,6 +62,8 @@ def main() -> None:
             "paddleocrvl",
             "hierarchical_union_find",
             "dbscan",
+            "hdbscan",
+            "xycut",
         ],
         default="hierarchical_union_find",
         help="Stage 5 Layout Discovery backend model to run",
@@ -73,7 +80,7 @@ def main() -> None:
 
     # Instantiate the selected Stage 5 Layout Detector backend
     if args.model == "stroke_cluster":
-        detector = WhiteboardStrokeClusterer()
+        detector = ConnectedComponentBFSDetector()
     elif args.model == "yolo":
         detector = YOLOLayoutDetector()
     elif args.model == "doclayoutv3":
@@ -81,9 +88,13 @@ def main() -> None:
     elif args.model == "paddleocrvl":
         detector = PaddleOCRVLDetector()
     elif args.model == "hierarchical_union_find":
-        detector = HierarchicalGroupDetector()
+        detector = AnchorBasedLayoutDetector(strategy=UnionFindClusterer())
     elif args.model == "dbscan":
-        detector = DBSCANGroupDetector()
+        detector = AnchorBasedLayoutDetector(strategy=DBSCANClusterer())
+    elif args.model == "hdbscan":
+        detector = AnchorBasedLayoutDetector(strategy=AnisotropicSpatialClusterer())
+    elif args.model == "xycut":
+        detector = AnchorBasedLayoutDetector(strategy=RecursiveXYCutClusterer())
     else:
         raise ValueError(f"Unknown layout model: {args.model}")
 
