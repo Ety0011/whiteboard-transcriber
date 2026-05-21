@@ -46,11 +46,11 @@ from layout_service import (
 from ledger import Ledger
 from registry import Registry
 from renderer import Renderer
+from transcriber import Transcriber
 from transcriber_service import (
     GotOcrTranscriber,
     MockTranscriber,
     PaddleVLTranscriber,
-    TranscriptionWorker,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -96,7 +96,7 @@ def main() -> None:
     rectifier = Rectifier()
     reconstructor = BoardReconstructor()
 
-    factories = {
+    detector_factories = {
         "stroke_cluster": StrokeDetector,
         "yolo": YOLODetector,
         "doclayoutv3": DocLayoutDetector,
@@ -109,18 +109,15 @@ def main() -> None:
         "xycut": partial(TextBlockDetector, strategy=XYCutGrouper()),
     }
 
-    discovery = Discovery(factory=factories[args.detector])
+    transcriber_factories = {
+        "mock": MockTranscriber,
+        "got_ocr": GotOcrTranscriber,
+        "paddlevl": PaddleVLTranscriber,
+    }
+
+    discovery = Discovery(factory=detector_factories[args.detector])
     registry = Registry()
-    if args.transcriber == "mock":
-        transcriber = MockTranscriber()
-    else:
-        _transcriber_factories = {
-            "got_ocr": GotOcrTranscriber,
-            "paddlevl": PaddleVLTranscriber,
-        }
-        transcriber = TranscriptionWorker(
-            factory=_transcriber_factories[args.transcriber]
-        )
+    transcriber = Transcriber(factory=transcriber_factories[args.transcriber])
     ledger = Ledger(output_dir=Path("output"))
     renderer = Renderer()
     pending_ocr: dict[int, object] = {}

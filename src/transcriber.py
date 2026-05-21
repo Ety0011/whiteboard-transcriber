@@ -19,7 +19,7 @@ from typing import Callable
 
 import numpy as np
 
-from .base import BaseTranscriber, TranscriptionResult
+from transcriber_service.base import BaseTranscriber, TranscriptionResult
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ def _worker_main(
 
     while True:
         item = in_q.get()  # block until work arrives
-        if item is None:   # shutdown sentinel
+        if item is None:  # shutdown sentinel
             break
 
         entity_id, crop = item
@@ -50,10 +50,14 @@ def _worker_main(
             text = transcriber.transcribe(crop)
             _log.warning(
                 "TranscriptionWorker: entity %d → %d chars: %r",
-                entity_id, len(text), text[:60],
+                entity_id,
+                len(text),
+                text[:60],
             )
         except Exception:
-            _log.exception("TranscriptionWorker: inference failed for entity %d", entity_id)
+            _log.exception(
+                "TranscriptionWorker: inference failed for entity %d", entity_id
+            )
 
         try:
             out_q.put_nowait(TranscriptionResult(entity_id=entity_id, text=text))
@@ -63,7 +67,7 @@ def _worker_main(
             )
 
 
-class TranscriptionWorker:
+class Transcriber:
     """Non-blocking transcription worker running in a dedicated subprocess.
 
     submit() enqueues a crop. get_results() drains completed transcriptions.
