@@ -241,16 +241,17 @@ class Registry:
     def _update_entity(self, block: Block, ent: SemanticEntity, frame, now):
         """Advance state machine for a single matched entity."""
 
-        # Detect edit: significant centroid drift on a committed entity resets it.
-        if ent.last_stable_center is not None and ent.state in (
-            EntityState.INFERRING,
-            EntityState.ACTIVE,
-        ):
+        # Detect movement — resets stabilization timer for all non-ERASED states.
+        # Covers: professor still writing (STABILIZING), and post-commit edits
+        # (INFERRING/ACTIVE). Without this, a block moving for 9s dispatches at s10.
+        if ent.last_stable_center is not None:
             cur_center = (block.bbox[:2] + block.bbox[2:]) / 2.0
             drift = float(np.linalg.norm(cur_center - ent.last_stable_center))
             if drift > self._drift_threshold_px:
-                ent.state, ent.ocr_text = EntityState.STABILIZING, None
+                ent.state = EntityState.STABILIZING
+                ent.ocr_text = None
                 ent.last_modified = now
+                ent.last_stable_center = cur_center  # anchor new baseline
 
         # Physical update — EMA bbox smoothing
         ent.bbox = (0.2 * block.bbox + 0.8 * ent.bbox).astype(np.int32)
@@ -285,6 +286,8 @@ class Registry:
             if blk_id not in matched_indices:
                 new_id = self._next_id
                 self._next_id += 1
+                cx = (block.bbox[0] + block.bbox[2]) / 2.0
+                cy = (block.bbox[1] + block.bbox[3]) / 2.0
                 self._registry[new_id] = SemanticEntity(
                     id=new_id,
                     bbox=block.bbox.copy(),
@@ -296,6 +299,7 @@ class Registry:
                     ocr_text=None,
                     ocr_confidence=None,
                     last_stable_crop=None,
+                    last_stable_center=np.array([cx, cy], dtype=np.float64),
                     line_bboxes=[a.bbox for a in block.anchors],
                 )
 
