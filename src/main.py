@@ -71,20 +71,20 @@ def main() -> None:
             "stroke_cluster",
             "yolo",
             "doclayoutv3",
-            "paddleocrvl",
+            "paddlevl",
             "hierarchical_union_find",
             "dbscan",
             "hdbscan",
             "xycut",
         ],
         default="hierarchical_union_find",
-        help="Stage 5 layout detection backend (default: hierarchical_union_find)",
+        help="Stage 5 layout detection backend",
     )
     parser.add_argument(
         "--transcriber",
         choices=["mock", "got_ocr", "paddlevl"],
-        default="mock",
-        help="Stage 7 OCR backend (default: mock)",
+        default="paddlevl",
+        help="Stage 7 OCR backend",
     )
     args = parser.parse_args()
 

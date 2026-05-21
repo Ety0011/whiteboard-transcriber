@@ -1,7 +1,7 @@
 """BaseTranscriber — abstract interface for OCR backends.
 
 __init__ must stay lightweight (store config only, no model loading).
-TranscriptionWorker pickles the factory and ships it to a subprocess;
+Transcriber pickles the factory and ships it to a subprocess;
 model weights are not picklable. load() is called by the worker AFTER
 unpickling, so models are created inside the subprocess.
 """
