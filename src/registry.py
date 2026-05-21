@@ -19,7 +19,7 @@ import time
 
 import numpy as np
 
-from anchor_service.grouper import EntityGroup
+from layout_service import EntityGroup
 
 log = logging.getLogger(__name__)
 

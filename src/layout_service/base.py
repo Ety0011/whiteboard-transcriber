@@ -4,11 +4,17 @@ import numpy as np
 
 
 class BaseLayoutDetector(ABC):
-    """Abstract interface to decouple model architectures from pipeline execution."""
+    """Abstract interface to decouple model architectures from pipeline execution.
+
+    __init__ must stay lightweight (store config only, no model loading).
+    Discovery pickles the factory and ships it to a subprocess; model weights
+    are not picklable. load() is called by the worker AFTER unpickling, so
+    models are created inside the subprocess where they will actually run.
+    """
 
     @abstractmethod
     def load(self) -> None:
-        """Initialize models, configure devices (MPS/CPU), and load weights."""
+        """Load models inside the worker subprocess. Never call from main process."""
         pass
 
     @abstractmethod

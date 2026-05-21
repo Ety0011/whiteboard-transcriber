@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+logger = logging.getLogger(__name__)
+
 
 class AnchorType(enum.Enum):
     TEXT_LINE = "TEXT_LINE"
@@ -124,7 +126,7 @@ class TextLineDetector:
             name="paddle-detect",
         )
         self._worker.start()
-        print(f"TextLineDetector worker started (pid={self._worker.pid})")
+        logger.info("TextLineDetector worker started (pid=%d)", self._worker.pid)
 
     def detect(self, composite: np.ndarray) -> DetectorResult:
         """Submit composite for async detection; return latest cached result."""
@@ -149,7 +151,7 @@ class TextLineDetector:
         self._worker.join(timeout=5)
         if self._worker.is_alive():
             self._worker.terminate()
-        print("TextLineDetector worker stopped")
+        logger.info("TextLineDetector worker stopped")
 
 
 class UnionFind:

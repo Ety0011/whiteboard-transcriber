@@ -25,15 +25,14 @@ import cv2
 import numpy as np
 
 import capture
-from registry import Registry, EntityState
-from anchor_service.detector import AnchorDetector
-from anchor_service.grouper import EntityGrouper
 from board_service.board_masker import BoardMasker
 from board_service.person_masker import PersonMasker
 from board_service.reconstructor import BoardReconstructor
 from board_service.rectifier import Rectifier
+from layout_service import TextLineDetector, UnionFindGrouper
 from ledger_service import assembly
 from ledger_service.registry import LedgerRegistry
+from registry import EntityState, Registry
 from transcriber_service.transcriber import MockTranscriber
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -170,8 +169,8 @@ def main() -> None:
     person_masker = PersonMasker()
     rectifier = Rectifier()
     reconstructor = BoardReconstructor()
-    anchor_detector = AnchorDetector()
-    grouper = EntityGrouper()
+    anchor_detector = TextLineDetector()
+    grouper = UnionFindGrouper()
     entity_registry = Registry()
     transcriber = MockTranscriber()
     ledger = LedgerRegistry()
