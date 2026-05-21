@@ -135,8 +135,8 @@ class Renderer:
         auto_mode: bool,
         status_msg: str,
         is_busy: bool,
-    ) -> None:
-        """Draw block + entity overlays, HUD, busy indicator → 'Whiteboard' window."""
+    ) -> np.ndarray:
+        """Draw block + entity overlays, HUD, busy indicator. Returns the frame."""
         board = composite.copy()
         if self.show_blocks:
             board = _draw_blocks(board, blocks)
@@ -158,15 +158,15 @@ class Renderer:
             board, (board.shape[1] - 30, 30), 10,
             (0, 165, 255) if is_busy else (0, 255, 0), -1,
         )
-        cv2.imshow("Whiteboard", board)
+        return board
 
     def render_raw(
         self,
         frame: np.ndarray,
         person_mask: np.ndarray,
         cached_corners: np.ndarray | None,
-    ) -> None:
-        """Draw mask + corner overlays, stage label → 'Raw Input' window."""
+    ) -> np.ndarray:
+        """Draw mask + corner overlays, stage label. Returns the frame."""
         raw = frame.copy()
         if self.show_mask:
             raw = _apply_mask_overlay(raw, person_mask)
@@ -176,7 +176,7 @@ class Renderer:
             raw, "STAGE 1+2: INPUT TRACKING",
             (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA,
         )
-        cv2.imshow("Raw Input", raw)
+        return raw
 
     def handle_key(self, key: int) -> bool:
         """Handle overlay toggle keys [w/p/t/r]. Returns True if key was consumed."""

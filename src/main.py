@@ -24,6 +24,7 @@ from functools import partial
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 import capture
 from board_service.board_masker import BoardMasker
@@ -85,6 +86,12 @@ def main() -> None:
         choices=["mock", "got", "paddlevl"],
         default="paddlevl",
         help="Stage 7 OCR backend",
+    )
+    parser.add_argument(
+        "--display-width",
+        type=int,
+        default=960,  # half of 1920x1080
+        help="Display window width in pixels (default: 1280)",
     )
     args = parser.parse_args()
 
@@ -179,8 +186,8 @@ def main() -> None:
             for entity in entity_update.newly_erased:
                 ledger.mark_erased(entity.id)
 
-            # Render
-            renderer.render_board(
+            # Render — stack raw (top) above composite (bottom) in one window
+            board = renderer.render_board(
                 composite,
                 last_blocks,
                 entity_update.entities,
@@ -189,7 +196,16 @@ def main() -> None:
                 status_msg,
                 discovery.is_busy,
             )
-            renderer.render_raw(frame, person_mask, rectifier.cached_corners)
+            raw = renderer.render_raw(frame, person_mask, rectifier.cached_corners)
+            if raw.shape[1] != board.shape[1]:
+                scale = board.shape[1] / raw.shape[1]
+                raw = cv2.resize(raw, (board.shape[1], int(raw.shape[0] * scale)))
+            combined = np.vstack([raw, board])
+            h, w = combined.shape[:2]
+            target_w = args.display_width
+            target_h = int(h * target_w / w)
+            combined = cv2.resize(combined, (target_w, target_h))
+            cv2.imshow("Lecture Historian", combined)
 
             # Keyboard
             key = cv2.waitKey(1) & 0xFF
