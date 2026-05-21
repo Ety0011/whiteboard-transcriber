@@ -27,7 +27,7 @@ import numpy as np
 import capture
 from anchor_service.detector import AnchorDetector
 from anchor_service.entity_registry import EntityRegistry, EntityState
-from anchor_service.grouper import EntityGrouper, get_masked_crop
+from anchor_service.grouper import EntityGrouper
 from board_service.board_masker import BoardMasker
 from board_service.person_masker import PersonMasker
 from board_service.reconstructor import BoardReconstructor
@@ -203,10 +203,11 @@ def main() -> None:
             entity_update = entity_registry.tick(groups, composite)
             # Stage 7 — submit newly dispatched entities to VLM (non-blocking)
             for entity in entity_update.newly_inferring:
-                if entity.last_group is not None:
-                    masked_crop = get_masked_crop(entity.last_group, composite)
+                x1, y1, x2, y2 = entity.bbox
+                crop = composite[y1:y2, x1:x2]
+                if crop.size > 0:
                     pending_ocr[entity.id] = entity
-                    transcriber.submit(entity.id, masked_crop)
+                    transcriber.submit(entity.id, crop)
 
             # Poll VLM results — update ledger and synthesise output files
             for result in transcriber.get_results():
