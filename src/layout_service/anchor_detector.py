@@ -69,7 +69,7 @@ def _worker_main(
     """PaddleOCR text detection loop — runs in a dedicated child process."""
     import logging as _log
 
-    _log.basicConfig(level=logging.WARNING)
+    _log.basicConfig(level=logging.DEBUG)
     log = _log.getLogger(__name__)
 
     from paddleocr import TextDetection
@@ -79,7 +79,7 @@ def _worker_main(
         box_thresh=box_thresh,
         unclip_ratio=unclip_ratio,
     )
-    log.warning("AnchorDetector: PP-OCRv5_server_det ready")
+    log.info("AnchorDetector: PP-OCRv5_server_det ready")
 
     while True:
         composite = in_q.get()  # block until work arrives
@@ -91,7 +91,7 @@ def _worker_main(
             h, w = composite.shape[:2]
             raw = detector.predict(composite)
             anchors = _raw_to_anchors(raw, h, w)
-            log.warning("AnchorDetector: %d TEXT_LINE anchors", len(anchors))
+            log.debug("AnchorDetector: %d TEXT_LINE anchors", len(anchors))
         except Exception:
             log.exception("PaddleOCR detection failed")
 
