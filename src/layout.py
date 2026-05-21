@@ -4,24 +4,24 @@ Integrates Stages 1-4 board reconstruction and feeds the clean, rectified
 whiteboard composite directly into a swappable Stage 5 async Layout Worker.
 
 Usage:
-    python layout.py video.mp4 --model stroke_cluster      # Deterministic (0 VRAM)
-    python layout.py video.mp4 --model yolo                # YOLOv8 layout model
-    python layout.py video.mp4 --model doclayoutv3         # DocLayoutV3 polygons
-    python layout.py video.mp4 --model paddleocrvl         # PaddleOCR-VL-1.5 MLX VLM
-    python layout.py video.mp4 --model hierarchical_union_find  # PP-OCRv5 + Union-Find
-    python layout.py video.mp4 --model dbscan              # PP-OCRv5 + DBSCAN
+    python -m src.layout video.mp4 --model stroke_cluster
+    python -m src.layout video.mp4 --model yolo
+    python -m src.layout video.mp4 --model doclayoutv3
+    python -m src.layout video.mp4 --model paddleocrvl
+    python -m src.layout video.mp4 --model hierarchical_union_find
+    python -m src.layout video.mp4 --model dbscan
 """
 
 import argparse
 
 import cv2
 
-from src import capture
-from src.board_service.board_masker import BoardMasker
-from src.board_service.person_masker import PersonMasker
-from src.board_service.reconstructor import BoardReconstructor
-from src.board_service.rectifier import Rectifier
-from src.layout_service import (
+import capture
+from board_service.board_masker import BoardMasker
+from board_service.person_masker import PersonMasker
+from board_service.reconstructor import BoardReconstructor
+from board_service.rectifier import Rectifier
+from layout_service import (
     DBSCANGroupDetector,
     HierarchicalGroupDetector,
     PaddleOCRVLDetector,
@@ -140,9 +140,9 @@ def main() -> None:
             # -----------------------------------------------------------------
             STATE_THEMES = {
                 "STABILIZING": ((0, 165, 255), "STABILIZING"),  # Orange (Validating)
-                "INFERRING": ((255, 255, 0), "INFERRING..."),    # Cyan (VLM queue)
-                "ACTIVE": ((0, 230, 0), "ACTIVE"),               # Green (Active Ledger)
-                "ERASED": ((0, 0, 220), "ERASED"),               # Red (Pruning)
+                "INFERRING": ((255, 255, 0), "INFERRING..."),  # Cyan (VLM queue)
+                "ACTIVE": ((0, 230, 0), "ACTIVE"),  # Green (Active Ledger)
+                "ERASED": ((0, 0, 220), "ERASED"),  # Red (Pruning)
             }
 
             board_display = composite.copy()
