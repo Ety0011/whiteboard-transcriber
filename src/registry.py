@@ -19,7 +19,7 @@ import time
 
 import numpy as np
 
-from layout_service import EntityGroup
+from layout_service import Block
 
 log = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ class SemanticEntity:
     ocr_confidence: float | None
     last_stable_crop: np.ndarray | None  # BGR uint8 crop captured at inference dispatch
     last_stable_center: np.ndarray | None = None  # shape (2,) float64 cx,cy
-    last_group: EntityGroup | None = None  # EntityGroup snapshot at inference dispatch
+    last_block: Block | None = None  # Block snapshot at inference dispatch
     line_bboxes: list[np.ndarray] = dataclasses.field(default_factory=list)
 
 
@@ -122,15 +122,15 @@ def _match_score(
 class Registry:
     """Persistent entity registry for the whiteboard pipeline.
 
-    Matches grouped anchors from Stage 6 to existing entities, applies EMA
-    bbox smoothing, advances the state machine, and exposes newly inferring or
+    Matches blocks from Stage 5/6 to existing entities, applies EMA bbox
+    smoothing, advances the state machine, and exposes newly inferring or
     erased entities each frame.
 
     Args:
         stable_time_threshold: Seconds without significant change required
             before STABILIZING → INFERRING (VLM dispatch).
         tombstone_retention: Seconds to retain ERASED entries before deletion.
-        match_threshold: Minimum combined score to match a group to an entity.
+        match_threshold: Minimum combined score to match a block to an entity.
         drift_threshold_px: Centroid drift (px) on ACTIVE/INFERRING entity
             that triggers reset to STABILIZING.
     """
@@ -167,13 +167,13 @@ class Registry:
 
     def tick(
         self,
-        groups: list[EntityGroup],
+        blocks: list[Block],
         frame: np.ndarray,
     ) -> EntityUpdate:
-        """Run one lifecycle cycle: match groups, advance state machine.
+        """Run one lifecycle cycle: match blocks, advance state machine.
 
         Args:
-            groups: Semantic entity groups from Stage 6 EntityGrouper.
+            blocks: Layout blocks from Stage 5 (Discovery).
             frame:  Current BGR board composite (Stage 4).
 
         Returns:
@@ -187,15 +187,15 @@ class Registry:
             e for e in self._registry.values() if e.state != EntityState.ERASED
         ]
 
-        assignments, matched_group_ids, matched_entity_ids = self._get_assignments(
-            groups, active_entities, frame_diagonal
+        assignments, matched_block_ids, matched_entity_ids = self._get_assignments(
+            blocks, active_entities, frame_diagonal
         )
 
-        for grp_id, ent_id in assignments.items():
-            self._update_entity(groups[grp_id], self._registry[ent_id], frame, now)
+        for blk_id, ent_id in assignments.items():
+            self._update_entity(blocks[blk_id], self._registry[ent_id], frame, now)
 
         self._erase_unmatched(active_entities, matched_entity_ids, now)
-        self._create_new_entities(groups, matched_group_ids, now)
+        self._create_new_entities(blocks, matched_block_ids, now)
         self._prune_tombstones(now)
 
         return EntityUpdate(
@@ -217,28 +217,28 @@ class Registry:
     # -----------------------------------------------------------------------
 
     # TODO: if board moves too much we lose all assignments
-    def _get_assignments(self, groups, active_entities, frame_diagonal):
+    def _get_assignments(self, blocks, active_entities, frame_diagonal):
         candidates = []
-        for grp_id, grp in enumerate(groups):
+        for blk_id, block in enumerate(blocks):
             for ent in active_entities:
-                score = _match_score(grp.bbox, ent.bbox, frame_diagonal)
+                score = _match_score(block.bbox, ent.bbox, frame_diagonal)
                 if score > self._match_threshold:
-                    candidates.append((score, grp_id, ent.id))
+                    candidates.append((score, blk_id, ent.id))
 
         candidates.sort(key=lambda x: -x[0])
 
-        matched_group_ids: set[int] = set()
+        matched_block_ids: set[int] = set()
         matched_entity_ids: set[int] = set()
         assignments: dict[int, int] = {}
 
-        for _, grp_id, ent_id in candidates:
-            if grp_id not in matched_group_ids and ent_id not in matched_entity_ids:
-                assignments[grp_id] = ent_id
-                matched_group_ids.add(grp_id)
+        for _, blk_id, ent_id in candidates:
+            if blk_id not in matched_block_ids and ent_id not in matched_entity_ids:
+                assignments[blk_id] = ent_id
+                matched_block_ids.add(blk_id)
                 matched_entity_ids.add(ent_id)
-        return assignments, matched_group_ids, matched_entity_ids
+        return assignments, matched_block_ids, matched_entity_ids
 
-    def _update_entity(self, grp: EntityGroup, ent: SemanticEntity, frame, now):
+    def _update_entity(self, block: Block, ent: SemanticEntity, frame, now):
         """Advance state machine for a single matched entity."""
 
         # Detect edit: significant centroid drift on a committed entity resets it.
@@ -246,23 +246,23 @@ class Registry:
             EntityState.INFERRING,
             EntityState.ACTIVE,
         ):
-            cur_center = (grp.bbox[:2] + grp.bbox[2:]) / 2.0
+            cur_center = (block.bbox[:2] + block.bbox[2:]) / 2.0
             drift = float(np.linalg.norm(cur_center - ent.last_stable_center))
             if drift > self._drift_threshold_px:
                 ent.state, ent.ocr_text = EntityState.STABILIZING, None
                 ent.last_modified = now
 
         # Physical update — EMA bbox smoothing
-        ent.bbox = (0.2 * grp.bbox + 0.8 * ent.bbox).astype(np.int32)
-        ent.confidence, ent.last_seen = grp.confidence, now
-        ent.line_bboxes = [a.bbox for a in grp.anchors]
+        ent.bbox = (0.2 * block.bbox + 0.8 * ent.bbox).astype(np.int32)
+        ent.confidence, ent.last_seen = block.confidence, now
+        ent.line_bboxes = [a.bbox for a in block.anchors]
 
         if ent.state == EntityState.STABILIZING:
             if now - ent.last_modified >= self._stable_time_threshold:
-                self._dispatch_for_inference(ent, grp, frame, now)
+                self._dispatch_for_inference(ent, block, frame, now)
 
     def _dispatch_for_inference(
-        self, ent: SemanticEntity, grp: EntityGroup, frame, now
+        self, ent: SemanticEntity, block: Block, frame, now
     ):
         """Capture crop and transition STABILIZING → INFERRING."""
         x1, y1, x2, y2 = ent.bbox
@@ -270,7 +270,7 @@ class Registry:
         if crop.size > 0:
             ent.last_stable_crop = crop.copy()
             ent.last_stable_center = (ent.bbox[:2] + ent.bbox[2:]) / 2.0
-            ent.last_group = grp
+            ent.last_block = block
             ent.state, ent.last_modified = EntityState.INFERRING, now
             log.debug("Entity %d → INFERRING", ent.id)
 
@@ -282,15 +282,15 @@ class Registry:
                     ent.state, ent.last_modified = EntityState.ERASED, now
                     log.debug("Entity %d → ERASED", ent.id)
 
-    def _create_new_entities(self, groups, matched_indices, now):
-        for grp_id, grp in enumerate(groups):
-            if grp_id not in matched_indices:
+    def _create_new_entities(self, blocks, matched_indices, now):
+        for blk_id, block in enumerate(blocks):
+            if blk_id not in matched_indices:
                 new_id = self._next_id
                 self._next_id += 1
                 self._registry[new_id] = SemanticEntity(
                     id=new_id,
-                    bbox=grp.bbox.copy(),
-                    confidence=grp.confidence,
+                    bbox=block.bbox.copy(),
+                    confidence=block.confidence,
                     state=EntityState.STABILIZING,
                     first_seen=now,
                     last_seen=now,
@@ -298,7 +298,7 @@ class Registry:
                     ocr_text=None,
                     ocr_confidence=None,
                     last_stable_crop=None,
-                    line_bboxes=[a.bbox for a in grp.anchors],
+                    line_bboxes=[a.bbox for a in block.anchors],
                 )
 
     def _prune_tombstones(self, now):
