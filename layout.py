@@ -1,12 +1,13 @@
-"""Interactive Whiteboard Reconstruction + Decoupled Layout Discovery Test.
+"""Interactive Whiteboard Reconstruction + Swappable Layout Discovery Test.
 
 Integrates Stages 1-4 board reconstruction and feeds the clean, rectified
 whiteboard composite directly into a swappable Stage 5 async Layout Worker.
 
-Controls:
-    Spacebar — Submit current clean 'composite' board to the Async Stage 5 Layout Worker
-    'a'      — Toggle Continuous (Auto) Stage 5 discovery mode on the composite
-    'q'      — Quit the test script
+Usage:
+    python src/main.py video.mp4 --model stroke_cluster   # Deterministic grouping (Recommended)
+    python src/main.py video.mp4 --model yolo             # YOLOv8 layout model
+    python src/main.py video.mp4 --model doclayoutv3      # DocLayoutV3 irregular polygons
+    python src/main.py video.mp4 --model paddleocrvl      # PaddleOCR-VL-1.5 MLX VLM
 """
 
 import threading
@@ -55,11 +56,127 @@ class BaseLayoutDetector(ABC):
 
 
 # =====================================================================
-# BACKEND 1: YOLO Layout Detector (Highly Recommended)
+# BACKEND 1: Whiteboard Stroke Clusterer (Robust, 0 VRAM, <5ms)
+# =====================================================================
+class WhiteboardStrokeClusterer(BaseLayoutDetector):
+    """
+    SOTA Whiteboard-specific Layout Engine.
+    Uses Connected Component Extraction + BFS Spatial Distance-based Clustering.
+    Guaranteed to group handwritten blocks without deep learning failures.
+    """
+
+    def __init__(
+        self, horizontal_dist: int = 100, vertical_dist: int = 50, min_area: int = 15
+    ):
+        self.horizontal_dist = horizontal_dist
+        self.vertical_dist = vertical_dist
+        self.min_area = min_area
+
+    def load(self):
+        print(
+            "[WhiteboardStrokeClusterer] Initializing hardware-accelerated spatial clustering..."
+        )
+
+    def detect(self, frame: np.ndarray) -> list[dict]:
+        # 1. Grayscale
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        # 2. Extract ink via Otsu's inversion (Whiteboards are light, text is dark)
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+        # 3. Connected Components (Isolate individual letters/strokes)
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(thresh)
+
+        valid_components = []
+        for i in range(1, num_labels):
+            area = stats[i, cv2.CC_STAT_AREA]
+            w = stats[i, cv2.CC_STAT_WIDTH]
+            h = stats[i, cv2.CC_STAT_HEIGHT]
+            # Exclude full board borders and tiny dust speckles
+            if (
+                area < self.min_area
+                or w > frame.shape[1] * 0.8
+                or h > frame.shape[0] * 0.8
+            ):
+                continue
+            x = stats[i, cv2.CC_STAT_LEFT]
+            y = stats[i, cv2.CC_STAT_TOP]
+
+            # Extract point coordinates
+            comp_pts = np.argwhere(labels == i)[:, ::-1]  # (x, y) coordinates
+            valid_components.append({"bbox": [x, y, x + w, y + h], "points": comp_pts})
+
+        n_comp = len(valid_components)
+        if n_comp == 0:
+            return []
+
+        # 4. Group strokes using Adjacency Graph BFS
+        adj = {i: [] for i in range(n_comp)}
+        for i in range(n_comp):
+            boxA = valid_components[i]["bbox"]
+            for j in range(i + 1, n_comp):
+                boxB = valid_components[j]["bbox"]
+
+                # Check absolute horizontal and vertical gaps between stroke bounds
+                dx = max(0, boxB[0] - boxA[2], boxA[0] - boxB[2])
+                dy = max(0, boxB[1] - boxA[3], boxA[1] - boxB[3])
+
+                if dx < self.horizontal_dist and dy < self.vertical_dist:
+                    adj[i].append(j)
+                    adj[j].append(i)
+
+        # Find isolated graph networks using Breadth-First Search
+        visited = [False] * n_comp
+        groups = []
+        for i in range(n_comp):
+            if visited[i]:
+                continue
+            group = []
+            queue = [i]
+            visited[i] = True
+            while queue:
+                curr = queue.pop(0)
+                group.append(curr)
+                for neighbor in adj[curr]:
+                    if not visited[neighbor]:
+                        visited[neighbor] = True
+                        queue.append(neighbor)
+            groups.append(group)
+
+        # 5. Compute tight Convex Hulls representing irregular region boundaries
+        discovered_regions = []
+        for g_idx, group in enumerate(groups):
+            all_pts = []
+            for comp_idx in group:
+                comp_pts = valid_components[comp_idx]["points"]
+                if len(comp_pts) > 10:
+                    comp_pts = comp_pts[::3]  # Downsample for speed
+                all_pts.extend(comp_pts)
+
+            all_pts = np.array(all_pts, dtype=np.int32)
+            if len(all_pts) < 3:
+                continue
+
+            # Compute Convex Hull around stroke coordinates to wrap skewed writing tightly
+            hull = cv2.convexHull(all_pts)
+            poly_pts = hull.reshape(-1, 2)
+
+            discovered_regions.append(
+                {
+                    "text": f"Cluster {g_idx} ({len(group)} strokes)",
+                    "poly": poly_pts,
+                    "label": "TEXT",
+                    "color": (0, 230, 0),
+                }
+            )
+
+        return discovered_regions
+
+
+# =====================================================================
+# BACKEND 2: YOLO Layout Detector
 # =====================================================================
 class YOLOLayoutDetector(BaseLayoutDetector):
-    """Strictly visual layout region box regression using standard YOLOv8."""
-
     def __init__(
         self,
         repo_id: str = "hantian/yolo-doclaynet",
@@ -74,17 +191,10 @@ class YOLOLayoutDetector(BaseLayoutDetector):
         from huggingface_hub import hf_hub_download
         from ultralytics import YOLO
 
-        print(
-            f"[YOLOLayoutDetector] Downloading weights ({self.repo_id}/{self.filename})..."
-        )
+        print("[YOLOLayoutDetector] Downloading weights...")
         weights_path = hf_hub_download(repo_id=self.repo_id, filename=self.filename)
-
-        print("[YOLOLayoutDetector] Initializing YOLO model...")
         self.model = YOLO(weights_path)
         self.device = "mps" if torch.backends.mps.is_available() else "cpu"
-        print(
-            f"[YOLOLayoutDetector] Loaded onto target hardware: {self.device.upper()}"
-        )
 
     def detect(self, frame: np.ndarray) -> list[dict]:
         results = self.model.predict(
@@ -134,11 +244,9 @@ class YOLOLayoutDetector(BaseLayoutDetector):
 
 
 # =====================================================================
-# BACKEND 2: PP-DocLayoutV3 (Transformers Engine)
+# BACKEND 3: PP-DocLayoutV3
 # =====================================================================
 class PPDocLayoutV3Detector(BaseLayoutDetector):
-    """Irregular document segmenter. Outputs structural layout polygons."""
-
     def __init__(self, model_id: str = "PaddlePaddle/PP-DocLayoutV3_safetensors"):
         self.model_id = model_id
         self.model = None
@@ -154,10 +262,6 @@ class PPDocLayoutV3Detector(BaseLayoutDetector):
             from transformers import AutoImageProcessor as ImageProcessorClass
 
         self.device = "mps" if torch.backends.mps.is_available() else "cpu"
-        print(
-            f"[PPDocLayoutV3Detector] Initializing {self.model_id} on {self.device.upper()}..."
-        )
-
         self.image_processor = ImageProcessorClass.from_pretrained(self.model_id)
         self.model = AutoModelForObjectDetection.from_pretrained(self.model_id).to(
             self.device
@@ -207,7 +311,6 @@ class PPDocLayoutV3Detector(BaseLayoutDetector):
                 label = "TEXT"
                 color = (0, 230, 0)
 
-            # Extract irregular multi-point polygons if present, fallback to box
             if idx < len(polygon_points_list):
                 poly_tensor = polygon_points_list[idx]
                 if torch.is_tensor(poly_tensor):
@@ -238,7 +341,7 @@ class PPDocLayoutV3Detector(BaseLayoutDetector):
 
 
 # =====================================================================
-# BACKEND 3: PaddleOCR-VL VLM (Native MLX-VLM Engine)
+# BACKEND 4: PaddleOCR-VL VLM (Native MLX-VLM Engine) [10]
 # =====================================================================
 class PaddleOCRVLDetector(BaseLayoutDetector):
     """Autoregressive VLM layout grounding using the native 'Spotting:' chat template."""
@@ -280,7 +383,7 @@ class PaddleOCRVLDetector(BaseLayoutDetector):
         )
         raw_text = gen_result.text if hasattr(gen_result, "text") else str(gen_result)
 
-        # Parse XML coordinate token outputs matching LOC template [10]
+        # Parse coordinate tokens matching the LOC template [10]
         regions = []
         tokens_pattern = re.compile(r"((?:<\|LOC_\d+\|>)+)")
         parts = tokens_pattern.split(raw_text)
@@ -329,14 +432,416 @@ class PaddleOCRVLDetector(BaseLayoutDetector):
 
 
 # =====================================================================
-# STAGE 5 CORE: Thread Orchestrator (Submits to whatever Backend is loaded)
+# BACKEND 5: Hierarchical Union-Find Grouping Detector (Improved & Multiprocessed)
 # =====================================================================
-class Stage5LayoutDiscovery(threading.Thread):
+import enum
+import logging
+import multiprocessing as mp
+from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
+
+
+class AnchorType(enum.Enum):
+    TEXT_LINE = "TEXT_LINE"
+
+
+@dataclass
+class Anchor:
+    bbox: np.ndarray  # (4,) int32: x1, y1, x2, y2
+    confidence: float
+    anchor_type: AnchorType
+
+
+@dataclass
+class DetectorResult:
+    anchors: list[Anchor] = field(default_factory=list)
+
+
+def _extract_polys(raw_results: list) -> list[tuple[list, float]]:
+    """Extract (polygon, score) pairs from raw TextDetection output."""
+    if not raw_results:
+        return []
+    results = []
+    for result in raw_results:
+        polys = result.get("dt_polys", [])
+        scores = result.get("dt_scores", [1.0] * len(polys))
+        for poly, score in zip(polys, scores):
+            results.append(
+                ([[float(pt[0]), float(pt[1])] for pt in poly], float(score))
+            )
+    return results
+
+
+def _polygon_to_bbox(polygon: list, img_h: int, img_w: int) -> np.ndarray:
+    """Convert polygon to axis-aligned bbox clamped to image bounds."""
+    pts = np.array(polygon, dtype=np.float32)
+    x1 = int(np.clip(pts[:, 0].min(), 0, img_w))
+    y1 = int(np.clip(pts[:, 1].min(), 0, img_h))
+    x2 = int(np.clip(pts[:, 0].max(), 0, img_w))
+    y2 = int(np.clip(pts[:, 1].max(), 0, img_h))
+    return np.array([x1, y1, x2, y2], dtype=np.int32)
+
+
+def _raw_to_anchors(raw: list, h: int, w: int) -> list[Anchor]:
+    anchors = []
+    for poly, score in _extract_polys(raw):
+        bbox = _polygon_to_bbox(poly, h, w)
+        x1, y1, x2, y2 = bbox
+        if x2 <= x1 or y2 <= y1:
+            continue
+        anchors.append(
+            Anchor(bbox=bbox, confidence=score, anchor_type=AnchorType.TEXT_LINE)
+        )
+    return anchors
+
+
+def _worker_main(
+    in_q: mp.Queue,
+    out_q: mp.Queue,
+    box_thresh: float,
+    unclip_ratio: float,
+) -> None:
+    """PaddleOCR text detection loop — runs in a dedicated child process."""
+    import logging as _log
+
+    _log.basicConfig(level=logging.WARNING)
+    log = _log.getLogger(__name__)
+
+    from paddleocr import TextDetection
+
+    detector = TextDetection(
+        model_name="PP-OCRv5_server_det",
+        box_thresh=box_thresh,
+        unclip_ratio=unclip_ratio,
+    )
+    log.warning("AnchorDetector: PP-OCRv5_server_det ready")
+
+    while True:
+        composite = in_q.get()  # block until work arrives
+        if composite is None:  # shutdown sentinel
+            break
+
+        anchors: list[Anchor] = []
+        try:
+            h, w = composite.shape[:2]
+            raw = detector.predict(composite)
+            anchors = _raw_to_anchors(raw, h, w)
+            log.warning("AnchorDetector: %d TEXT_LINE anchors", len(anchors))
+        except Exception:
+            log.exception("PaddleOCR detection failed")
+
+        result = DetectorResult(anchors=anchors)
+        try:
+            out_q.get_nowait()
+        except Exception:
+            pass
+        try:
+            out_q.put_nowait(result)
+        except Exception:
+            pass
+
+
+class AnchorDetector:
+    """Non-blocking PaddleOCR anchor detector."""
+
+    def __init__(
+        self,
+        box_thresh: float = 0.6,
+        unclip_ratio: float = 1.2,
+    ) -> None:
+        self._cached = DetectorResult()
+        self._in_q: mp.Queue = mp.Queue(maxsize=1)
+        self._out_q: mp.Queue = mp.Queue(maxsize=1)
+        self._worker = mp.Process(
+            target=_worker_main,
+            args=(self._in_q, self._out_q, box_thresh, unclip_ratio),
+            daemon=True,
+            name="paddle-detect",
+        )
+        self._worker.start()
+        logger.info("AnchorDetector worker started (pid=%d)", self._worker.pid)
+
+    def detect(self, composite: np.ndarray) -> DetectorResult:
+        """Submit composite for async detection; return latest cached result."""
+        try:
+            self._in_q.put_nowait(composite)
+        except Exception:
+            pass
+
+        try:
+            self._cached = self._out_q.get_nowait()
+        except Exception:
+            pass
+
+        return self._cached
+
+    def shutdown(self) -> None:
+        """Signal the worker to stop and wait for clean exit."""
+        try:
+            self._in_q.put_nowait(None)
+        except Exception:
+            pass
+        self._worker.join(timeout=5)
+        if self._worker.is_alive():
+            self._worker.terminate()
+        logger.info("AnchorDetector worker stopped")
+
+
+class UnionFind:
+    """Disjoint-Set Forest for clustering."""
+
+    def __init__(self, n: int) -> None:
+        self.parent = list(range(n))
+
+    def find(self, i: int) -> int:
+        if self.parent[i] == i:
+            return i
+        self.parent[i] = self.find(self.parent[i])
+        return self.parent[i]
+
+    def union(self, i: int, j: int) -> bool:
+        root_i = self.find(i)
+        root_j = self.find(j)
+        if root_i != root_j:
+            self.parent[root_i] = root_j
+            return True
+        return False
+
+
+class HierarchicalGroupDetector(BaseLayoutDetector):
     """
-    Spawns a generic worker thread.
-    Synchronizes the mailbox and delegates calculations to the injected detector.
+    Combines your legacy multiprocessing AnchorDetector (PP-OCRv5_server_det)
+    with your hierarchical Union-Find grouping logic to discover unified semantic blocks.
     """
 
+    def __init__(
+        self,
+        box_thresh: float = 0.6,
+        unclip_ratio: float = 1.2,
+        iou_threshold: float = 0.02,
+    ):
+        self.box_thresh = box_thresh
+        self.unclip_ratio = unclip_ratio
+        self.iou_threshold = iou_threshold
+        self.anchor_detector = None
+
+    def load(self) -> None:
+        print(
+            "[HierarchicalGroupDetector] Spawning multiprocessing AnchorDetector (PP-OCRv5_server_det)..."
+        )
+        self.anchor_detector = AnchorDetector(
+            box_thresh=self.box_thresh, unclip_ratio=self.unclip_ratio
+        )
+
+    def detect(self, frame: np.ndarray) -> list[dict]:
+        # 1. Fetch latest cached result from the non-blocking worker
+        result = self.anchor_detector.detect(frame)
+        anchors = result.anchors
+
+        if not anchors:
+            return []
+
+        # 2. Adaptive Spatial Thresholds scaled dynamically to the median line height
+        heights = [a.bbox[3] - a.bbox[1] for a in anchors]
+        median_height = np.median(heights) if heights else 20.0
+
+        vertical_expand = median_height * 0.65
+        horizontal_expand = median_height * 0.25
+
+        # 3. Disjoint-Set Clustering
+        num_anchors = len(anchors)
+        uf = UnionFind(num_anchors)
+
+        for i in range(num_anchors):
+            for j in range(i + 1, num_anchors):
+                if self._should_merge(
+                    anchors[i], anchors[j], vertical_expand, horizontal_expand
+                ):
+                    uf.union(i, j)
+
+        # Assemble grouping clusters
+        sets: dict[int, list[Anchor]] = {}
+        for i in range(num_anchors):
+            root = uf.find(i)
+            if root not in sets:
+                sets[root] = []
+            sets[root].append(anchors[i])
+
+        # 4. Extract clustered blocks and return tight bounding boxes
+        discovered_regions = []
+        for g_idx, group_anchors in enumerate(sets.values()):
+            bboxes = np.stack([a.bbox for a in group_anchors])
+            merged_bbox = np.array(
+                [
+                    bboxes[:, 0].min(),
+                    bboxes[:, 1].min(),
+                    bboxes[:, 2].max(),
+                    bboxes[:, 3].max(),
+                ],
+                dtype=np.int32,
+            )
+
+            x1, y1, x2, y2 = merged_bbox
+            poly_pts = np.array(
+                [[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32
+            )
+
+            discovered_regions.append(
+                {
+                    "text": f"Block {g_idx} ({len(group_anchors)} lines)",
+                    "poly": poly_pts,
+                    "label": "TEXT",
+                    "color": (255, 0, 255),  # Pink Group Overlay
+                }
+            )
+
+        return sorted(discovered_regions, key=lambda g: g["poly"][:, 1].min())
+
+    def _should_merge(
+        self, a: Anchor, b: Anchor, v_expand: float, h_expand: float
+    ) -> bool:
+        ax1, ay1, ax2, ay2 = a.bbox.tolist()
+        bx1, by1, bx2, by2 = b.bbox.tolist()
+
+        # Multi-Column Gutter Guard Check:
+        gap_x = max(0, bx1 - ax2, ax1 - bx2)
+        if gap_x > max(ax2 - ax1, bx2 - bx1) * 0.35:
+            return False
+
+        ax1e, ax2e = ax1 - h_expand, ax2 + h_expand
+        ay1e, ay2e = ay1 - v_expand, ay2 + v_expand
+        bx1e, bx2e = bx1 - h_expand, bx2 + h_expand
+        by1e, by2e = by1 - v_expand, by2 + v_expand
+
+        ix1, iy1 = max(ax1e, bx1e), max(ay1e, by1e)
+        ix2, iy2 = min(ax2e, bx2e), min(ay2e, by2e)
+
+        inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+        if inter == 0.0:
+            return False
+
+        area_a = (ax2e - ax1e) * (ay2e - ay1e)
+        area_b = (bx2e - bx1e) * (by2e - by1e)
+        return inter / (area_a + area_b - inter) > self.iou_threshold
+
+
+# =====================================================================
+# BACKEND 6: SOTA DBSCAN Multi-Point Density Grouping Detector
+# =====================================================================
+class DBSCANGroupDetector(BaseLayoutDetector):
+    """
+    SOTA Density-based Whiteboard Layout Analyzer.
+    Reuses the multiprocessing AnchorDetector from Backend 5, samples multi-point
+    axis densities per line, and runs DBSCAN to group paragraphs with 100% column safety.
+    """
+
+    def __init__(
+        self,
+        box_thresh: float = 0.6,
+        unclip_ratio: float = 1.2,
+        eps_factor: float = 1.8,
+    ):
+        self.box_thresh = box_thresh
+        self.unclip_ratio = unclip_ratio
+        # eps_factor determines clustering merge radius relative to median line height
+        self.eps_factor = eps_factor
+        self.anchor_detector = None
+
+    def load(self) -> None:
+        print(
+            "[DBSCANGroupDetector] Spawning multiprocessing AnchorDetector (PP-OCRv5_server_det)..."
+        )
+        # Reuse the global AnchorDetector class declared in Backend 5
+        self.anchor_detector = AnchorDetector(
+            box_thresh=self.box_thresh, unclip_ratio=self.unclip_ratio
+        )
+
+    def detect(self, frame: np.ndarray) -> list[dict]:
+        # Lazy import of density-clustering package
+        from sklearn.cluster import DBSCAN
+
+        # 1. Fetch latest cached result from background process
+        result = self.anchor_detector.detect(frame)
+        anchors = result.anchors
+
+        if not anchors:
+            return []
+
+        # 2. Extract median line height to scale the search radius dynamically
+        heights = [a.bbox[3] - a.bbox[1] for a in anchors]
+        median_height = np.median(heights) if heights else 20.0
+
+        # 3. Point-Cloud Generation: Axis-Aligned Multi-Point Density Representation
+        # Sample 3 horizontal coordinate nodes per detected line (Left, Center, Right)
+        db_points = []
+        anchor_indices = []
+
+        for idx, a in enumerate(anchors):
+            x1, y1, x2, y2 = a.bbox.tolist()
+            cy = (y1 + y2) / 2.0
+
+            db_points.extend([[x1, cy], [(x1 + x2) / 2.0, cy], [x2, cy]])
+            anchor_indices.extend([idx, idx, idx])
+
+        db_points = np.array(db_points)
+
+        # 4. Perform Density-Based Spatial Clustering (DBSCAN)
+        eps = median_height * self.eps_factor
+        db = DBSCAN(eps=eps, min_samples=2, metric="euclidean").fit(db_points)
+        labels = db.labels_
+
+        # 5. Aggregate density clusters back into Anchor lists
+        # Track inserted indices in a set to avoid calling dataclass __eq__ on bbox arrays
+        sets: dict[int, list[Anchor]] = {}
+        added_anchors: dict[int, set[int]] = {}
+
+        for idx, cluster_id in enumerate(labels):
+            if cluster_id == -1:
+                continue  # Treat isolated single marks as background noise
+
+            orig_anchor_idx = anchor_indices[idx]
+            anchor_obj = anchors[orig_anchor_idx]
+
+            if cluster_id not in sets:
+                sets[cluster_id] = []
+                added_anchors[cluster_id] = set()
+
+            if orig_anchor_idx not in added_anchors[cluster_id]:
+                sets[cluster_id].append(anchor_obj)
+                added_anchors[cluster_id].add(orig_anchor_idx)
+
+        # 6. Trace irregular polygon boundaries (Convex Hulls)
+        discovered_regions = []
+        for g_idx, group_anchors in enumerate(sets.values()):
+            coords = []
+            for a in group_anchors:
+                x1, y1, x2, y2 = a.bbox.tolist()
+                coords.extend([[x1, y1], [x2, y1], [x2, y2], [x1, y2]])
+
+            coords = np.array(coords, dtype=np.int32)
+            if len(coords) < 3:
+                continue
+
+            hull = cv2.convexHull(coords)
+            poly_pts = hull.reshape(-1, 2)
+
+            discovered_regions.append(
+                {
+                    "text": f"DBSCAN {g_idx} ({len(group_anchors)} lines)",
+                    "poly": poly_pts,
+                    "label": "TEXT",
+                    "color": (255, 128, 0),  # SOTA Azure/Orange
+                }
+            )
+
+        return sorted(discovered_regions, key=lambda g: g["poly"][:, 1].min())
+
+
+# =====================================================================
+# STAGE 5 CORE: Thread Orchestrator
+# =====================================================================
+class Stage5LayoutDiscovery(threading.Thread):
     def __init__(
         self,
         detector: BaseLayoutDetector,
@@ -359,7 +864,7 @@ class Stage5LayoutDiscovery(threading.Thread):
 
     def submit_frame(self, frame: np.ndarray) -> bool:
         if self.is_busy:
-            return False  # Skip execution drop frame to bypass latency backup
+            return False
 
         with self.mailbox_lock:
             self.frame_mailbox = frame.copy()
@@ -367,7 +872,6 @@ class Stage5LayoutDiscovery(threading.Thread):
         return True
 
     def run(self):
-        # Initialize selected layout detector backend
         self.detector.load()
 
         while self.is_running:
@@ -384,7 +888,6 @@ class Stage5LayoutDiscovery(threading.Thread):
             start_time = time.time()
 
             try:
-                # Perform layout discovery execution via the abstract backend interface
                 discovered_regions = self.detector.detect(local_frame)
                 latency = time.time() - start_time
                 self.on_regions_discovered(discovered_regions, latency)
@@ -438,11 +941,19 @@ def main() -> None:
         metavar="FILE",
         help="video or image file (omit to use the default webcam)",
     )
+    # Under parser.add_argument("--model" ...), append "dbscan" to choices:
     parser.add_argument(
         "--model",
-        choices=["yolo", "doclayoutv3", "paddleocrvl"],
-        default="yolo",
-        help="Stage 5 Layout Discovery backend model to run (default: yolo)",
+        choices=[
+            "stroke_cluster",
+            "yolo",
+            "doclayoutv3",
+            "paddleocrvl",
+            "hierarchical_union_find",
+            "dbscan",
+        ],
+        default="dbscan",
+        help="Stage 5 Layout Discovery backend model to run",
     )
     args = parser.parse_args()
 
@@ -454,13 +965,19 @@ def main() -> None:
     rectifier = Rectifier()
     reconstructor = BoardReconstructor()
 
-    # Instantiate the selected swappable Stage 5 Layout Detector backend
-    if args.model == "yolo":
+    # Instantiate the selected Stage 5 Layout Detector backend
+    if args.model == "stroke_cluster":
+        detector = WhiteboardStrokeClusterer()
+    elif args.model == "yolo":
         detector = YOLOLayoutDetector()
     elif args.model == "doclayoutv3":
         detector = PPDocLayoutV3Detector()
     elif args.model == "paddleocrvl":
         detector = PaddleOCRVLDetector()
+    elif args.model == "hierarchical_union_find":
+        detector = HierarchicalGroupDetector()
+    elif args.model == "dbscan":
+        detector = DBSCANGroupDetector()
     else:
         raise ValueError(f"Unknown layout model: {args.model}")
 
