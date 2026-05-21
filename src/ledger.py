@@ -15,7 +15,6 @@ from pathlib import Path
 
 import numpy as np
 
-
 # ---------------------------------------------------------------------------
 # Data types
 # ---------------------------------------------------------------------------
@@ -30,9 +29,11 @@ class TextVersion:
 @dataclass
 class LedgerEntry:
     entity_id: int
-    bbox: np.ndarray            # (4,) int32: x1,y1,x2,y2 in rectified space
-    first_seen: float           # time.monotonic()
-    versions: list[TextVersion] = field(default_factory=list)  # index 0 = first OCR; append-only
+    bbox: np.ndarray  # (4,) int32: x1,y1,x2,y2 in rectified space
+    first_seen: float  # time.monotonic()
+    versions: list[TextVersion] = field(
+        default_factory=list
+    )  # index 0 = first OCR; append-only
     erased_at: float | None = None
 
 
@@ -129,62 +130,63 @@ class Ledger:
     def _render_live(self) -> str:
         active = self.get_active()
         if not active:
-            return "# Whiteboard — Live\n\n*(board empty)*\n"
+            return "# Whiteboard\n\n*(board empty)*\n"
 
-        lines = ["# Whiteboard — Live\n"]
+        blocks = ["# Whiteboard\n"]
         for entry in active:
-            ts = self._mono_to_wall_str(entry.first_seen)
-            text = entry.versions[-1].text
-            lines.append(f"## [{ts}] Entity {entry.entity_id}\n")
-            lines.append(f"{text}\n")
-        return "\n".join(lines)
+            blocks.append(entry.versions[-1].text)
+            blocks.append("---")
+        # drop trailing separator
+        if blocks[-1] == "---":
+            blocks.pop()
+        return "\n\n".join(blocks) + "\n"
 
     def _render_history(self) -> str:
         all_entries = self.get_all()
         if not all_entries:
-            return "# Whiteboard — Lecture History\n\n*(no content yet)*\n"
+            return "# Lecture Notes\n\n*(no content yet)*\n"
 
-        active = [e for e in all_entries if e.erased_at is None]
-        erased = [e for e in all_entries if e.erased_at is not None]
+        toc_lines = ["## Contents\n"]
+        for entry in all_entries:
+            ts = self._mono_to_wall_str(entry.first_seen)
+            anchor = ts.replace(":", "")
+            content_lines = [l for l in entry.versions[-1].text.splitlines() if l.strip()]
+            preview = content_lines[0] if content_lines else ""
+            if len(content_lines) > 1 or len(preview) > 60:
+                preview = preview[:60].rstrip() + "…"
+            if len(preview) > 60:
+                preview = preview[:60].rstrip() + "…"
+            toc_lines.append(f"- [{ts}](#{anchor}): {preview}")
+        toc = "\n".join(toc_lines)
 
-        sections: list[str] = ["# Whiteboard — Lecture History\n"]
-
-        for entry in active:
+        sections: list[str] = ["# Lecture Notes\n", toc, "---"]
+        for entry in all_entries:
             sections.append(self._render_entry(entry))
 
-        if erased:
-            sections.append("---\n")
-            sections.append("## Archives\n")
-            for entry in erased:
-                sections.append(self._render_entry(entry, archived=True))
+        return "\n\n".join(sections)
 
-        return "\n".join(sections)
-
-    def _render_entry(self, entry: LedgerEntry, archived: bool = False) -> str:
-        ts_start = self._mono_to_wall_str(entry.first_seen)
-        heading = "###" if archived else "##"
-
-        if archived and entry.erased_at is not None:
-            ts_end = self._mono_to_wall_str(entry.erased_at)
-            header = f"{heading} [{ts_start}–{ts_end}] Entity {entry.entity_id} *(erased)*"
-        else:
-            header = f"{heading} [{ts_start}] Entity {entry.entity_id}"
-
-        latest_text = entry.versions[-1].text
-        parts = [header, "", latest_text]
+    def _render_entry(self, entry: LedgerEntry) -> str:
+        ts = self._mono_to_wall_str(entry.first_seen)
+        parts = [f"## {ts}", "", entry.versions[-1].text]
 
         if len(entry.versions) > 1:
             parts.append("")
-            parts.append("#### Corrections")
             for v in entry.versions[:-1]:
-                ts = self._mono_to_wall_str(v.timestamp)
-                escaped = v.text.replace('"', '\\"')
-                parts.append(f'→ [{ts}] Original: "{escaped}"')
+                lines = v.text.splitlines()
+                if len(lines) <= 1:
+                    escaped = v.text.replace('"', '\\"')
+                    parts.append(f'> *Revised from:* "{escaped}"')
+                else:
+                    parts.append("> *Revised from:*")
+                    parts.append(">")
+                    for line in lines:
+                        parts.append(f"> {line}")
 
         parts.append("")
         return "\n".join(parts)
 
     def _mono_to_wall_str(self, mono: float) -> str:
         import time as _time
+
         wall = self._session_start_wall + (mono - self._session_start_mono)
         return _time.strftime("%H:%M", _time.localtime(wall))
