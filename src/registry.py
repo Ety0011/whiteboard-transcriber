@@ -137,11 +137,11 @@ class Registry:
 
     def __init__(
         self,
-        stable_time_threshold: float = 5.0,
-        tombstone_retention: float = 5.0,
-        match_threshold: float = 0.4,
-        drift_threshold_px: float = 20.0,
-        erase_grace_period: float = 0.5,
+        stable_time_threshold: float = 10.0,
+        tombstone_retention: float = 3.0,
+        match_threshold: float = 0.5,
+        drift_threshold_px: float = 50.0,
+        erase_grace_period: float = 1.0,
     ) -> None:
         self._stable_time_threshold = stable_time_threshold
         self._tombstone_retention = tombstone_retention
@@ -261,9 +261,7 @@ class Registry:
             if now - ent.last_modified >= self._stable_time_threshold:
                 self._dispatch_for_inference(ent, block, frame, now)
 
-    def _dispatch_for_inference(
-        self, ent: SemanticEntity, block: Block, frame, now
-    ):
+    def _dispatch_for_inference(self, ent: SemanticEntity, block: Block, frame, now):
         """Capture crop and transition STABILIZING → INFERRING."""
         x1, y1, x2, y2 = ent.bbox
         crop = frame[y1:y2, x1:x2]
