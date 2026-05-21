@@ -25,8 +25,8 @@ import cv2
 import numpy as np
 
 import capture
+from anchor_service.block_registry import BlockRegistry, EntityState
 from anchor_service.detector import AnchorDetector
-from anchor_service.entity_registry import EntityRegistry, EntityState
 from anchor_service.grouper import EntityGrouper
 from board_service.board_masker import BoardMasker
 from board_service.person_masker import PersonMasker
@@ -47,9 +47,9 @@ _CORNER_LABELS = ["TL", "TR", "BR", "BL"]
 
 _STATE_COLORS = {
     EntityState.STABILIZING: (0, 165, 255),
-    EntityState.INFERRING:   (0, 200, 255),
-    EntityState.ACTIVE:      (0, 230, 0),
-    EntityState.ERASED:      (0, 0, 220),
+    EntityState.INFERRING: (0, 200, 255),
+    EntityState.ACTIVE: (0, 230, 0),
+    EntityState.ERASED: (0, 0, 220),
 }
 
 
@@ -76,7 +76,11 @@ def _draw_corners(frame: np.ndarray, corners: np.ndarray | None) -> np.ndarray:
 
     pts = corners.astype(np.int32)
     cv2.polylines(
-        frame, [pts.reshape(-1, 1, 2)], isClosed=True, color=(0, 0, 220), thickness=3,
+        frame,
+        [pts.reshape(-1, 1, 2)],
+        isClosed=True,
+        color=(0, 0, 220),
+        thickness=3,
         lineType=cv2.LINE_AA,
     )
     for i, (x, y) in enumerate(pts):
@@ -168,7 +172,7 @@ def main() -> None:
     reconstructor = BoardReconstructor()
     anchor_detector = AnchorDetector()
     grouper = EntityGrouper()
-    entity_registry = EntityRegistry()
+    entity_registry = BlockRegistry()
     transcriber = MockTranscriber()
     ledger = LedgerRegistry()
     pending_ocr: dict[int, object] = {}  # entity_id → SemanticEntity, awaiting VLM

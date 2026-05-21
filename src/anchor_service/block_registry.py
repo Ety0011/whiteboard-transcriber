@@ -32,9 +32,9 @@ class EntityState(enum.Enum):
     """Lifecycle states for a tracked semantic entity."""
 
     STABILIZING = "STABILIZING"  # ink writing/editing in progress or settling
-    INFERRING   = "INFERRING"    # crop submitted to GOT-OCR 2.0, awaiting result
-    ACTIVE      = "ACTIVE"       # OCR complete; entity visible on board
-    ERASED      = "ERASED"       # anchors gone from clean board; entity archived
+    INFERRING = "INFERRING"  # crop submitted to GOT-OCR 2.0, awaiting result
+    ACTIVE = "ACTIVE"  # OCR complete; entity visible on board
+    ERASED = "ERASED"  # anchors gone from clean board; entity archived
 
 
 @dataclasses.dataclass
@@ -62,11 +62,11 @@ class SemanticEntity:
 
 @dataclasses.dataclass
 class EntityUpdate:
-    """Output of one EntityRegistry processing cycle."""
+    """Output of one BlockRegistry processing cycle."""
 
-    entities: list[SemanticEntity]         # all non-ERASED entities
+    entities: list[SemanticEntity]  # all non-ERASED entities
     newly_inferring: list[SemanticEntity]  # transitioned to INFERRING this frame
-    newly_erased: list[SemanticEntity]     # transitioned to ERASED this frame
+    newly_erased: list[SemanticEntity]  # transitioned to ERASED this frame
 
 
 # ---------------------------------------------------------------------------
@@ -114,12 +114,12 @@ def _match_score(
 
 
 # ---------------------------------------------------------------------------
-# EntityRegistry
+# BlockRegistry
 # ---------------------------------------------------------------------------
 
 
 # TODO: fix duplicate entities
-class EntityRegistry:
+class BlockRegistry:
     """Persistent entity registry for the whiteboard pipeline.
 
     Matches grouped anchors from Stage 6 to existing entities, applies EMA
@@ -141,11 +141,13 @@ class EntityRegistry:
         tombstone_retention: float = 5.0,
         match_threshold: float = 0.4,
         drift_threshold_px: float = 20.0,
+        erase_grace_period: float = 0.5,
     ) -> None:
         self._stable_time_threshold = stable_time_threshold
         self._tombstone_retention = tombstone_retention
         self._match_threshold = match_threshold
         self._drift_threshold_px = drift_threshold_px
+        self._erase_grace_period = erase_grace_period
 
         self._registry: dict[int, SemanticEntity] = {}
         self._next_id: int = 0
@@ -259,7 +261,9 @@ class EntityRegistry:
             if now - ent.last_modified >= self._stable_time_threshold:
                 self._dispatch_for_inference(ent, grp, frame, now)
 
-    def _dispatch_for_inference(self, ent: SemanticEntity, grp: EntityGroup, frame, now):
+    def _dispatch_for_inference(
+        self, ent: SemanticEntity, grp: EntityGroup, frame, now
+    ):
         """Capture crop and transition STABILIZING → INFERRING."""
         x1, y1, x2, y2 = ent.bbox
         crop = frame[y1:y2, x1:x2]
@@ -271,11 +275,12 @@ class EntityRegistry:
             log.debug("Entity %d → INFERRING", ent.id)
 
     def _erase_unmatched(self, active_entities, matched_ent_ids, now):
-        """Immediately erase any entity not matched by a current anchor group."""
+        """Erase entities absent for longer than erase_grace_period seconds."""
         for ent in active_entities:
             if ent.id not in matched_ent_ids:
-                ent.state, ent.last_modified = EntityState.ERASED, now
-                log.debug("Entity %d → ERASED", ent.id)
+                if now - ent.last_seen >= self._erase_grace_period:
+                    ent.state, ent.last_modified = EntityState.ERASED, now
+                    log.debug("Entity %d → ERASED", ent.id)
 
     def _create_new_entities(self, groups, matched_indices, now):
         for grp_id, grp in enumerate(groups):
