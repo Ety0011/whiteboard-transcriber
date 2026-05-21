@@ -46,7 +46,12 @@ from layout_service import (
 from ledger import Ledger
 from registry import Registry
 from renderer import Renderer
-from transcriber_service.transcriber import MockTranscriber
+from transcriber_service import (
+    GotOcrTranscriber,
+    MockTranscriber,
+    PaddleVLTranscriber,
+    TranscriptionWorker,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
@@ -75,6 +80,12 @@ def main() -> None:
         default="hierarchical_union_find",
         help="Stage 5 layout detection backend (default: hierarchical_union_find)",
     )
+    parser.add_argument(
+        "--transcriber",
+        choices=["mock", "got_ocr", "paddlevl"],
+        default="mock",
+        help="Stage 7 OCR backend (default: mock)",
+    )
     args = parser.parse_args()
 
     frame_queue = capture.start(args.source)
@@ -100,7 +111,16 @@ def main() -> None:
 
     discovery = Discovery(factory=factories[args.detector])
     registry = Registry()
-    transcriber = MockTranscriber()
+    if args.transcriber == "mock":
+        transcriber = MockTranscriber()
+    else:
+        _transcriber_factories = {
+            "got_ocr": GotOcrTranscriber,
+            "paddlevl": PaddleVLTranscriber,
+        }
+        transcriber = TranscriptionWorker(
+            factory=_transcriber_factories[args.transcriber]
+        )
     ledger = Ledger(output_dir=Path("output"))
     renderer = Renderer()
     pending_ocr: dict[int, object] = {}
@@ -132,9 +152,7 @@ def main() -> None:
             if auto_mode:
                 blocks, latency = discovery.detect(composite)
                 if latency:
-                    status_msg = (
-                        f"Detector: {args.detector.upper()} | AUTO | {latency * 1000:.1f}ms"
-                    )
+                    status_msg = f"Detector: {args.detector.upper()} | AUTO | {latency * 1000:.1f}ms"
             else:
                 blocks, latency = discovery.poll()
 
@@ -188,9 +206,7 @@ def main() -> None:
                 log.info("[a] Mode → %s", mode)
             elif key == ord(" ") and not auto_mode:
                 blocks, latency = discovery.detect(composite)
-                status_msg = (
-                    f"Detector: {args.detector.upper()} | MANUAL | {latency * 1000:.0f}ms"
-                )
+                status_msg = f"Detector: {args.detector.upper()} | MANUAL | {latency * 1000:.1f}ms"
                 log.info("[space] Manual submit | latency=%.0fms", latency * 1000)
             else:
                 renderer.handle_key(key)
