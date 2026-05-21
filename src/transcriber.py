@@ -1,4 +1,4 @@
-"""TranscriptionWorker — subprocess manager for any BaseTranscriber backend.
+"""Transcriber — subprocess manager for any BaseTranscriber backend.
 
 Mirrors Discovery: factory is pickled and shipped to the worker process;
 model loading happens inside the subprocess after unpickling. Main process
@@ -32,12 +32,12 @@ def _worker_main(
     """Transcription inference loop — runs in a dedicated child process."""
     import logging as _log
 
-    _log.basicConfig(level=logging.WARNING)
+    _log.basicConfig(level=logging.INFO)
     _log = _log.getLogger(__name__)
 
     transcriber = factory()
     transcriber.load()
-    _log.warning("TranscriptionWorker: %s ready", type(transcriber).__name__)
+    _log.info("Transcriber: %s ready", type(transcriber).__name__)
 
     while True:
         item = in_q.get()  # block until work arrives
@@ -48,22 +48,20 @@ def _worker_main(
         text = ""
         try:
             text = transcriber.transcribe(crop)
-            _log.warning(
-                "TranscriptionWorker: entity %d → %d chars: %r",
+            _log.info(
+                "Transcriber: entity %d → %d chars: %r",
                 entity_id,
                 len(text),
                 text[:60],
             )
         except Exception:
-            _log.exception(
-                "TranscriptionWorker: inference failed for entity %d", entity_id
-            )
+            _log.exception("Transcriber: inference failed for entity %d", entity_id)
 
         try:
             out_q.put_nowait(TranscriptionResult(entity_id=entity_id, text=text))
         except Exception:
             _log.warning(
-                "TranscriptionWorker: output queue full — entity %d dropped", entity_id
+                "Transcriber: output queue full — entity %d dropped", entity_id
             )
 
 
@@ -84,7 +82,7 @@ class Transcriber:
             name="transcription-worker",
         )
         self._worker.start()
-        log.info("TranscriptionWorker started (pid=%d)", self._worker.pid)
+        log.info("Transcriber started (pid=%d)", self._worker.pid)
 
     def submit(self, entity_id: int, crop: np.ndarray) -> None:
         """Enqueue *crop* for transcription. Non-blocking; logs if queue full."""
@@ -92,7 +90,7 @@ class Transcriber:
             self._in_q.put_nowait((entity_id, crop))
         except Exception:
             log.warning(
-                "TranscriptionWorker: input queue full — entity %d dropped. "
+                "Transcriber: input queue full — entity %d dropped. "
                 "Will retry on next stable cycle.",
                 entity_id,
             )
@@ -116,4 +114,4 @@ class Transcriber:
         self._worker.join(timeout=10)
         if self._worker.is_alive():
             self._worker.terminate()
-        log.info("TranscriptionWorker stopped")
+        log.info("Transcriber stopped")
