@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 
 from .base import BaseLayoutDetector
+from .grouper import Block
 
 
 class StrokeDetector(BaseLayoutDetector):
@@ -19,11 +20,9 @@ class StrokeDetector(BaseLayoutDetector):
         self.min_area = min_area
 
     def load(self):
-        print(
-            "[StrokeDetector] Initializing spatial clustering..."
-        )
+        print("[StrokeDetector] Initializing spatial clustering...")
 
-    def detect(self, frame: np.ndarray) -> list[dict]:
+    def detect(self, frame: np.ndarray) -> list[Block]:
         # 1. Grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
@@ -90,8 +89,8 @@ class StrokeDetector(BaseLayoutDetector):
             groups.append(group)
 
         # 5. Compute tight Convex Hulls representing irregular region boundaries
-        discovered_regions = []
-        for g_idx, group in enumerate(groups):
+        blocks = []
+        for group in groups:
             all_pts = []
             for comp_idx in group:
                 comp_pts = valid_components[comp_idx]["points"]
@@ -105,15 +104,15 @@ class StrokeDetector(BaseLayoutDetector):
 
             # Compute Convex Hull around stroke coordinates to wrap skewed writing tightly
             hull = cv2.convexHull(all_pts)
-            poly_pts = hull.reshape(-1, 2)
+            poly = hull.reshape(-1, 2)
+            x1 = int(poly[:, 0].min())
+            y1 = int(poly[:, 1].min())
+            x2 = int(poly[:, 0].max())
+            y2 = int(poly[:, 1].max())
+            bbox = np.array([x1, y1, x2, y2], dtype=np.int32)
 
-            discovered_regions.append(
-                {
-                    "text": f"Cluster {g_idx} ({len(group)} strokes)",
-                    "poly": poly_pts,
-                    "label": "TEXT",
-                    "color": (0, 230, 0),
-                }
+            blocks.append(
+                Block(poly=poly, bbox=bbox, label="TEXT", confidence=1.0, anchors=[])
             )
 
-        return discovered_regions
+        return blocks

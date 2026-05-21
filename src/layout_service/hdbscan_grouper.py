@@ -1,6 +1,6 @@
 import numpy as np
 
-from .grouper import EntityGroup, AnchorGrouper
+from .grouper import Block, AnchorGrouper
 from .text_line_detector import Anchor
 
 
@@ -40,15 +40,20 @@ class HDBSCANGrouper(AnchorGrouper):
 
         return dist_matrix
 
-    def group(self, anchors: list[Anchor]) -> list[EntityGroup]:
+    def group(self, anchors: list[Anchor]) -> list[Block]:
         if not anchors:
             return []
         if len(anchors) == 1:
+            bbox = anchors[0].bbox
+            x1, y1, x2, y2 = bbox.tolist()
+            poly = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32)
             return [
-                EntityGroup(
-                    anchors=anchors,
-                    bbox=anchors[0].bbox,
+                Block(
+                    poly=poly,
+                    bbox=bbox,
+                    label="TEXT",
                     confidence=anchors[0].confidence,
+                    anchors=anchors,
                 )
             ]
 
@@ -81,16 +86,19 @@ class HDBSCANGrouper(AnchorGrouper):
                     groups_dict[label] = []
                 groups_dict[label].append(anchors[idx])
 
-        output_groups = []
+        blocks = []
         for constituent_anchors in groups_dict.values():
             macro_box = self.compute_macro_bbox(constituent_anchors)
+            macro_poly = self.compute_macro_poly(constituent_anchors)
             max_conf = max(a.confidence for a in constituent_anchors)
-            output_groups.append(
-                EntityGroup(
-                    anchors=constituent_anchors,
+            blocks.append(
+                Block(
+                    poly=macro_poly,
                     bbox=macro_box,
+                    label="TEXT",
                     confidence=max_conf,
+                    anchors=constituent_anchors,
                 )
             )
 
-        return output_groups
+        return blocks

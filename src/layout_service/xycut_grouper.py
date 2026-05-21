@@ -1,6 +1,6 @@
 import numpy as np
 
-from .grouper import EntityGroup, AnchorGrouper
+from .grouper import Block, AnchorGrouper
 from .text_line_detector import Anchor
 
 
@@ -83,7 +83,7 @@ class XYCutGrouper(AnchorGrouper):
             )
         return final_leaves
 
-    def group(self, anchors: list[Anchor]) -> list[EntityGroup]:
+    def group(self, anchors: list[Anchor]) -> list[Block]:
         if not anchors:
             return []
 
@@ -95,17 +95,20 @@ class XYCutGrouper(AnchorGrouper):
             initial_indices, bboxes, split_horizontal=True
         )
 
-        output_groups = []
+        blocks = []
         for leaf_indices in grouped_index_leaves:
             constituent_anchors = [anchors[idx] for idx in leaf_indices]
             macro_box = self.compute_macro_bbox(constituent_anchors)
+            macro_poly = self.compute_macro_poly(constituent_anchors)
             max_conf = max(a.confidence for a in constituent_anchors)
-            output_groups.append(
-                EntityGroup(
-                    anchors=constituent_anchors,
+            blocks.append(
+                Block(
+                    poly=macro_poly,
                     bbox=macro_box,
+                    label="TEXT",
                     confidence=max_conf,
+                    anchors=constituent_anchors,
                 )
             )
 
-        return output_groups
+        return blocks

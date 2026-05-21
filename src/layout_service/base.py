@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 
 import numpy as np
+
+from .grouper import Block
 
 
 class BaseLayoutDetector(ABC):
@@ -18,15 +22,10 @@ class BaseLayoutDetector(ABC):
         pass
 
     @abstractmethod
-    def detect(self, frame: np.ndarray) -> list[dict]:
-        """
-        Inference loop execution.
-        Must return a list of dictionaries structured as:
-            {
-                "text": str,          # Text labels/confidence to overlay
-                "poly": np.ndarray,   # Boundary coordinates, shape (N, 2), dtype=int32
-                "label": str,         # Simplified taxonomy ("MATH", "TABLE", "DIAGRAM", "TEXT")
-                "color": tuple        # BGR coordinate color
-            }
+    def detect(self, frame: np.ndarray) -> list[Block]:
+        """Run inference and return detected layout blocks.
+
+        Each Block carries: poly, bbox, label ("TEXT"|"MATH"|"TABLE"|"DIAGRAM"),
+        confidence, and anchors (empty list for non-anchor-based detectors).
         """
         pass

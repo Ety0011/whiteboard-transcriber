@@ -1,6 +1,7 @@
 import numpy as np
 
 from .base import BaseLayoutDetector
+from .grouper import Block
 
 
 class PaddleVLDetector(BaseLayoutDetector):
@@ -19,7 +20,7 @@ class PaddleVLDetector(BaseLayoutDetector):
         self.model, self.processor = load_mlx(self.model_id)
         self.config = self.model.config
 
-    def detect(self, frame: np.ndarray) -> list[dict]:
+    def detect(self, frame: np.ndarray) -> list[Block]:
         import re
 
         import cv2
@@ -45,7 +46,7 @@ class PaddleVLDetector(BaseLayoutDetector):
         raw_text = gen_result.text if hasattr(gen_result, "text") else str(gen_result)
 
         # Parse coordinate tokens matching the LOC template [10]
-        regions = []
+        blocks = []
         tokens_pattern = re.compile(r"((?:<\|LOC_\d+\|>)+)")
         parts = tokens_pattern.split(raw_text)
 
@@ -63,13 +64,16 @@ class PaddleVLDetector(BaseLayoutDetector):
             poly_pts = []
             for j in range(0, len(coords), 2):
                 token_x, token_y = coords[j], coords[j + 1]
-                abs_x = int((token_x / 1000.0) * w)
-                abs_y = int((token_y / 1000.0) * h)
-                abs_x = max(0, min(w, abs_x))
-                abs_y = max(0, min(h, abs_y))
+                abs_x = max(0, min(w, int((token_x / 1000.0) * w)))
+                abs_y = max(0, min(h, int((token_y / 1000.0) * h)))
                 poly_pts.append([abs_x, abs_y])
 
-            pts_arr = np.array(poly_pts, dtype=np.int32)
+            poly = np.array(poly_pts, dtype=np.int32)
+            x1 = int(poly[:, 0].min())
+            y1 = int(poly[:, 1].min())
+            x2 = int(poly[:, 0].max())
+            y2 = int(poly[:, 1].max())
+            bbox = np.array([x1, y1, x2, y2], dtype=np.int32)
 
             if (
                 "$$" in content
@@ -78,15 +82,11 @@ class PaddleVLDetector(BaseLayoutDetector):
                 or "=" in content
             ):
                 label = "MATH"
-                color = (0, 200, 255)
             elif len(content) < 3 and not content.isalnum():
                 label = "DIAGRAM"
-                color = (255, 100, 0)
             else:
                 label = "TEXT"
-                color = (0, 230, 0)
 
-            regions.append(
-                {"text": content, "poly": pts_arr, "label": label, "color": color}
-            )
-        return regions
+            blocks.append(Block(poly=poly, bbox=bbox, label=label, confidence=1.0, anchors=[]))
+
+        return blocks

@@ -1,6 +1,6 @@
 import numpy as np
 
-from .grouper import EntityGroup, AnchorGrouper
+from .grouper import Block, AnchorGrouper
 from .text_line_detector import Anchor, UnionFind
 
 
@@ -14,7 +14,7 @@ class UnionFindGrouper(AnchorGrouper):
     def __init__(self, iou_threshold: float = 0.02):
         self.iou_threshold = iou_threshold
 
-    def group(self, anchors: list[Anchor]) -> list[EntityGroup]:
+    def group(self, anchors: list[Anchor]) -> list[Block]:
         if not anchors:
             return []
 
@@ -35,15 +35,22 @@ class UnionFindGrouper(AnchorGrouper):
             root = uf.find(i)
             sets.setdefault(root, []).append(anchors[i])
 
-        output_groups = []
+        blocks = []
         for constituent_anchors in sets.values():
             macro_box = self.compute_macro_bbox(constituent_anchors)
+            macro_poly = self.compute_macro_poly(constituent_anchors)
             max_conf = max(a.confidence for a in constituent_anchors)
-            output_groups.append(
-                EntityGroup(anchors=constituent_anchors, bbox=macro_box, confidence=max_conf)
+            blocks.append(
+                Block(
+                    poly=macro_poly,
+                    bbox=macro_box,
+                    label="TEXT",
+                    confidence=max_conf,
+                    anchors=constituent_anchors,
+                )
             )
 
-        return output_groups
+        return blocks
 
     def _should_merge(self, a: Anchor, b: Anchor, v_expand: float, h_expand: float) -> bool:
         ax1, ay1, ax2, ay2 = a.bbox.tolist()

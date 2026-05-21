@@ -1,6 +1,6 @@
 import numpy as np
 
-from .grouper import EntityGroup, AnchorGrouper
+from .grouper import Block, AnchorGrouper
 from .text_line_detector import Anchor
 
 
@@ -15,7 +15,7 @@ class DBSCANGrouper(AnchorGrouper):
         # eps_factor scales clustering merge radius relative to median line height
         self.eps_factor = eps_factor
 
-    def group(self, anchors: list[Anchor]) -> list[EntityGroup]:
+    def group(self, anchors: list[Anchor]) -> list[Block]:
         from sklearn.cluster import DBSCAN
 
         if not anchors:
@@ -51,12 +51,19 @@ class DBSCANGrouper(AnchorGrouper):
                 sets[cluster_id].append(anchors[orig_idx])
                 added[cluster_id].add(orig_idx)
 
-        output_groups = []
+        blocks = []
         for constituent_anchors in sets.values():
             macro_box = self.compute_macro_bbox(constituent_anchors)
+            macro_poly = self.compute_macro_poly(constituent_anchors)
             max_conf = max(a.confidence for a in constituent_anchors)
-            output_groups.append(
-                EntityGroup(anchors=constituent_anchors, bbox=macro_box, confidence=max_conf)
+            blocks.append(
+                Block(
+                    poly=macro_poly,
+                    bbox=macro_box,
+                    label="TEXT",
+                    confidence=max_conf,
+                    anchors=constituent_anchors,
+                )
             )
 
-        return output_groups
+        return blocks

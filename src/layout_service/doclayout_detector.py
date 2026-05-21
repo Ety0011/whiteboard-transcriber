@@ -2,6 +2,7 @@ import numpy as np
 import torch
 
 from .base import BaseLayoutDetector
+from .grouper import Block
 
 
 class DocLayoutDetector(BaseLayoutDetector):
@@ -26,7 +27,7 @@ class DocLayoutDetector(BaseLayoutDetector):
         )
         self.model.eval()
 
-    def detect(self, frame: np.ndarray) -> list[dict]:
+    def detect(self, frame: np.ndarray) -> list[Block]:
         import cv2
         from PIL import Image
 
@@ -48,7 +49,7 @@ class DocLayoutDetector(BaseLayoutDetector):
         labels = results["labels"].cpu()
         polygon_points_list = results.get("polygon_points", [])
 
-        discovered_regions = []
+        blocks = []
         for idx, score in enumerate(scores):
             if score < 0.35:
                 continue
@@ -59,26 +60,22 @@ class DocLayoutDetector(BaseLayoutDetector):
             name_lower = raw_label.lower()
             if "formula" in name_lower or "algorithm" in name_lower:
                 label = "MATH"
-                color = (0, 200, 255)
             elif "table" in name_lower:
                 label = "TABLE"
-                color = (255, 255, 0)
             elif "chart" in name_lower or "image" in name_lower or "pic" in name_lower:
                 label = "DIAGRAM"
-                color = (255, 100, 0)
             else:
                 label = "TEXT"
-                color = (0, 230, 0)
 
             if idx < len(polygon_points_list):
                 poly_tensor = polygon_points_list[idx]
                 if torch.is_tensor(poly_tensor):
-                    poly_pts = poly_tensor.cpu().numpy().astype(np.int32)
+                    poly = poly_tensor.cpu().numpy().astype(np.int32)
                 else:
-                    poly_pts = np.array(poly_tensor, dtype=np.int32)
+                    poly = np.array(poly_tensor, dtype=np.int32)
             else:
                 box = results["boxes"][idx].cpu().numpy().astype(np.int32)
-                poly_pts = np.array(
+                poly = np.array(
                     [
                         [box[0], box[1]],
                         [box[2], box[1]],
@@ -88,12 +85,14 @@ class DocLayoutDetector(BaseLayoutDetector):
                     dtype=np.int32,
                 )
 
-            discovered_regions.append(
-                {
-                    "text": f"{raw_label.upper()} ({score:.1%})",
-                    "poly": poly_pts,
-                    "label": label,
-                    "color": color,
-                }
+            x1 = int(poly[:, 0].min())
+            y1 = int(poly[:, 1].min())
+            x2 = int(poly[:, 0].max())
+            y2 = int(poly[:, 1].max())
+            bbox = np.array([x1, y1, x2, y2], dtype=np.int32)
+
+            blocks.append(
+                Block(poly=poly, bbox=bbox, label=label, confidence=float(score), anchors=[])
             )
-        return discovered_regions
+
+        return blocks

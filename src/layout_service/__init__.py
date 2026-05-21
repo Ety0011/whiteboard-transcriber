@@ -1,4 +1,4 @@
-from .grouper import EntityGroup, AnchorGrouper
+from .grouper import Block, AnchorGrouper
 from .base import BaseLayoutDetector
 from .dbscan_grouper import DBSCANGrouper
 from .hdbscan_grouper import HDBSCANGrouper
@@ -20,7 +20,7 @@ from .yolo_detector import YOLODetector
 __all__ = [
     "BaseLayoutDetector",
     "AnchorGrouper",
-    "EntityGroup",
+    "Block",
     "TextBlockDetector",
     "UnionFindGrouper",
     "DBSCANGrouper",

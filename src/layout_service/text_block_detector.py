@@ -1,6 +1,6 @@
 import numpy as np
 
-from .grouper import AnchorGrouper
+from .grouper import AnchorGrouper, Block
 from .text_line_detector import TextLineDetector
 from .base import BaseLayoutDetector
 
@@ -8,7 +8,7 @@ from .base import BaseLayoutDetector
 class TextBlockDetector(BaseLayoutDetector):
     """
     Composes TextLineDetector (PP-OCRv5_server_det) with any AnchorGrouper.
-    Bridges the anchor → EntityGroup pipeline into the BaseLayoutDetector frame → list[dict] contract.
+    Bridges the anchor-based detection into the BaseLayoutDetector list[Block] contract.
     """
 
     def __init__(
@@ -31,28 +31,12 @@ class TextBlockDetector(BaseLayoutDetector):
             box_thresh=self.box_thresh, unclip_ratio=self.unclip_ratio
         )
 
-    def detect(self, frame: np.ndarray) -> list[dict]:
+    def detect(self, frame: np.ndarray) -> list[Block]:
         result = self.anchor_detector.detect(frame)
         anchors = result.anchors
 
         if not anchors:
             return []
 
-        groups = self.strategy.group(anchors)
-
-        regions = []
-        for g_idx, group in enumerate(groups):
-            x1, y1, x2, y2 = group.bbox.tolist()
-            poly_pts = np.array(
-                [[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32
-            )
-            regions.append(
-                {
-                    "text": f"Block {g_idx} ({len(group.anchors)} lines)",
-                    "poly": poly_pts,
-                    "label": "TEXT",
-                    "color": (255, 0, 255),
-                }
-            )
-
-        return sorted(regions, key=lambda r: r["poly"][:, 1].min())
+        blocks = self.strategy.group(anchors)
+        return sorted(blocks, key=lambda b: b.poly[:, 1].min())

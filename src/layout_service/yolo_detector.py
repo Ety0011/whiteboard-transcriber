@@ -2,6 +2,7 @@ import numpy as np
 import torch
 
 from .base import BaseLayoutDetector
+from .grouper import Block
 
 
 class YOLODetector(BaseLayoutDetector):
@@ -24,12 +25,12 @@ class YOLODetector(BaseLayoutDetector):
         self.model = YOLO(weights_path)
         self.device = "mps" if torch.backends.mps.is_available() else "cpu"
 
-    def detect(self, frame: np.ndarray) -> list[dict]:
+    def detect(self, frame: np.ndarray) -> list[Block]:
         results = self.model.predict(
             frame, imgsz=640, conf=0.25, verbose=False, device=self.device
         )[0]
 
-        discovered_regions = []
+        blocks = []
         for box in results.boxes:
             cls_id = int(box.cls[0].item())
             class_name = self.model.names[cls_id]
@@ -39,10 +40,8 @@ class YOLODetector(BaseLayoutDetector):
             name_lower = class_name.lower()
             if "math" in name_lower or "formula" in name_lower:
                 label = "MATH"
-                color = (0, 200, 255)
             elif "table" in name_lower:
                 label = "TABLE"
-                color = (255, 255, 0)
             elif (
                 "illus" in name_lower
                 or "pic" in name_lower
@@ -50,22 +49,13 @@ class YOLODetector(BaseLayoutDetector):
                 or "chart" in name_lower
             ):
                 label = "DIAGRAM"
-                color = (255, 100, 0)
             else:
                 label = "TEXT"
-                color = (0, 230, 0)
 
-            x1, y1, x2, y2 = xyxy[0], xyxy[1], xyxy[2], xyxy[3]
-            poly_pts = np.array(
-                [[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32
-            )
+            x1, y1, x2, y2 = int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])
+            poly = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32)
+            bbox = np.array([x1, y1, x2, y2], dtype=np.int32)
 
-            discovered_regions.append(
-                {
-                    "text": f"{class_name.upper()} ({score:.1%})",
-                    "poly": poly_pts,
-                    "label": label,
-                    "color": color,
-                }
-            )
-        return discovered_regions
+            blocks.append(Block(poly=poly, bbox=bbox, label=label, confidence=score, anchors=[]))
+
+        return blocks
