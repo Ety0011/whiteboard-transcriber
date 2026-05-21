@@ -5,7 +5,7 @@ from typing import Callable
 
 import numpy as np
 
-from .base import BaseLayoutDetector
+from layout_service.base import BaseLayoutDetector
 
 log = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ def _worker_main(
             pass
 
 
-class BlockDiscovery:
+class Discovery:
     """Non-blocking layout detector running in a dedicated subprocess.
 
     Call detect(frame) every pipeline tick — it submits the frame to the
@@ -73,7 +73,7 @@ class BlockDiscovery:
             name="stage5-layout",
         )
         self._worker.start()
-        print(f"BlockDiscovery worker started (pid={self._worker.pid})")
+        print(f"Discovery worker started (pid={self._worker.pid})")
 
     @property
     def is_busy(self) -> bool:
@@ -112,4 +112,4 @@ class BlockDiscovery:
         self._worker.join(timeout=5)
         if self._worker.is_alive():
             self._worker.terminate()
-        print("BlockDiscovery worker stopped")
+        print("Discovery worker stopped")

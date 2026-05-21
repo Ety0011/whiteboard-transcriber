@@ -4,7 +4,7 @@ import torch
 from .base import BaseLayoutDetector
 
 
-class YOLOLayoutDetector(BaseLayoutDetector):
+class YOLODetector(BaseLayoutDetector):
     def __init__(
         self,
         repo_id: str = "hantian/yolo-doclaynet",
@@ -19,7 +19,7 @@ class YOLOLayoutDetector(BaseLayoutDetector):
         from huggingface_hub import hf_hub_download
         from ultralytics import YOLO
 
-        print("[YOLOLayoutDetector] Downloading weights...")
+        print("[YOLODetector] Downloading weights...")
         weights_path = hf_hub_download(repo_id=self.repo_id, filename=self.filename)
         self.model = YOLO(weights_path)
         self.device = "mps" if torch.backends.mps.is_available() else "cpu"

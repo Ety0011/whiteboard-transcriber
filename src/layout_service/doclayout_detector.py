@@ -4,7 +4,7 @@ import torch
 from .base import BaseLayoutDetector
 
 
-class PPDocLayoutV3Detector(BaseLayoutDetector):
+class DocLayoutDetector(BaseLayoutDetector):
     def __init__(self, model_id: str = "PaddlePaddle/PP-DocLayoutV3_safetensors"):
         self.model_id = model_id
         self.model = None

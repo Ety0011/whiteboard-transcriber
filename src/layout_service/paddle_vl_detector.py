@@ -3,7 +3,7 @@ import numpy as np
 from .base import BaseLayoutDetector
 
 
-class PaddleOCRVLDetector(BaseLayoutDetector):
+class PaddleVLDetector(BaseLayoutDetector):
     """Autoregressive VLM layout grounding using the native 'Spotting:' chat template."""
 
     def __init__(self, model_id: str = "mlx-community/PaddleOCR-VL-1.5-8bit"):
@@ -15,7 +15,7 @@ class PaddleOCRVLDetector(BaseLayoutDetector):
     def load(self):
         from mlx_vlm import load as load_mlx
 
-        print(f"[PaddleOCRVLDetector] Loading native VLM on MLX: {self.model_id}...")
+        print(f"[PaddleVLDetector] Loading native VLM on MLX: {self.model_id}...")
         self.model, self.processor = load_mlx(self.model_id)
         self.config = self.model.config
 

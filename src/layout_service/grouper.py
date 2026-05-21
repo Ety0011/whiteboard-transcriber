@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .anchor_detector import Anchor
+from .text_line_detector import Anchor
 
 
 @dataclass
@@ -13,7 +13,7 @@ class EntityGroup:
     confidence: float  # max confidence across constituent anchors
 
 
-class LayoutAggregatorStrategy(ABC):
+class AnchorGrouper(ABC):
     """
     Unified interface for layout parsing and anchor aggregation strategies.
     Defines stable contract for production routing.

@@ -1,10 +1,10 @@
 import numpy as np
 
-from .aggregator_base import EntityGroup, LayoutAggregatorStrategy
-from .anchor_detector import Anchor, UnionFind
+from .grouper import EntityGroup, AnchorGrouper
+from .text_line_detector import Anchor, UnionFind
 
 
-class UnionFindClusterer(LayoutAggregatorStrategy):
+class UnionFindGrouper(AnchorGrouper):
     """
     Hierarchical Union-Find grouping strategy.
     Adaptive spatial thresholds scaled to median line height.

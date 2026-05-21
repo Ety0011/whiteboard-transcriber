@@ -79,7 +79,7 @@ def _worker_main(
         box_thresh=box_thresh,
         unclip_ratio=unclip_ratio,
     )
-    log.info("AnchorDetector: PP-OCRv5_server_det ready")
+    log.info("TextLineDetector: PP-OCRv5_server_det ready")
 
     while True:
         composite = in_q.get()  # block until work arrives
@@ -91,7 +91,7 @@ def _worker_main(
             h, w = composite.shape[:2]
             raw = detector.predict(composite)
             anchors = _raw_to_anchors(raw, h, w)
-            log.debug("AnchorDetector: %d TEXT_LINE anchors", len(anchors))
+            log.debug("TextLineDetector: %d TEXT_LINE anchors", len(anchors))
         except Exception:
             log.exception("PaddleOCR detection failed")
 
@@ -106,7 +106,7 @@ def _worker_main(
             pass
 
 
-class AnchorDetector:
+class TextLineDetector:
     """Non-blocking PaddleOCR anchor detector."""
 
     def __init__(
@@ -124,7 +124,7 @@ class AnchorDetector:
             name="paddle-detect",
         )
         self._worker.start()
-        print(f"AnchorDetector worker started (pid={self._worker.pid})")
+        print(f"TextLineDetector worker started (pid={self._worker.pid})")
 
     def detect(self, composite: np.ndarray) -> DetectorResult:
         """Submit composite for async detection; return latest cached result."""
@@ -149,7 +149,7 @@ class AnchorDetector:
         self._worker.join(timeout=5)
         if self._worker.is_alive():
             self._worker.terminate()
-        print("AnchorDetector worker stopped")
+        print("TextLineDetector worker stopped")
 
 
 class UnionFind:

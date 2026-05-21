@@ -1,10 +1,10 @@
 import numpy as np
 
-from .aggregator_base import EntityGroup, LayoutAggregatorStrategy
-from .anchor_detector import Anchor
+from .grouper import EntityGroup, AnchorGrouper
+from .text_line_detector import Anchor
 
 
-class AnisotropicSpatialClusterer(LayoutAggregatorStrategy):
+class HDBSCANGrouper(AnchorGrouper):
     """
     Anisotropic spatial density clusterer utilizing HDBSCAN.
     Penalizes vertical distances tightly while allowing wide horizontal tracking

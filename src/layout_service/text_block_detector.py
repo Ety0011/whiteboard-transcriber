@@ -1,33 +1,33 @@
 import numpy as np
 
-from .aggregator_base import LayoutAggregatorStrategy
-from .anchor_detector import AnchorDetector
+from .grouper import AnchorGrouper
+from .text_line_detector import TextLineDetector
 from .base import BaseLayoutDetector
 
 
-class AnchorBasedLayoutDetector(BaseLayoutDetector):
+class TextBlockDetector(BaseLayoutDetector):
     """
-    Composes AnchorDetector (PP-OCRv5_server_det) with any LayoutAggregatorStrategy.
+    Composes TextLineDetector (PP-OCRv5_server_det) with any AnchorGrouper.
     Bridges the anchor → EntityGroup pipeline into the BaseLayoutDetector frame → list[dict] contract.
     """
 
     def __init__(
         self,
-        strategy: LayoutAggregatorStrategy,
+        strategy: AnchorGrouper,
         box_thresh: float = 0.6,
         unclip_ratio: float = 1.2,
     ):
         self.strategy = strategy
         self.box_thresh = box_thresh
         self.unclip_ratio = unclip_ratio
-        self.anchor_detector: AnchorDetector | None = None
+        self.anchor_detector: TextLineDetector | None = None
 
     def load(self) -> None:
         print(
-            f"[AnchorBasedLayoutDetector] Spawning AnchorDetector "
+            f"[TextBlockDetector] Spawning TextLineDetector "
             f"with strategy={type(self.strategy).__name__}..."
         )
-        self.anchor_detector = AnchorDetector(
+        self.anchor_detector = TextLineDetector(
             box_thresh=self.box_thresh, unclip_ratio=self.unclip_ratio
         )
 

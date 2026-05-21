@@ -1,40 +1,38 @@
-from .aggregator_base import EntityGroup, LayoutAggregatorStrategy
-from .anchor_based_detector import AnchorBasedLayoutDetector
-from .anchor_detector import (
+from .grouper import EntityGroup, AnchorGrouper
+from .base import BaseLayoutDetector
+from .dbscan_grouper import DBSCANGrouper
+from .hdbscan_grouper import HDBSCANGrouper
+from .paddle_vl_detector import PaddleVLDetector
+from .doclayout_detector import DocLayoutDetector
+from .stroke_detector import StrokeDetector
+from .text_block_detector import TextBlockDetector
+from .text_line_detector import (
     Anchor,
-    AnchorDetector,
     AnchorType,
     DetectorResult,
+    TextLineDetector,
     UnionFind,
 )
-from .base import BaseLayoutDetector
-from .block_discovery import BlockDiscovery
-from .dbscan_clusterer import DBSCANClusterer
-from .hdbscan_clusterer import AnisotropicSpatialClusterer
-from .paddleocr_vl import PaddleOCRVLDetector
-from .ppdoclayoutv3 import PPDocLayoutV3Detector
-from .stroke_clusterer import ConnectedComponentBFSDetector
-from .union_find_clusterer import UnionFindClusterer
-from .xycut_clusterer import RecursiveXYCutClusterer
-from .yolo_detector import YOLOLayoutDetector
+from .union_find_grouper import UnionFindGrouper
+from .xycut_grouper import XYCutGrouper
+from .yolo_detector import YOLODetector
 
 __all__ = [
     "BaseLayoutDetector",
-    "LayoutAggregatorStrategy",
+    "AnchorGrouper",
     "EntityGroup",
-    "AnchorBasedLayoutDetector",
-    "UnionFindClusterer",
-    "DBSCANClusterer",
-    "AnisotropicSpatialClusterer",
-    "RecursiveXYCutClusterer",
-    "ConnectedComponentBFSDetector",
-    "YOLOLayoutDetector",
-    "PPDocLayoutV3Detector",
-    "PaddleOCRVLDetector",
+    "TextBlockDetector",
+    "UnionFindGrouper",
+    "DBSCANGrouper",
+    "HDBSCANGrouper",
+    "XYCutGrouper",
+    "StrokeDetector",
+    "YOLODetector",
+    "DocLayoutDetector",
+    "PaddleVLDetector",
     "AnchorType",
     "Anchor",
     "DetectorResult",
-    "AnchorDetector",
+    "TextLineDetector",
     "UnionFind",
-    "BlockDiscovery",
 ]

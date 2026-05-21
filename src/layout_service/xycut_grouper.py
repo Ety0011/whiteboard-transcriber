@@ -1,10 +1,10 @@
 import numpy as np
 
-from .aggregator_base import EntityGroup, LayoutAggregatorStrategy
-from .anchor_detector import Anchor
+from .grouper import EntityGroup, AnchorGrouper
+from .text_line_detector import Anchor
 
 
-class RecursiveXYCutClusterer(LayoutAggregatorStrategy):
+class XYCutGrouper(AnchorGrouper):
     """
     Classical top-down document layout structure parser.
     Projects spatial distributions horizontally and vertically to detect white space

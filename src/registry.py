@@ -62,7 +62,7 @@ class SemanticEntity:
 
 @dataclasses.dataclass
 class EntityUpdate:
-    """Output of one BlockRegistry processing cycle."""
+    """Output of one Registry processing cycle."""
 
     entities: list[SemanticEntity]  # all non-ERASED entities
     newly_inferring: list[SemanticEntity]  # transitioned to INFERRING this frame
@@ -114,12 +114,12 @@ def _match_score(
 
 
 # ---------------------------------------------------------------------------
-# BlockRegistry
+# Registry
 # ---------------------------------------------------------------------------
 
 
 # TODO: fix duplicate entities
-class BlockRegistry:
+class Registry:
     """Persistent entity registry for the whiteboard pipeline.
 
     Matches grouped anchors from Stage 6 to existing entities, applies EMA

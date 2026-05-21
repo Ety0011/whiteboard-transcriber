@@ -22,26 +22,26 @@ import cv2
 import numpy as np
 
 import capture
-from anchor_service.block_registry import BlockRegistry, EntityState
 from board_service.board_masker import BoardMasker
 from board_service.person_masker import PersonMasker
 from board_service.reconstructor import BoardReconstructor
 from board_service.rectifier import Rectifier
+from discovery import Discovery
 from layout_service import (
     Anchor,
-    AnchorBasedLayoutDetector,
     AnchorType,
-    AnisotropicSpatialClusterer,
-    BlockDiscovery,
-    ConnectedComponentBFSDetector,
-    DBSCANClusterer,
+    HDBSCANGrouper,
+    StrokeDetector,
+    DBSCANGrouper,
     EntityGroup,
-    PaddleOCRVLDetector,
-    PPDocLayoutV3Detector,
-    RecursiveXYCutClusterer,
-    UnionFindClusterer,
-    YOLOLayoutDetector,
+    PaddleVLDetector,
+    DocLayoutDetector,
+    XYCutGrouper,
+    TextBlockDetector,
+    UnionFindGrouper,
+    YOLODetector,
 )
+from registry import EntityState, Registry
 
 TARGET_W = 1280
 TARGET_H = 720
@@ -103,27 +103,25 @@ def main() -> None:
     reconstructor = BoardReconstructor()
 
     factories = {
-        "stroke_cluster": ConnectedComponentBFSDetector,
-        "yolo": YOLOLayoutDetector,
-        "doclayoutv3": PPDocLayoutV3Detector,
-        "paddleocrvl": PaddleOCRVLDetector,
+        "stroke_cluster": StrokeDetector,
+        "yolo": YOLODetector,
+        "doclayoutv3": DocLayoutDetector,
+        "paddleocrvl": PaddleVLDetector,
         "hierarchical_union_find": partial(
-            AnchorBasedLayoutDetector, strategy=UnionFindClusterer()
+            TextBlockDetector, strategy=UnionFindGrouper()
         ),
-        "dbscan": partial(AnchorBasedLayoutDetector, strategy=DBSCANClusterer()),
-        "hdbscan": partial(
-            AnchorBasedLayoutDetector, strategy=AnisotropicSpatialClusterer()
-        ),
-        "xycut": partial(AnchorBasedLayoutDetector, strategy=RecursiveXYCutClusterer()),
+        "dbscan": partial(TextBlockDetector, strategy=DBSCANGrouper()),
+        "hdbscan": partial(TextBlockDetector, strategy=HDBSCANGrouper()),
+        "xycut": partial(TextBlockDetector, strategy=XYCutGrouper()),
     }
 
-    stage5 = BlockDiscovery(
+    stage5 = Discovery(
         factory=factories[args.model],
         target_w=TARGET_W,
         target_h=TARGET_H,
     )
 
-    registry = BlockRegistry()
+    registry = Registry()
 
     print("\n" + "=" * 60)
     print(f" PIPELINE ACTIVE. Active Stage 5 Model: {args.model.upper()}")
@@ -176,7 +174,7 @@ def main() -> None:
                         registry.mark_active(ent, f"Mock OCR: Entity {eid}", 1.0)
                     _mock_infer.pop(eid, None)
 
-            # Stage 6: Tick BlockRegistry
+            # Stage 6: Tick Registry
             groups = _regions_to_entity_groups(regions)
             update = registry.tick(groups, composite)
 

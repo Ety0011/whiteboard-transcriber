@@ -1,10 +1,10 @@
 import numpy as np
 
-from .aggregator_base import EntityGroup, LayoutAggregatorStrategy
-from .anchor_detector import Anchor
+from .grouper import EntityGroup, AnchorGrouper
+from .text_line_detector import Anchor
 
 
-class DBSCANClusterer(LayoutAggregatorStrategy):
+class DBSCANGrouper(AnchorGrouper):
     """
     Density-based whiteboard layout analyzer.
     Samples 3 horizontal coordinate nodes per line (L/C/R), runs DBSCAN with
