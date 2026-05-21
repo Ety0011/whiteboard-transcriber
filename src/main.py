@@ -4,7 +4,7 @@ Usage::
 
     python src/main.py                           # live webcam, hierarchical_union_find
     python src/main.py video.mp4                 # video file
-    python src/main.py --model yolo video.mp4    # YOLO backend
+    python src/main.py --detector yolo video.mp4    # YOLO backend
 
 Keyboard controls:
     q      — quit
@@ -62,7 +62,7 @@ def main() -> None:
         help="video or image file (omit to use the default webcam)",
     )
     parser.add_argument(
-        "--model",
+        "--detector",
         choices=[
             "stroke_cluster",
             "yolo",
@@ -102,17 +102,17 @@ def main() -> None:
         "xycut": partial(TextBlockDetector, strategy=XYCutGrouper()),
     }
 
-    discovery = Discovery(factory=factories[args.model])
+    discovery = Discovery(factory=factories[args.detector])
     registry = Registry()
     transcriber = MockTranscriber()
     ledger = LedgerRegistry()
     renderer = Renderer()
     pending_ocr: dict[int, object] = {}
-    log.info("Ready. Model: %s | Press q or Ctrl-C to stop.", args.model)
+    log.info("Ready. Model: %s | Press q or Ctrl-C to stop.", args.detector)
 
     frame_count = 0
     auto_mode = True
-    status_msg = f"Model: {args.model.upper()} | AUTO"
+    status_msg = f"Detector: {args.detector.upper()} | AUTO"
     last_blocks: list[Block] = []
 
     try:
@@ -137,7 +137,7 @@ def main() -> None:
                 blocks, latency = discovery.detect(composite)
                 if latency:
                     status_msg = (
-                        f"Model: {args.model.upper()} | AUTO | {latency * 1000:.1f}ms"
+                        f"Detector: {args.detector.upper()} | AUTO | {latency * 1000:.1f}ms"
                     )
             else:
                 blocks, latency = discovery.poll()
@@ -190,12 +190,12 @@ def main() -> None:
             elif key == ord("a"):
                 auto_mode = not auto_mode
                 mode = "AUTO" if auto_mode else "MANUAL"
-                status_msg = f"Model: {args.model.upper()} | {mode}"
+                status_msg = f"Detector: {args.detector.upper()} | {mode}"
                 log.info("[a] Mode → %s", mode)
             elif key == ord(" ") and not auto_mode:
                 blocks, latency = discovery.detect(composite)
                 status_msg = (
-                    f"Model: {args.model.upper()} | MANUAL | {latency * 1000:.0f}ms"
+                    f"Detector: {args.detector.upper()} | MANUAL | {latency * 1000:.0f}ms"
                 )
                 log.info("[space] Manual submit | latency=%.0fms", latency * 1000)
             else:

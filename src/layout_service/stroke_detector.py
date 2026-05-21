@@ -7,7 +7,7 @@ from .grouper import Block
 
 class StrokeDetector(BaseLayoutDetector):
     """
-    SOTA Whiteboard-specific Layout Engine.
+    Whiteboard-specific Layout Engine.
     Uses Connected Component Extraction + BFS Spatial Distance-based Clustering.
     Guaranteed to group handwritten blocks without deep learning failures.
     """
