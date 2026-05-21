@@ -6,128 +6,78 @@ from .text_line_detector import Anchor, UnionFind
 
 class UnionFindGrouper(AnchorGrouper):
     """
-    Hierarchical Union-Find grouping strategy with deterministic
-    anti-engulfment constraints via two-pass layout simulation.
+    Hierarchical Union-Find grouping strategy based on standard IoU.
+    Uses asymmetric, tunable dilation to bridge corner connections.
     """
 
-    def __init__(self, iou_threshold: float = 0.02):
-        self.iou_threshold = iou_threshold
-
-    def _boxes_intersect(self, boxA: np.ndarray, boxB: np.ndarray) -> bool:
-        """Determines if two bounding boxes overlap or intersect even in part."""
-        return not (
-            boxA[2] <= boxB[0]  # A is completely left of B
-            or boxA[0] >= boxB[2]  # A is completely right of B
-            or boxA[3] <= boxB[1]  # A is completely above B
-            or boxA[1] >= boxB[3]  # A is completely below B
-        )
+    def __init__(
+        self,
+        v_expand_ratio: float = 0.5,
+        h_expand_ratio: float = 0.0,
+        max_width_ratio: float = 1.5,
+    ):
+        """
+        Args:
+            v_expand_ratio: Vertical dilation multiplier scaled to median line height.
+            h_expand_ratio: Horizontal dilation multiplier scaled to median line height.
+            max_width_ratio: Factor to isolate column-poisoning intruder lines.
+        """
+        self.max_width_ratio = max_width_ratio
+        self.v_expand_ratio = v_expand_ratio
+        self.h_expand_ratio = h_expand_ratio
 
     def group(self, anchors: list[Anchor]) -> list[Block]:
         if not anchors:
             return []
 
         n = len(anchors)
+
+        # 1. Sort anchors vertically by top coordinate for sweep-line optimization
+        sorted_indices = sorted(range(n), key=lambda idx: anchors[idx].bbox[1])
+
         heights = [a.bbox[3] - a.bbox[1] for a in anchors]
         median_height = np.median(heights) if heights else 20.0
-        v_expand = median_height * 0.65
-        h_expand = median_height * 0.25
 
-        # ==========================================
-        # PASS 1: Generate Raw Initial Block States
-        # ==========================================
-        sim_uf = UnionFind(n)
-        for i in range(n):
-            for j in range(i + 1, n):
-                if self._should_merge(anchors[i], anchors[j], v_expand, h_expand):
-                    sim_uf.union(i, j)
+        # Dynamic expansion based on exposed tuning ratios
+        v_expand = median_height * self.v_expand_ratio
+        h_expand = median_height * self.h_expand_ratio
 
-        # Build map of root IDs to anchor lists
-        initial_sets: dict[int, list[Anchor]] = {}
-        for i in range(n):
-            root = sim_uf.find(i)
-            initial_sets.setdefault(root, []).append(anchors[i])
+        uf = UnionFind(n)
 
-        # Convert sets into temporary Block structures with concrete bounding boxes
-        temp_blocks: list[dict] = []
-        for root_id, constituent_anchors in initial_sets.items():
-            bbox = self.compute_macro_bbox(constituent_anchors)
-            temp_blocks.append(
-                {"root_id": root_id, "bbox": bbox, "anchors": constituent_anchors}
-            )
+        # 2. Optimized sweep-line evaluation
+        for i_idx, i in enumerate(sorted_indices):
+            anchor_i = anchors[i]
+            ax1, ay1, ax2, ay2 = anchor_i.bbox
+            w_i = ax2 - ax1
 
-        # ==========================================
-        # PASS 2: Deterministic Overlap Validation
-        # ==========================================
-        final_uf = UnionFind(n)
-        num_blocks = len(temp_blocks)
+            for j in sorted_indices[i_idx + 1 :]:
+                anchor_j = anchors[j]
+                bx1, by1, bx2, by2 = anchor_j.bbox
 
-        for i in range(num_blocks):
-            blockA = temp_blocks[i]
-            for j in range(i + 1, num_blocks):
-                blockB = temp_blocks[j]
+                # Performance Break: stop looking when lines are too far down
+                if by1 - ay2 > v_expand * 2.0:
+                    break
 
-                # Verify if any underlying anchors between these two blocks actually want to merge
-                wants_merge = False
-                for a_i in blockA["anchors"]:
-                    for a_j in blockB["anchors"]:
-                        if self._should_merge(a_i, a_j, v_expand, h_expand):
-                            wants_merge = True
-                            break
-                    if wants_merge:
-                        break
+                w_j = bx2 - bx1
 
-                if not wants_merge:
-                    continue
-
-                # Compute the exact hypothetical bounding box if these two blocks merge
-                hypothetical_x1 = min(blockA["bbox"][0], blockB["bbox"][0])
-                hypothetical_y1 = min(blockA["bbox"][1], blockB["bbox"][1])
-                hypothetical_x2 = max(blockA["bbox"][2], blockB["bbox"][2])
-                hypothetical_y2 = max(blockA["bbox"][3], blockB["bbox"][3])
-                hypothetical_box = np.array(
-                    [
-                        hypothetical_x1,
-                        hypothetical_y1,
-                        hypothetical_x2,
-                        hypothetical_y2,
-                    ],
-                    dtype=np.int32,
-                )
-
-                # Check if this expanded box engulfs or intersects ANY other block in the scene
-                engulfment_detected = False
-                for k in range(num_blocks):
-                    if k == i or k == j:
+                # Anti-Engulfment Guard to preserve columns
+                if max(w_i, w_j) > min(w_i, w_j) * self.max_width_ratio:
+                    has_horiz_overlap = max(0.0, min(ax2, bx2) - max(ax1, bx1)) > 0
+                    if has_horiz_overlap:
                         continue
 
-                    target_block = temp_blocks[k]
-                    if self._boxes_intersect(hypothetical_box, target_block["bbox"]):
-                        engulfment_detected = True
-                        break
+                # Standard IoU check
+                if self._should_merge(anchor_i, anchor_j, v_expand, h_expand):
+                    uf.union(i, j)
 
-                # Deterministic Guard Action
-                if engulfment_detected:
-                    # Reject the union! This merge would swallow an independent text block.
-                    continue
-
-                # If no other blocks are intercepted, the merge is safe. Execute across all constituent anchors.
-                for a_i in blockA["anchors"]:
-                    idx_i = anchors.index(a_i)
-                    for a_j in blockB["anchors"]:
-                        idx_j = anchors.index(a_j)
-                        if self._should_merge(a_i, a_j, v_expand, h_expand):
-                            final_uf.union(idx_i, idx_j)
-
-        # ==========================================
-        # PASS 3: Construct Output Primitives
-        # ==========================================
-        final_sets: dict[int, list[Anchor]] = {}
+        # 3. Aggregate clusters
+        sets: dict[int, list[Anchor]] = {}
         for i in range(n):
-            root = final_uf.find(i)
-            final_sets.setdefault(root, []).append(anchors[i])
+            root = uf.find(i)
+            sets.setdefault(root, []).append(anchors[i])
 
         blocks = []
-        for constituent_anchors in final_sets.values():
+        for constituent_anchors in sets.values():
             macro_box = self.compute_macro_bbox(constituent_anchors)
             macro_poly = self.compute_macro_poly(constituent_anchors)
             max_conf = max(a.confidence for a in constituent_anchors)
@@ -146,25 +96,23 @@ class UnionFindGrouper(AnchorGrouper):
     def _should_merge(
         self, a: Anchor, b: Anchor, v_expand: float, h_expand: float
     ) -> bool:
-        ax1, ay1, ax2, ay2 = a.bbox.tolist()
-        bx1, by1, bx2, by2 = b.bbox.tolist()
+        ax1, ay1, ax2, ay2 = a.bbox
+        bx1, by1, bx2, by2 = b.bbox
 
-        gap_x = max(0, bx1 - ax2, ax1 - bx2)
-        if gap_x > max(ax2 - ax1, bx2 - bx1) * 0.35:
+        # Enforce column strictness: require some baseline horizontal closeness
+        gap_x = max(0.0, bx1 - ax2, ax1 - bx2)
+        if gap_x > h_expand:
             return False
 
+        # Dilate bounding structures
         ax1e, ax2e = ax1 - h_expand, ax2 + h_expand
         ay1e, ay2e = ay1 - v_expand, ay2 + v_expand
         bx1e, bx2e = bx1 - h_expand, bx2 + h_expand
         by1e, by2e = by1 - v_expand, by2 + v_expand
 
+        # Calculate intersection
         ix1, iy1 = max(ax1e, bx1e), max(ay1e, by1e)
         ix2, iy2 = min(ax2e, bx2e), min(ay2e, by2e)
 
         inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
-        if inter == 0.0:
-            return False
-
-        area_a = (ax2e - ax1e) * (ay2e - ay1e)
-        area_b = (bx2e - bx1e) * (by2e - by1e)
-        return inter / (area_a + area_b - inter) > self.iou_threshold
+        return inter > 0.0
