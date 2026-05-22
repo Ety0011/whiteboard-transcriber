@@ -9,7 +9,7 @@ body lines in adjacent columns.
 import numpy as np
 
 from .block import Block, TextLineGrouper
-from .detector import TextLine, UnionFind
+from .text_detector import TextLine
 
 
 class UnionFindGrouper(TextLineGrouper):
@@ -141,3 +141,30 @@ class UnionFindGrouper(TextLineGrouper):
 
         inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
         return inter > 0.0
+
+
+class UnionFind:
+    """Path-compressed disjoint-set forest for O(α(n)) union and find operations.
+
+    Used by UnionFindGrouper to cluster text lines into blocks without
+    maintaining explicit per-cluster membership lists during traversal.
+    """
+
+    def __init__(self, n: int) -> None:
+        self.parent = list(range(n))
+
+    def find(self, i: int) -> int:
+        """Return the root of the set containing *i*, with path compression."""
+        if self.parent[i] == i:
+            return i
+        self.parent[i] = self.find(self.parent[i])
+        return self.parent[i]
+
+    def union(self, i: int, j: int) -> bool:
+        """Merge the sets containing *i* and *j*. Returns True if they were distinct."""
+        root_i = self.find(i)
+        root_j = self.find(j)
+        if root_i != root_j:
+            self.parent[root_i] = root_j
+            return True
+        return False

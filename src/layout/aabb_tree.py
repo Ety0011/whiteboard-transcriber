@@ -11,7 +11,7 @@ import heapq
 import numpy as np
 
 from .block import Block, TextLineGrouper
-from .detector import TextLine
+from .text_detector import TextLine
 
 
 class AABBNode:

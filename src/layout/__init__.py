@@ -1,10 +1,10 @@
 from .aabb_tree import AABBTreeGrouper
 from .base import BaseLayoutDetector
 from .block import Block, TextLineGrouper
-from .detector import TextLine, TextLineDetector, UnionFind
 from .hdbscan import HDBSCANGrouper
 from .pipeline import TextBlockDetector
-from .union_find import UnionFindGrouper
+from .text_detector import TextLine, TextLineDetector
+from .union_find import UnionFind, UnionFindGrouper
 
 __all__ = [
     "BaseLayoutDetector",

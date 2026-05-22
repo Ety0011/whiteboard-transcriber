@@ -1,8 +1,7 @@
-"""PaddleOCR text-line detector and supporting primitives.
+"""PaddleOCR text-line detector.
 
 TextLineDetector wraps PP-OCRv5_server_det and runs synchronously inside the
-stage5-layout subprocess.  UnionFind is a shared path-compressed disjoint-set
-structure used by UnionFindGrouper.
+stage5-layout subprocess.
 """
 
 import logging
@@ -124,30 +123,3 @@ class TextLineDetector:
     def shutdown(self) -> None:
         """No-op — model is released when the worker process exits."""
         pass
-
-
-class UnionFind:
-    """Path-compressed disjoint-set forest for O(α(n)) union and find operations.
-
-    Used by UnionFindGrouper to cluster text lines into blocks without
-    maintaining explicit per-cluster membership lists during traversal.
-    """
-
-    def __init__(self, n: int) -> None:
-        self.parent = list(range(n))
-
-    def find(self, i: int) -> int:
-        """Return the root of the set containing *i*, with path compression."""
-        if self.parent[i] == i:
-            return i
-        self.parent[i] = self.find(self.parent[i])
-        return self.parent[i]
-
-    def union(self, i: int, j: int) -> bool:
-        """Merge the sets containing *i* and *j*. Returns True if they were distinct."""
-        root_i = self.find(i)
-        root_j = self.find(j)
-        if root_i != root_j:
-            self.parent[root_i] = root_j
-            return True
-        return False
