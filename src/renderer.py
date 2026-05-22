@@ -92,14 +92,13 @@ def _draw_entities(frame: np.ndarray, entities: list[SemanticEntity]) -> np.ndar
         cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
 
-        text_content = (ent.ocr_text or "")[:30]
-        display_label = f"[{ent.state.value}] {text_content}"
-        (tw, th), _ = cv2.getTextSize(display_label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
-        cv2.rectangle(frame, (x1, y1 - th - 6), (x1 + tw + 6, y1), color, -1)
+        label = ent.state.value
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+        cv2.rectangle(frame, (x1, y1), (x1 + tw + 4, y1 + th + 4), color, -1)
         cv2.putText(
             frame,
-            display_label,
-            (x1 + 3, y1 - 4),
+            label,
+            (x1 + 2, y1 + th + 2),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.4,
             (0, 0, 0),
