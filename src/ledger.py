@@ -150,7 +150,9 @@ class Ledger:
         for entry in all_entries:
             ts = self._mono_to_wall_str(entry.first_seen)
             anchor = f"ent{entry.entity_id}-{ts.replace(':', '')}"
-            content_lines = [l for l in entry.versions[-1].text.splitlines() if l.strip()]
+            content_lines = [
+                line for line in entry.versions[-1].text.splitlines() if line.strip()
+            ]
             preview = content_lines[0] if content_lines else ""
             if len(content_lines) > 1 or len(preview) > 60:
                 preview = preview[:60].rstrip() + "…"

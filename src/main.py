@@ -2,9 +2,12 @@
 
 Usage::
 
-    python src/main.py                           # live webcam, hierarchical_union_find
-    python src/main.py video.mp4                 # video file
+    python src/main.py                                        # live webcam
+    python src/main.py video.mp4                             # video file
     python src/main.py --detector hdbscan video.mp4
+    python src/main.py --transcriber got video.mp4
+    python src/main.py --output-dir /tmp/lecture video.mp4
+    python src/main.py --debug                               # verbose logging
 
 Keyboard controls:
     q  — quit
@@ -39,7 +42,7 @@ from layout_service import (
 )
 from ledger import Ledger
 from logging_config import suppress_noise
-from registry import Registry, SemanticEntity
+from registry import EntityState, Registry, SemanticEntity
 from renderer import Renderer
 from transcriber import Transcriber
 from transcriber_service import (
@@ -50,6 +53,7 @@ from transcriber_service import (
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
+
 
 def main() -> None:
     suppress_noise()
@@ -77,6 +81,13 @@ def main() -> None:
         type=int,
         default=960,  # half of 1920x1080
         help="Display window width in pixels (default: 1280)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("output"),
+        metavar="DIR",
+        help="Directory for live.md and lecture_history.md (default: output/)",
     )
     parser.add_argument(
         "--debug",
@@ -112,7 +123,7 @@ def main() -> None:
     discovery = Discovery(factory=detector_factories[args.detector])
     registry = Registry()
     transcriber = Transcriber(factory=transcriber_factories[args.transcriber])
-    ledger = Ledger(output_dir=Path("output"))
+    ledger = Ledger(output_dir=args.output_dir)
     renderer = Renderer()
     pending_ocr: dict[int, SemanticEntity] = {}
     log.info("Ready. Model: %s | Press q or Ctrl-C to stop.", args.detector)
@@ -151,7 +162,7 @@ def main() -> None:
             # Poll VLM results — update ledger and synthesise output files
             for result in transcriber.get_results():
                 entity = pending_ocr.pop(result.entity_id, None)
-                if entity is not None:
+                if entity is not None and entity.state == EntityState.INFERRING:
                     registry.mark_active(entity, result.text)
                     ledger.update(entity.id, entity.bbox, result.text)
 
@@ -199,7 +210,16 @@ def main() -> None:
         transcriber.shutdown()
         cv2.destroyAllWindows()
 
-    log.info("Shutting down.")
+    all_entries = ledger.get_all()
+    n_total = len(all_entries)
+    n_erased = sum(1 for e in all_entries if e.erased_at is not None)
+    log.info(
+        "Session complete — %d entities tracked (%d active, %d erased). Output: %s",
+        n_total,
+        n_total - n_erased,
+        n_erased,
+        args.output_dir,
+    )
 
 
 if __name__ == "__main__":
