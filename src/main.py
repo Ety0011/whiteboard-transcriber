@@ -39,7 +39,7 @@ from layout import (
     TextBlockDetector,
     UnionFindGrouper,
 )
-from layout.worker import Discovery
+from layout.discovery import Discovery
 from ledger import Ledger
 from logging_config import suppress_noise
 from ocr import (
@@ -47,7 +47,7 @@ from ocr import (
     MockTranscriber,
     PaddleVLTranscriber,
 )
-from ocr.worker import Transcriber
+from ocr.transcriber import Transcriber
 from registry import EntityState, Registry, SemanticEntity
 from renderer import Renderer
 

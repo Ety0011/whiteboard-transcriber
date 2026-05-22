@@ -186,7 +186,7 @@ composite = (1 - lr) × composite + lr × frame
 
 Pixels near or under the person mask have `lr≈0` and are frozen at their last known value. When no person is detected, a uniform EMA (`lr = max_lr`) is applied directly, skipping the expensive `distanceTransform`.
 
-### Stage 5/6 — Layout Detection (`layout/worker.py`, `layout/`)
+### Stage 5/6 — Layout Detection (`layout/discovery.py`, `layout/`)
 
 `Discovery` manages the `stage5-layout` subprocess. Inside the worker:
 1. `TextLineDetector` runs PaddleOCR `PP-OCRv5_server_det` synchronously, returning a list of `TextLine` objects (bbox + confidence).
@@ -200,7 +200,7 @@ Three grouping strategies are available:
 | `hdbscan` | `HDBSCANGrouper` | Scale-invariant anisotropic distance; noise lines become singleton blocks |
 | `aabbtree` | `AABBTreeGrouper` | Greedy agglomerative merge via min-heap + AABB engulfment veto |
 
-### Stage 7 — OCR Transcription (`ocr/worker.py`, `ocr/`)
+### Stage 7 — OCR Transcription (`ocr/transcriber.py`, `ocr/`)
 
 `Transcriber` manages the `transcription-worker` subprocess. The worker accepts `(entity_id, crop)` pairs from an input queue (`maxsize=10`) and writes `TranscriptionResult` objects to an output queue (`maxsize=30`). Three backends:
 
