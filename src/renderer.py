@@ -49,22 +49,28 @@ def _apply_mask_overlay(frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
 
 def _draw_corners(frame: np.ndarray, corners: np.ndarray | None) -> np.ndarray:
     if corners is None:
-        cv2.putText(
-            frame, "Detecting board...", (40, 60),
-            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 180, 220), 2, cv2.LINE_AA,
-        )
         return frame
 
     pts = corners.astype(np.int32)
     cv2.polylines(
-        frame, [pts.reshape(-1, 1, 2)],
-        isClosed=True, color=(0, 0, 220), thickness=3, lineType=cv2.LINE_AA,
+        frame,
+        [pts.reshape(-1, 1, 2)],
+        isClosed=True,
+        color=(0, 0, 220),
+        thickness=3,
+        lineType=cv2.LINE_AA,
     )
     for i, (x, y) in enumerate(pts):
         cv2.circle(frame, (int(x), int(y)), 12, (0, 200, 0), -1, cv2.LINE_AA)
         cv2.putText(
-            frame, _CORNER_LABELS[i], (int(x) + 14, int(y) - 10),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA,
+            frame,
+            _CORNER_LABELS[i],
+            (int(x) + 14, int(y) - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
         )
     return frame
 
@@ -76,15 +82,26 @@ def _draw_blocks(frame: np.ndarray, blocks: list[Block]) -> np.ndarray:
         pts = block.poly.reshape(-1, 1, 2)
         cv2.fillPoly(overlay, [pts], color)
         cv2.polylines(
-            frame, [pts], isClosed=True, color=color, thickness=1, lineType=cv2.LINE_AA,
+            frame,
+            [pts],
+            isClosed=True,
+            color=color,
+            thickness=1,
+            lineType=cv2.LINE_AA,
         )
         label_txt = f"{block.label} ({block.confidence:.0%})"
         x1, y1 = int(block.poly[:, 0].min()), int(block.poly[:, 1].min())
         (tw, th), _ = cv2.getTextSize(label_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)
         cv2.rectangle(frame, (x1, y1 - th - 4), (x1 + tw + 4, y1), color, -1)
         cv2.putText(
-            frame, label_txt, (x1 + 2, y1 - 2),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 0), 1, cv2.LINE_AA,
+            frame,
+            label_txt,
+            (x1 + 2, y1 - 2),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.35,
+            (0, 0, 0),
+            1,
+            cv2.LINE_AA,
         )
     cv2.addWeighted(overlay, 0.18, frame, 0.82, 0, frame)
     return frame
@@ -104,8 +121,14 @@ def _draw_entities(frame: np.ndarray, entities: list[SemanticEntity]) -> np.ndar
         (tw, th), _ = cv2.getTextSize(display_label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
         cv2.rectangle(frame, (x1, y1 - th - 6), (x1 + tw + 6, y1), color, -1)
         cv2.putText(
-            frame, display_label, (x1 + 3, y1 - 4),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1, cv2.LINE_AA,
+            frame,
+            display_label,
+            (x1 + 3, y1 - 4),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.4,
+            (0, 0, 0),
+            1,
+            cv2.LINE_AA,
         )
 
     cv2.addWeighted(overlay, 0.25, frame, 0.75, 0, frame)
@@ -131,12 +154,9 @@ class Renderer:
         composite: np.ndarray,
         blocks: list[Block],
         entities: list[SemanticEntity],
-        frame_count: int,
-        auto_mode: bool,
-        status_msg: str,
         is_busy: bool,
     ) -> np.ndarray:
-        """Draw block + entity overlays, HUD, busy indicator. Returns the frame."""
+        """Draw block + entity overlays and Discovery busy dot. Returns the frame."""
         board = composite.copy()
         if self.show_blocks:
             board = _draw_blocks(board, blocks)
@@ -144,19 +164,12 @@ class Renderer:
             board = _draw_entities(
                 board, [e for e in entities if e.state != EntityState.ERASED]
             )
-
-        cv2.putText(
-            board,
-            f"Frame: {frame_count} | {'AUTO' if auto_mode else 'MANUAL'}",
-            (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA,
-        )
-        cv2.putText(
-            board, status_msg,
-            (20, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA,
-        )
         cv2.circle(
-            board, (board.shape[1] - 30, 30), 10,
-            (0, 165, 255) if is_busy else (0, 255, 0), -1,
+            board,
+            (board.shape[1] - 30, 30),
+            10,
+            (0, 165, 255) if is_busy else (0, 255, 0),
+            -1,
         )
         return board
 
@@ -165,16 +178,20 @@ class Renderer:
         frame: np.ndarray,
         person_mask: np.ndarray,
         cached_corners: np.ndarray | None,
+        is_busy: bool,
     ) -> np.ndarray:
-        """Draw mask + corner overlays, stage label. Returns the frame."""
+        """Draw mask + corner overlays and SAM busy dot. Returns the frame."""
         raw = frame.copy()
         if self.show_mask:
             raw = _apply_mask_overlay(raw, person_mask)
         if self.show_corners:
             raw = _draw_corners(raw, cached_corners)
-        cv2.putText(
-            raw, "STAGE 1+2: INPUT TRACKING",
-            (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA,
+        cv2.circle(
+            raw,
+            (raw.shape[1] - 30, 30),
+            10,
+            (0, 165, 255) if is_busy else (0, 255, 0),
+            -1,
         )
         return raw
 

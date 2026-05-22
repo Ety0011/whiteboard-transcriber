@@ -7,13 +7,11 @@ Usage::
     python src/main.py --detector yolo video.mp4    # YOLO backend
 
 Keyboard controls:
-    q      — quit
-    a      — toggle auto/manual Stage 5 detection
-    Space  — manual Stage 5 submit (manual mode only)
-    w      — toggle Stage 1/2 corner overlay
-    p      — toggle Stage 1/2 body-mask overlay
-    t      — toggle Stage 5 block overlay
-    r      — toggle Stage 6 entity overlay
+    q  — quit
+    w  — toggle Stage 1/2 corner overlay
+    p  — toggle Stage 1/2 body-mask overlay
+    t  — toggle Stage 5 block overlay
+    r  — toggle Stage 6 entity overlay
 """
 
 from __future__ import annotations
@@ -130,9 +128,6 @@ def main() -> None:
     pending_ocr: dict[int, object] = {}
     log.info("Ready. Model: %s | Press q or Ctrl-C to stop.", args.detector)
 
-    frame_count = 0
-    auto_mode = True
-    status_msg = f"Detector: {args.detector.upper()} | AUTO"
     last_blocks: list[Block] = []
 
     try:
@@ -141,8 +136,6 @@ def main() -> None:
             if frame is None:
                 log.info("End of stream.")
                 break
-
-            frame_count += 1
 
             # Stage 1 — board mask (SAM, async, ~10s cadence)
             board_mask = board_masker.segment(frame)
@@ -153,12 +146,7 @@ def main() -> None:
             composite = reconstructor.update(rect_frame, rect_mask)
 
             # Stage 5 — layout detection (async, non-blocking)
-            if auto_mode:
-                blocks, latency = discovery.detect(composite)
-                if latency:
-                    status_msg = f"Detector: {args.detector.upper()} | AUTO | {latency * 1000:.1f}ms"
-            else:
-                blocks, latency = discovery.poll()
+            blocks, latency = discovery.detect(composite)
 
             if blocks:
                 last_blocks = blocks
@@ -191,12 +179,14 @@ def main() -> None:
                 composite,
                 last_blocks,
                 entity_update.entities,
-                frame_count,
-                auto_mode,
-                status_msg,
                 discovery.is_busy,
             )
-            raw = renderer.render_raw(frame, person_mask, rectifier.cached_corners)
+            raw = renderer.render_raw(
+                frame,
+                person_mask,
+                rectifier.cached_corners,
+                board_masker.is_busy,
+            )
             if raw.shape[1] != board.shape[1]:
                 scale = board.shape[1] / raw.shape[1]
                 raw = cv2.resize(raw, (board.shape[1], int(raw.shape[0] * scale)))
@@ -212,15 +202,6 @@ def main() -> None:
             if key == ord("q"):
                 log.info("[q] Quit")
                 break
-            elif key == ord("a"):
-                auto_mode = not auto_mode
-                mode = "AUTO" if auto_mode else "MANUAL"
-                status_msg = f"Detector: {args.detector.upper()} | {mode}"
-                log.info("[a] Mode → %s", mode)
-            elif key == ord(" ") and not auto_mode:
-                blocks, latency = discovery.detect(composite)
-                status_msg = f"Detector: {args.detector.upper()} | MANUAL | {latency * 1000:.1f}ms"
-                log.info("[space] Manual submit | latency=%.0fms", latency * 1000)
             else:
                 renderer.handle_key(key)
 
