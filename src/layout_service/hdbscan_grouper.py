@@ -1,3 +1,11 @@
+"""HDBSCAN-based text-block grouper with scale-invariant anisotropic distance.
+
+Distances between line centroids are normalised by local line height so the
+grouper adapts to font size.  Horizontal distances are relaxed relative to
+vertical distances, allowing lines in the same column to cluster even when
+they share limited x-range.
+"""
+
 import numpy as np
 
 from .grouper import Block, TextLineGrouper
@@ -5,10 +13,15 @@ from .text_line_detector import TextLine
 
 
 class HDBSCANGrouper(TextLineGrouper):
-    """
-    Anisotropic spatial density clusterer utilizing HDBSCAN.
-    Penalizes vertical distances tightly while allowing wide horizontal tracking
-    scaled dynamically against localized line heights.
+    """Density-based text-block grouper using HDBSCAN with a custom distance metric.
+
+    Args:
+        min_cluster_size: Minimum number of lines to form a cluster.  Lines
+            that do not reach this threshold are treated as noise and returned
+            as singleton blocks (whiteboard content is never truly noise).
+        horizontal_scale: Divisor applied to normalised horizontal distance.
+            Higher values allow wider horizontal spread within one cluster,
+            useful for multi-column layouts.
     """
 
     def __init__(self, min_cluster_size: int = 2, horizontal_scale: float = 3.5):
@@ -16,7 +29,20 @@ class HDBSCANGrouper(TextLineGrouper):
         self.horizontal_scale = horizontal_scale
 
     def _custom_pairwise_distance(self, centroids: np.ndarray) -> np.ndarray:
-        """Scale-invariant anisotropic distance matrix. Input shape: (N, 3) [cx, cy, h]."""
+        """Compute a scale-invariant anisotropic (N, N) distance matrix.
+
+        Distances are normalised by the average line height of each pair so
+        the metric is independent of font size.  Horizontal gaps are divided
+        by an additional `horizontal_scale` factor, making vertical proximity
+        the primary clustering signal while still permitting lines in the same
+        column (wide horizontal spread, tight vertical spread) to merge.
+
+        Args:
+            centroids: (N, 3) array of [cx, cy, line_height] per line.
+
+        Returns:
+            Symmetric (N, N) float64 distance matrix.
+        """
         cx = centroids[:, 0:1]
         cy = centroids[:, 1:2]
         h = centroids[:, 2:3]
@@ -28,10 +54,24 @@ class HDBSCANGrouper(TextLineGrouper):
         return np.sqrt(norm_dx**2 + norm_dy**2)
 
     def group(self, lines: list[TextLine]) -> list[Block]:
+        """Cluster *lines* into Blocks using HDBSCAN on the custom distance matrix.
+
+        Lines assigned label -1 (HDBSCAN noise) are returned as singleton
+        blocks rather than discarded — on a whiteboard every detected line
+        represents real content.
+
+        Args:
+            lines: Detected text lines from Stage 5.
+
+        Returns:
+            List of Blocks, each grouping one or more lines.
+        """
         if not lines:
             return []
         if len(lines) == 1:
-            return [Block(bbox=lines[0].bbox, confidence=lines[0].confidence, lines=lines)]
+            return [
+                Block(bbox=lines[0].bbox, confidence=lines[0].confidence, lines=lines)
+            ]
 
         from hdbscan import HDBSCAN
 
@@ -54,6 +94,7 @@ class HDBSCANGrouper(TextLineGrouper):
 
         groups_dict = {}
         for idx, label in enumerate(labels):
+            # Noise lines (-1) become singleton blocks rather than being dropped.
             if label == -1:
                 groups_dict[f"noise_{idx}"] = [lines[idx]]
             else:
@@ -65,6 +106,8 @@ class HDBSCANGrouper(TextLineGrouper):
         for constituent_lines in groups_dict.values():
             bbox = self.compute_bbox(constituent_lines)
             max_conf = max(line.confidence for line in constituent_lines)
-            blocks.append(Block(bbox=bbox, confidence=max_conf, lines=constituent_lines))
+            blocks.append(
+                Block(bbox=bbox, confidence=max_conf, lines=constituent_lines)
+            )
 
         return blocks

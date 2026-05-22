@@ -1,3 +1,10 @@
+"""Abstract base for layout detectors that run inside Discovery's worker subprocess.
+
+The load/detect split enforces the subprocess contract: __init__ must be
+lightweight and picklable (no model weights), while load() runs inside the
+worker after unpickling where models can be safely allocated on the target device.
+"""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -25,7 +32,11 @@ class BaseLayoutDetector(ABC):
     def detect(self, frame: np.ndarray) -> list[Block]:
         """Run inference and return detected layout blocks.
 
-        Each Block carries: bbox, confidence, and lines (list[TextLine]).
+        Args:
+            frame: BGR uint8 clean board composite from Stage 4.
+
+        Returns:
+            List of Blocks, each carrying bbox, confidence, and constituent lines.
         """
         pass
 

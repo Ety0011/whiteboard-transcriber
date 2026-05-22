@@ -1,3 +1,10 @@
+"""PaddleOCR text-line detector and supporting primitives.
+
+TextLineDetector wraps PP-OCRv5_server_det and runs synchronously inside the
+stage5-layout subprocess.  UnionFind is a shared path-compressed disjoint-set
+structure used by UnionFindGrouper.
+"""
+
 import logging
 from dataclasses import dataclass
 
@@ -8,7 +15,15 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class TextLine:
-    bbox: np.ndarray  # (4,) int32: x1, y1, x2, y2
+    """A single detected text-line anchor from PaddleOCR.
+
+    Attributes:
+        bbox: Axis-aligned bounding box, shape (4,) int32: x1, y1, x2, y2
+            in rectified 1920×1080 coordinate space.
+        confidence: Detection confidence score from PP-OCRv5_server_det.
+    """
+
+    bbox: np.ndarray
     confidence: float
 
 
@@ -38,6 +53,16 @@ def _polygon_to_bbox(polygon: list, img_h: int, img_w: int) -> np.ndarray:
 
 
 def _raw_to_lines(raw: list, h: int, w: int) -> list[TextLine]:
+    """Convert raw PaddleOCR output to a list of TextLine objects.
+
+    Args:
+        raw: Raw list returned by TextDetection.predict().
+        h: Image height in pixels (for bbox clamping).
+        w: Image width in pixels (for bbox clamping).
+
+    Returns:
+        List of TextLine objects with valid (non-degenerate) bboxes.
+    """
     lines = []
     for poly, score in _extract_polys(raw):
         bbox = _polygon_to_bbox(poly, h, w)
@@ -62,10 +87,16 @@ class TextLineDetector:
         self._detector = None
 
     def load(self) -> None:
+        """Load PP-OCRv5_server_det inside the worker subprocess.
+
+        Suppresses C++-level stdout/stderr during model initialisation to
+        prevent glog/TFLite noise from polluting the process output.
+        """
         from logging_config import devnull_fds
 
         with devnull_fds(1, 2):
             from paddleocr import TextDetection
+
             self._detector = TextDetection(
                 model_name="PP-OCRv5_server_det",
                 box_thresh=self._box_thresh,
@@ -74,6 +105,14 @@ class TextLineDetector:
         logger.info("PP-OCRv5_server_det ready")
 
     def detect(self, composite: np.ndarray) -> list[TextLine]:
+        """Run text-line detection on *composite* and return detected lines.
+
+        Args:
+            composite: BGR uint8 clean board composite from Stage 4.
+
+        Returns:
+            List of TextLine objects, or empty list on detection failure.
+        """
         h, w = composite.shape[:2]
         try:
             raw = self._detector.predict(composite)
@@ -83,22 +122,29 @@ class TextLineDetector:
             return []
 
     def shutdown(self) -> None:
+        """No-op — model is released when the worker process exits."""
         pass
 
 
 class UnionFind:
-    """Disjoint-Set Forest for clustering."""
+    """Path-compressed disjoint-set forest for O(α(n)) union and find operations.
+
+    Used by UnionFindGrouper to cluster text lines into blocks without
+    maintaining explicit per-cluster membership lists during traversal.
+    """
 
     def __init__(self, n: int) -> None:
         self.parent = list(range(n))
 
     def find(self, i: int) -> int:
+        """Return the root of the set containing *i*, with path compression."""
         if self.parent[i] == i:
             return i
         self.parent[i] = self.find(self.parent[i])
         return self.parent[i]
 
     def union(self, i: int, j: int) -> bool:
+        """Merge the sets containing *i* and *j*. Returns True if they were distinct."""
         root_i = self.find(i)
         root_j = self.find(j)
         if root_i != root_j:

@@ -36,12 +36,14 @@ _CORNER_LABELS = ["TL", "TR", "BR", "BL"]
 
 
 def _apply_mask_overlay(frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Blend a translucent red overlay onto pixels where mask == 1."""
     overlay = frame.copy()
     overlay[mask == 1] = (0, 0, 220)
     return cv2.addWeighted(frame, 0.65, overlay, 0.35, 0)
 
 
 def _draw_corners(frame: np.ndarray, corners: np.ndarray | None) -> np.ndarray:
+    """Draw the board quad outline and labeled corner circles onto *frame*."""
     if corners is None:
         return frame
 
@@ -73,6 +75,7 @@ _ANCHOR_COLOR = (255, 165, 0)  # sky blue (BGR)
 
 
 def _draw_blocks(frame: np.ndarray, blocks: list[Block]) -> np.ndarray:
+    """Draw translucent line-level bbox fills for all blocks onto *frame*."""
     overlay = frame.copy()
     for block in blocks:
         for line in block.lines:
@@ -84,6 +87,7 @@ def _draw_blocks(frame: np.ndarray, blocks: list[Block]) -> np.ndarray:
 
 
 def _draw_entities(frame: np.ndarray, entities: list[SemanticEntity]) -> np.ndarray:
+    """Draw entity bboxes and state labels colour-coded by EntityState."""
     overlay = frame.copy()
     for ent in entities:
         x1, y1, x2, y2 = ent.bbox

@@ -22,18 +22,34 @@ import numpy as np
 
 @dataclass
 class TextVersion:
+    """One OCR result snapshot for a Semantic Entity.
+
+    Attributes:
+        text: The full OCR/LaTeX string returned by the VLM.
+        timestamp: time.monotonic() at the moment the result was received.
+    """
+
     text: str
-    timestamp: float  # time.monotonic(); rendered as HH:MM by _mono_to_wall_str
+    timestamp: float
 
 
 @dataclass
 class LedgerEntry:
+    """Append-only record of a single Semantic Entity across its full lifetime.
+
+    Attributes:
+        entity_id: Stable integer ID from the Registry.
+        bbox: Last known bbox, shape (4,) int32: x1, y1, x2, y2 in rectified space.
+        first_seen: time.monotonic() when the entity was first submitted to the VLM.
+        versions: Ordered list of OCR results; index 0 is the first, each subsequent
+            entry is a VERSIONED correction.
+        erased_at: time.monotonic() when the entity left the board, or None if active.
+    """
+
     entity_id: int
-    bbox: np.ndarray  # (4,) int32: x1,y1,x2,y2 in rectified space
-    first_seen: float  # time.monotonic()
-    versions: list[TextVersion] = field(
-        default_factory=list
-    )  # index 0 = first OCR; append-only
+    bbox: np.ndarray
+    first_seen: float
+    versions: list[TextVersion] = field(default_factory=list)
     erased_at: float | None = None
 
 
@@ -43,6 +59,12 @@ class LedgerEntry:
 
 
 def _write_atomic(path: Path, content: str) -> None:
+    """Write *content* to *path* atomically via a temp-file rename.
+
+    Prevents a markdown reader from observing a partial write of live.md
+    mid-synthesis — the file is either the old version or the new version,
+    never a partially written intermediate state.
+    """
     tmp = path.with_suffix(".tmp")
     tmp.write_text(content, encoding="utf-8")
     tmp.rename(path)
@@ -120,6 +142,7 @@ class Ledger:
     # ------------------------------------------------------------------
 
     def _synthesize(self) -> None:
+        """Re-render and atomically overwrite both output files."""
         _write_atomic(self._output_dir / "live.md", self._render_live())
         _write_atomic(self._output_dir / "lecture_history.md", self._render_history())
 
@@ -128,6 +151,7 @@ class Ledger:
     # ------------------------------------------------------------------
 
     def _render_live(self) -> str:
+        """Render live.md: current board content, one block per active entity."""
         active = self.get_active()
         if not active:
             return "# Whiteboard\n\n*(board empty)*\n"
@@ -142,6 +166,7 @@ class Ledger:
         return "\n\n".join(blocks) + "\n"
 
     def _render_history(self) -> str:
+        """Render lecture_history.md: full chronological ledger with TOC."""
         all_entries = self.get_all()
         if not all_entries:
             return "# Lecture Notes\n\n*(no content yet)*\n"
@@ -166,6 +191,7 @@ class Ledger:
         return "\n\n".join(sections)
 
     def _render_entry(self, entry: LedgerEntry) -> str:
+        """Render one history section: heading, latest text, collapsible revisions."""
         ts = self._mono_to_wall_str(entry.first_seen)
         anchor = f"ent{entry.entity_id}-{ts.replace(':', '')}"
         parts = [f"## {ts} {{#{anchor}}}", "", entry.versions[-1].text]
@@ -189,7 +215,6 @@ class Ledger:
         return "\n".join(parts)
 
     def _mono_to_wall_str(self, mono: float) -> str:
-        import time as _time
-
+        """Convert a time.monotonic() timestamp to a wall-clock HH:MM string."""
         wall = self._session_start_wall + (mono - self._session_start_mono)
-        return _time.strftime("%H:%M", _time.localtime(wall))
+        return time.strftime("%H:%M", time.localtime(wall))

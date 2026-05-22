@@ -1,3 +1,11 @@
+"""Stage 5 — non-blocking layout detector running in a dedicated subprocess.
+
+Discovery wraps any BaseLayoutDetector behind a single input/output queue
+pair.  detect() is non-blocking: it submits the frame and immediately returns
+the most recently completed result.  The worker process handles model loading,
+inference, and shutdown independently of the main loop.
+"""
+
 import logging
 import multiprocessing as mp
 from typing import Callable
@@ -17,6 +25,7 @@ def _worker_main(
 ) -> None:
     """Layout detector loop — runs in a dedicated child process."""
     import os
+
     from logging_config import suppress_worker_noise
 
     _level = logging.DEBUG if os.getenv("LOG_LEVEL") == "DEBUG" else logging.INFO
@@ -91,6 +100,7 @@ class Discovery:
         return self._cached
 
     def shutdown(self) -> None:
+        """Send the shutdown sentinel and wait for the worker to exit cleanly."""
         try:
             self._in_q.put_nowait(None)
         except Exception:

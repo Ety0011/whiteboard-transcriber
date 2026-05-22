@@ -1,13 +1,32 @@
+"""Union-Find text-block grouper with asymmetric spatial dilation.
+
+Lines are sorted top-to-bottom and compared pairwise.  Expansion radii are
+derived from the median line height so the grouper adapts to font size.
+A width-ratio guard prevents wide header/title lines from absorbing narrow
+body lines in adjacent columns.
+"""
+
 import numpy as np
 
-from .grouper import TextLineGrouper, Block
+from .grouper import Block, TextLineGrouper
 from .text_line_detector import TextLine, UnionFind
 
 
 class UnionFindGrouper(TextLineGrouper):
-    """
-    Hierarchical Union-Find grouping strategy based on standard IoU.
-    Uses asymmetric, tunable dilation to bridge corner connections.
+    """Union-Find grouper with asymmetric vertical/horizontal dilation.
+
+    Clusters text lines into blocks by unioning any pair whose expanded
+    bounding boxes intersect.  Expansion is anchored to the median line
+    height so the grouper scales with font size.
+
+    Args:
+        v_expand_ratio: Vertical dilation as a multiple of median line height.
+            Controls how much inter-line whitespace is tolerated within a block.
+        h_expand_ratio: Horizontal dilation as a multiple of median line height.
+            Set to 0 to disable horizontal bridging (default).
+        max_width_ratio: Maximum ratio of widths (wider/narrower) above which
+            two horizontally overlapping lines are blocked from merging — prevents
+            a full-width title from absorbing narrow column text.
     """
 
     def __init__(
@@ -16,22 +35,25 @@ class UnionFindGrouper(TextLineGrouper):
         h_expand_ratio: float = 0.0,
         max_width_ratio: float = 1.5,
     ):
-        """
-        Args:
-            v_expand_ratio: Vertical dilation multiplier scaled to median line height.
-            h_expand_ratio: Horizontal dilation multiplier scaled to median line height.
-            max_width_ratio: Factor to isolate column-poisoning intruder lines.
-        """
         self.max_width_ratio = max_width_ratio
         self.v_expand_ratio = v_expand_ratio
         self.h_expand_ratio = h_expand_ratio
 
     def group(self, lines: list[TextLine]) -> list[Block]:
+        """Cluster *lines* into Blocks using Union-Find over expanded-bbox intersection.
+
+        Args:
+            lines: Detected text lines from Stage 5.
+
+        Returns:
+            List of Blocks, each grouping spatially adjacent lines.
+        """
         if not lines:
             return []
 
         n = len(lines)
 
+        # Sort by y1 so the inner-loop early-break is valid.
         sorted_indices = sorted(range(n), key=lambda idx: lines[idx].bbox[1])
 
         heights = [line.bbox[3] - line.bbox[1] for line in lines]
@@ -47,15 +69,19 @@ class UnionFindGrouper(TextLineGrouper):
             ax1, ay1, ax2, ay2 = line_i.bbox
             w_i = ax2 - ax1
 
-            for j in sorted_indices[i_idx + 1:]:
+            for j in sorted_indices[i_idx + 1 :]:
                 line_j = lines[j]
                 bx1, by1, bx2, by2 = line_j.bbox
 
+                # Lines are sorted by y1; once the vertical gap exceeds 2×v_expand
+                # all subsequent j values are further away and can be skipped.
                 if by1 - ay2 > v_expand * 2.0:
                     break
 
                 w_j = bx2 - bx1
 
+                # Block merges between lines of very different widths that share
+                # horizontal extent — a full-width header should not absorb body text.
                 if max(w_i, w_j) > min(w_i, w_j) * self.max_width_ratio:
                     has_horiz_overlap = max(0.0, min(ax2, bx2) - max(ax1, bx1)) > 0
                     if has_horiz_overlap:
@@ -73,16 +99,34 @@ class UnionFindGrouper(TextLineGrouper):
         for constituent_lines in sets.values():
             bbox = self.compute_bbox(constituent_lines)
             max_conf = max(line.confidence for line in constituent_lines)
-            blocks.append(Block(bbox=bbox, confidence=max_conf, lines=constituent_lines))
+            blocks.append(
+                Block(bbox=bbox, confidence=max_conf, lines=constituent_lines)
+            )
 
         return blocks
 
     def _should_merge(
         self, a: TextLine, b: TextLine, v_expand: float, h_expand: float
     ) -> bool:
+        """Return True if expanded bboxes of *a* and *b* intersect.
+
+        Each bbox is dilated by (h_expand, v_expand) before the intersection
+        test.  A positive h_expand bridges small horizontal gaps; v_expand
+        controls the maximum tolerated inter-line whitespace.
+
+        Args:
+            a: First text line.
+            b: Second text line.
+            v_expand: Vertical dilation in pixels.
+            h_expand: Horizontal dilation in pixels.
+
+        Returns:
+            True if the dilated bboxes overlap.
+        """
         ax1, ay1, ax2, ay2 = a.bbox
         bx1, by1, bx2, by2 = b.bbox
 
+        # Reject immediately if raw horizontal gap already exceeds h_expand.
         gap_x = max(0.0, bx1 - ax2, ax1 - bx2)
         if gap_x > h_expand:
             return False

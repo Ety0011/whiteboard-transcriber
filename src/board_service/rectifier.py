@@ -51,12 +51,14 @@ def _sort_corners(pts: np.ndarray) -> np.ndarray:
 
 
 def _quad_area(p: np.ndarray) -> float:
+    """Return the area of a quad via the shoelace formula."""
     return 0.5 * abs(
         np.dot(p[:, 0], np.roll(p[:, 1], 1)) - np.dot(p[:, 1], np.roll(p[:, 0], 1))
     )
 
 
 def _quad_ratio(p: np.ndarray) -> float:
+    """Return the diagonal aspect ratio (TL-BR length / TR-BL length) of a quad."""
     return np.linalg.norm(p[0] - p[2]) / (np.linalg.norm(p[1] - p[3]) + 1e-6)
 
 

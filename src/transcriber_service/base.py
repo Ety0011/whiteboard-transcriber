@@ -16,6 +16,13 @@ import numpy as np
 
 @dataclass
 class TranscriptionResult:
+    """OCR result returned by the transcription worker subprocess.
+
+    Attributes:
+        entity_id: Registry ID of the entity whose crop was transcribed.
+        text: Recognised text (and/or LaTeX) returned by the VLM backend.
+    """
+
     entity_id: int
     text: str
 

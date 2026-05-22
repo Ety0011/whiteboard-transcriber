@@ -33,6 +33,7 @@ class GotTranscriber(BaseTranscriber):
         self._device = "cpu"
 
     def load(self) -> None:
+        """Load GOT-OCR 2.0 in float16 on MPS if available, otherwise CPU."""
         import torch
         from transformers import AutoModelForCausalLM, AutoProcessor
 
@@ -50,6 +51,17 @@ class GotTranscriber(BaseTranscriber):
         )
 
     def transcribe(self, crop: np.ndarray) -> str:
+        """Run GOT-OCR 2.0 on *crop* and return recognised text/LaTeX.
+
+        Applies CLAHE contrast enhancement before inference. Decodes only the
+        newly generated tokens (strips the input prompt from the output).
+
+        Args:
+            crop: BGR uint8 entity crop from the clean board composite.
+
+        Returns:
+            Recognised text string, potentially containing LaTeX markup.
+        """
         import torch
         from PIL import Image
 
@@ -76,6 +88,7 @@ class GotTranscriber(BaseTranscriber):
 
     @staticmethod
     def _mps_available() -> bool:
+        """Return True if PyTorch MPS backend is available on this machine."""
         try:
             import torch
 

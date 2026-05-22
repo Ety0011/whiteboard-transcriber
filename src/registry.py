@@ -209,6 +209,21 @@ class Registry:
     # -----------------------------------------------------------------------
 
     def _get_assignments(self, blocks, active_entities, frame_diagonal):
+        """Match detected blocks to existing entities using a greedy one-to-one assignment.
+
+        Scores all (block, entity) pairs above match_threshold, sorts by score
+        descending, then greedily assigns the highest-scoring pair first,
+        consuming each block and entity at most once.
+
+        Args:
+            blocks: Layout blocks from the current frame.
+            active_entities: All non-ERASED entities in the registry.
+            frame_diagonal: Normalisation constant for centroid similarity.
+
+        Returns:
+            Tuple of (assignments, matched_block_ids, matched_entity_ids) where
+            assignments maps block index → entity id.
+        """
         candidates = []
         for blk_id, block in enumerate(blocks):
             for ent in active_entities:
@@ -216,6 +231,7 @@ class Registry:
                 if score > self._match_threshold:
                     candidates.append((score, blk_id, ent.id))
 
+        # Highest score first — greedy assignment gives each block its best entity.
         candidates.sort(key=lambda x: -x[0])
 
         matched_block_ids: set[int] = set()
@@ -285,7 +301,10 @@ class Registry:
                     newly_erased.append(ent)
                     log.debug("Entity %d → ERASED", ent.id)
 
-    def _create_new_entities(self, blocks, matched_indices, now):
+    def _create_new_entities(
+        self, blocks: list[Block], matched_indices: set[int], now: float
+    ) -> None:
+        """Create STABILIZING entities for blocks that had no matching entity."""
         for blk_id, block in enumerate(blocks):
             if blk_id not in matched_indices:
                 new_id = self._next_id
