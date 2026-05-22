@@ -75,13 +75,8 @@ _ANCHOR_COLOR = (255, 165, 0)  # sky blue (BGR)
 def _draw_blocks(frame: np.ndarray, blocks: list[Block]) -> np.ndarray:
     overlay = frame.copy()
     for block in blocks:
-        if block.lines:
-            for line in block.lines:
-                x1, y1, x2, y2 = line.bbox.astype(int)
-                cv2.rectangle(overlay, (x1, y1), (x2, y2), _ANCHOR_COLOR, -1)
-                cv2.rectangle(frame, (x1, y1), (x2, y2), _ANCHOR_COLOR, 1, cv2.LINE_AA)
-        else:
-            x1, y1, x2, y2 = block.bbox.astype(int)
+        for line in block.lines:
+            x1, y1, x2, y2 = line.bbox.astype(int)
             cv2.rectangle(overlay, (x1, y1), (x2, y2), _ANCHOR_COLOR, -1)
             cv2.rectangle(frame, (x1, y1), (x2, y2), _ANCHOR_COLOR, 1, cv2.LINE_AA)
     cv2.addWeighted(overlay, 0.18, frame, 0.82, 0, frame)

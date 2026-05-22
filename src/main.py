@@ -4,7 +4,7 @@ Usage::
 
     python src/main.py                           # live webcam, hierarchical_union_find
     python src/main.py video.mp4                 # video file
-    python src/main.py --detector yolo video.mp4    # YOLO backend
+    python src/main.py --detector hdbscan video.mp4
 
 Keyboard controls:
     q  — quit
@@ -32,15 +32,9 @@ from board_service.rectifier import Rectifier
 from discovery import Discovery
 from layout_service import (
     Block,
-    DBSCANGrouper,
-    DocLayoutDetector,
     HDBSCANGrouper,
-    PaddleVLDetector,
-    StrokeDetector,
     TextBlockDetector,
     UnionFindGrouper,
-    XYCutGrouper,
-    YOLODetector,
 )
 from ledger import Ledger
 from registry import Registry
@@ -66,17 +60,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--detector",
-        choices=[
-            "stroke_cluster",
-            "yolo",
-            "doclayoutv3",
-            "paddlevl",
-            "hierarchical_union_find",
-            "dbscan",
-            "hdbscan",
-            "xycut",
-        ],
-        default="hierarchical_union_find",
+        choices=["proximity", "hdbscan"],
+        default="proximity",
         help="Stage 5 layout detection backend",
     )
     parser.add_argument(
@@ -102,16 +87,8 @@ def main() -> None:
     reconstructor = BoardReconstructor()
 
     detector_factories = {
-        "stroke_cluster": StrokeDetector,
-        "yolo": YOLODetector,
-        "doclayoutv3": DocLayoutDetector,
-        "paddleocrvl": PaddleVLDetector,
-        "hierarchical_union_find": partial(
-            TextBlockDetector, strategy=UnionFindGrouper()
-        ),
-        "dbscan": partial(TextBlockDetector, strategy=DBSCANGrouper()),
+        "proximity": partial(TextBlockDetector, strategy=UnionFindGrouper()),
         "hdbscan": partial(TextBlockDetector, strategy=HDBSCANGrouper()),
-        "xycut": partial(TextBlockDetector, strategy=XYCutGrouper()),
     }
 
     transcriber_factories = {
