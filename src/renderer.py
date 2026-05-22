@@ -11,7 +11,7 @@ import logging
 import cv2
 import numpy as np
 
-from layout_service import Block
+from layout import Block
 from registry import EntityState, SemanticEntity
 
 log = logging.getLogger(__name__)

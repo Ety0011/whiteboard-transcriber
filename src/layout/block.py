@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .text_line_detector import TextLine
+from .detector import TextLine
 
 
 @dataclass

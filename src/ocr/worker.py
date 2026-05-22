@@ -19,7 +19,7 @@ from typing import Callable
 
 import numpy as np
 
-from transcriber_service.base import BaseTranscriber, TranscriptionResult
+from .base import BaseTranscriber, TranscriptionResult
 
 log = logging.getLogger(__name__)
 

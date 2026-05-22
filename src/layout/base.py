@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
-from .grouper import Block
+from .block import Block
 
 
 class BaseLayoutDetector(ABC):

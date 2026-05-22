@@ -8,8 +8,8 @@ they share limited x-range.
 
 import numpy as np
 
-from .grouper import Block, TextLineGrouper
-from .text_line_detector import TextLine
+from .block import Block, TextLineGrouper
+from .detector import TextLine
 
 
 class HDBSCANGrouper(TextLineGrouper):

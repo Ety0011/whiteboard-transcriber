@@ -12,8 +12,8 @@ from typing import Callable
 
 import numpy as np
 
-from layout_service.base import BaseLayoutDetector
-from layout_service.grouper import Block
+from .base import BaseLayoutDetector
+from .block import Block
 
 log = logging.getLogger(__name__)
 

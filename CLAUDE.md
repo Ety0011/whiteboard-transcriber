@@ -161,21 +161,21 @@ Camera / File
 
 Reads from webcam or file in a background thread. Uses a `Queue(maxsize=1)` — stale frames are dropped automatically, so the main loop always processes the latest frame.
 
-### Stage 1 — Board Masking (`board_service/board_masker.py`)
+### Stage 1 — Board Masking (`board/masker.py`)
 
 SAM 3.1 runs in a dedicated subprocess with a ~5s cadence. Takes a raw camera frame, returns a binary H×W uint8 mask (1=board, 0=background). Outputs `None` between cycles — the rectifier uses its cached homography when `None` is received. Does **not** perform corner extraction or homography computation.
 
-### Stage 2 — Person Masking (`board_service/person_masker.py`)
+### Stage 2 — Person Masking (`board/person.py`)
 
 MediaPipe selfie segmenter runs synchronously every frame (~5ms). Returns a binary H×W uint8 mask (1=person). The person mask ensures that pixels under or near the body are never updated in Stage 4, preserving board content under occlusion.
 
-### Stage 3 — Rectification (`board_service/rectifier.py`)
+### Stage 3 — Rectification (`board/rectifier.py`)
 
 Owns all geometric computation. When a new board mask arrives from Stage 1, it extracts four corners via convex-hull approximation + `approxPolyDP`, orders them TL/TR/BR/BL, and computes a perspective homography to a canonical 1920×1080 rectangle. The homography is cached and reused every frame. Both the raw frame and person mask are warped to the rectified space.
 
 **Homography update trigger:** ≥2 corners shift >50px *or* the new quad is larger than cached (area ratio ≥0.98).
 
-### Stage 4 — Board Reconstruction (`board_service/reconstructor.py`)
+### Stage 4 — Board Reconstruction (`board/compositor.py`)
 
 Maintains a clean board composite using distance-weighted EMA:
 
@@ -186,7 +186,7 @@ composite = (1 - lr) × composite + lr × frame
 
 Pixels near or under the person mask have `lr≈0` and are frozen at their last known value. When no person is detected, a uniform EMA (`lr = max_lr`) is applied directly, skipping the expensive `distanceTransform`.
 
-### Stage 5/6 — Layout Detection (`discovery.py`, `layout_service/`)
+### Stage 5/6 — Layout Detection (`layout/worker.py`, `layout/`)
 
 `Discovery` manages the `stage5-layout` subprocess. Inside the worker:
 1. `TextLineDetector` runs PaddleOCR `PP-OCRv5_server_det` synchronously, returning a list of `TextLine` objects (bbox + confidence).
@@ -200,7 +200,7 @@ Three grouping strategies are available:
 | `hdbscan` | `HDBSCANGrouper` | Scale-invariant anisotropic distance; noise lines become singleton blocks |
 | `aabbtree` | `AABBTreeGrouper` | Greedy agglomerative merge via min-heap + AABB engulfment veto |
 
-### Stage 7 — OCR Transcription (`transcriber.py`, `transcriber_service/`)
+### Stage 7 — OCR Transcription (`ocr/worker.py`, `ocr/`)
 
 `Transcriber` manages the `transcription-worker` subprocess. The worker accepts `(entity_id, crop)` pairs from an input queue (`maxsize=10`) and writes `TranscriptionResult` objects to an output queue (`maxsize=30`). Three backends:
 
@@ -273,38 +273,38 @@ Three independent worker processes run throughout a session:
 
 ```
 whiteboard-transcriber/
-├── flake.nix                       # Nix dev environment (Python 3.13, venv)
-├── requirements.txt                # Python dependencies
-├── models/                         # Local model weights (not committed)
-├── output/                         # Generated output (not committed)
-├── tests/                          # Pytest test suite
+├── flake.nix                   # Nix dev environment (Python 3.13, venv)
+├── requirements.txt            # Python dependencies
+├── models/                     # Local model weights (not committed)
+├── output/                     # Generated output (not committed)
+├── tests/                      # Pytest test suite
 └── src/
-    ├── main.py                     # Entry point — pipeline orchestrator + UI
-    ├── capture.py                  # Stage 0: frame ingestion thread
-    ├── logging_config.py           # Third-party noise suppression
-    ├── registry.py                 # Entity state machine + SemanticEntity
-    ├── ledger.py                   # Stage 8: append-only ledger + file synthesis
-    ├── discovery.py                # Stage 5/6: layout worker manager
-    ├── transcriber.py              # Stage 7: VLM worker manager
-    ├── renderer.py                 # OpenCV overlay rendering (display only)
-    ├── board_service/
-    │   ├── board_masker.py         # Stage 1: SAM 3.1 async subprocess
-    │   ├── person_masker.py        # Stage 2: MediaPipe sync per-frame
-    │   ├── rectifier.py            # Stage 3: homography + warp to 1920×1080
-    │   └── reconstructor.py        # Stage 4: distance-weighted EMA composite
-    ├── layout_service/
-    │   ├── base.py                 # BaseLayoutDetector ABC
-    │   ├── grouper.py              # Block dataclass + TextLineGrouper ABC
-    │   ├── text_line_detector.py   # PaddleOCR wrapper + UnionFind primitive
-    │   ├── text_block_detector.py  # Composes TextLineDetector + TextLineGrouper
-    │   ├── union_find_grouper.py   # Grouping: asymmetric dilation + Union-Find
-    │   ├── hdbscan_grouper.py      # Grouping: anisotropic HDBSCAN
-    │   └── AABB_tree_grouper.py    # Grouping: greedy agglomerative + AABB veto
-    └── transcriber_service/
-        ├── base.py                 # BaseTranscriber ABC + TranscriptionResult
-        ├── mock.py                 # MockTranscriber (no model)
-        ├── got.py                  # GotTranscriber (GOT-OCR 2.0, HuggingFace)
-        └── paddle_vl.py            # PaddleVLTranscriber (PaddleOCR-VL-1.5, MLX)
+    ├── main.py                 # Entry point — pipeline orchestrator + UI
+    ├── capture.py              # Stage 0: frame ingestion thread
+    ├── logging_config.py       # Third-party noise suppression
+    ├── registry.py             # Entity state machine + SemanticEntity
+    ├── ledger.py               # Stage 8: append-only ledger + file synthesis
+    ├── renderer.py             # OpenCV overlay rendering (display only)
+    ├── board/                  # Stages 1–4: visual surface pipeline
+    │   ├── masker.py           # Stage 1: SAM 3.1 async subprocess
+    │   ├── person.py           # Stage 2: MediaPipe sync per-frame
+    │   ├── rectifier.py        # Stage 3: homography + warp to 1920×1080
+    │   └── compositor.py       # Stage 4: distance-weighted EMA composite
+    ├── layout/                 # Stages 5–6: text detection + grouping
+    │   ├── base.py             # BaseLayoutDetector ABC
+    │   ├── block.py            # Block dataclass + TextLineGrouper ABC
+    │   ├── detector.py         # PaddleOCR text-line detection + UnionFind
+    │   ├── pipeline.py         # Composes detector + grouper strategy
+    │   ├── worker.py           # Discovery subprocess manager
+    │   ├── union_find.py       # Grouping: asymmetric dilation + Union-Find
+    │   ├── hdbscan.py          # Grouping: anisotropic HDBSCAN
+    │   └── aabb_tree.py        # Grouping: greedy agglomerative + AABB veto
+    └── ocr/                    # Stage 7: VLM transcription
+        ├── base.py             # BaseTranscriber ABC + TranscriptionResult
+        ├── worker.py           # Transcriber subprocess manager
+        ├── got.py              # GotTranscriber (GOT-OCR 2.0, HuggingFace)
+        ├── paddle_vl.py        # PaddleVLTranscriber (PaddleOCR-VL-1.5, MLX)
+        └── mock.py             # MockTranscriber (no model, for testing)
 ```
 
 ---
@@ -384,17 +384,17 @@ Use the drop-old queue pattern for single-result producers (board masker, layout
 
 ### Adding a New Grouper
 
-1. Subclass `TextLineGrouper` from `layout_service/grouper.py`.
+1. Subclass `TextLineGrouper` from `layout/block.py`.
 2. Implement `group(lines: list[TextLine]) -> list[Block]`.
-3. Register in `main.py`'s `detector_factories` dict and add the choice to `--detector`.
-4. No other files need changes.
+3. Add the module to `layout/__init__.py` exports.
+4. Register in `main.py`'s `detector_factories` dict and add the choice to `--detector`.
 
 ### Adding a New Transcriber Backend
 
-1. Subclass `BaseTranscriber` from `transcriber_service/base.py`.
+1. Subclass `BaseTranscriber` from `ocr/base.py`.
 2. Implement `load()` and `transcribe(crop: np.ndarray) -> str`.
-3. Register in `main.py`'s `transcriber_factories` dict and add the choice to `--transcriber`.
-4. No other files need changes.
+3. Add the module to `ocr/__init__.py` exports.
+4. Register in `main.py`'s `transcriber_factories` dict and add the choice to `--transcriber`.
 
 ---
 

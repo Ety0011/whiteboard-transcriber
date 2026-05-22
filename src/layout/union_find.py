@@ -8,8 +8,8 @@ body lines in adjacent columns.
 
 import numpy as np
 
-from .grouper import Block, TextLineGrouper
-from .text_line_detector import TextLine, UnionFind
+from .block import Block, TextLineGrouper
+from .detector import TextLine, UnionFind
 
 
 class UnionFindGrouper(TextLineGrouper):

@@ -5,8 +5,8 @@ import logging
 import numpy as np
 
 from .base import BaseLayoutDetector
-from .grouper import Block, TextLineGrouper
-from .text_line_detector import TextLineDetector
+from .block import Block, TextLineGrouper
+from .detector import TextLineDetector
 
 log = logging.getLogger(__name__)
 

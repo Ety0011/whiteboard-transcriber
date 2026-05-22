@@ -19,7 +19,7 @@ import time
 
 import numpy as np
 
-from layout_service import Block
+from layout import Block
 
 log = logging.getLogger(__name__)
 

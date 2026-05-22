@@ -29,27 +29,27 @@ import cv2
 import numpy as np
 
 import capture
-from board_service.board_masker import BoardMasker
-from board_service.person_masker import PersonMasker
-from board_service.reconstructor import BoardReconstructor
-from board_service.rectifier import Rectifier
-from discovery import Discovery
-from layout_service import (
+from board.compositor import BoardReconstructor
+from board.masker import BoardMasker
+from board.person import PersonMasker
+from board.rectifier import Rectifier
+from layout import (
     AABBTreeGrouper,
     HDBSCANGrouper,
     TextBlockDetector,
     UnionFindGrouper,
 )
+from layout.worker import Discovery
 from ledger import Ledger
 from logging_config import suppress_noise
-from registry import EntityState, Registry, SemanticEntity
-from renderer import Renderer
-from transcriber import Transcriber
-from transcriber_service import (
+from ocr import (
     GotTranscriber,
     MockTranscriber,
     PaddleVLTranscriber,
 )
+from ocr.worker import Transcriber
+from registry import EntityState, Registry, SemanticEntity
+from renderer import Renderer
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
