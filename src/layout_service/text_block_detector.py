@@ -40,3 +40,7 @@ class TextBlockDetector(BaseLayoutDetector):
         if not lines:
             return []
         return sorted(self.strategy.group(lines), key=lambda b: b.bbox[1])
+
+    def shutdown(self) -> None:
+        if self.line_detector is not None:
+            self.line_detector.shutdown()

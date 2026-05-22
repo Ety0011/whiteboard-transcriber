@@ -24,6 +24,7 @@ def _worker_main(
     while True:
         frame = in_q.get()  # block until work arrives
         if frame is None:  # shutdown sentinel
+            detector.shutdown()
             break
 
         blocks: list[Block] = []

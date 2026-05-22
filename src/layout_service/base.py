@@ -25,7 +25,10 @@ class BaseLayoutDetector(ABC):
     def detect(self, frame: np.ndarray) -> list[Block]:
         """Run inference and return detected layout blocks.
 
-        Each Block carries: poly, bbox, label ("TEXT"|"MATH"|"TABLE"|"DIAGRAM"),
-        confidence, and anchors (empty list for non-anchor-based detectors).
+        Each Block carries: bbox, confidence, and lines (list[TextLine]).
         """
+        pass
+
+    def shutdown(self) -> None:
+        """Release any resources held by the detector. No-op by default."""
         pass

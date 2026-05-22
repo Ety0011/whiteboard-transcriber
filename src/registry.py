@@ -54,9 +54,7 @@ class SemanticEntity:
     last_seen: float
     ocr_text: str | None
     ocr_confidence: float | None
-    last_stable_crop: np.ndarray | None  # BGR uint8 crop captured at inference dispatch
     last_stable_center: np.ndarray | None = None  # shape (2,) float64 cx,cy
-    last_block: Block | None = None  # Block snapshot at inference dispatch
     line_bboxes: list[np.ndarray] = dataclasses.field(default_factory=list)
 
 
@@ -106,7 +104,6 @@ def _match_score(
     reg_bbox: np.ndarray,
     frame_diagonal: float,
 ) -> float:
-    # TODO: put coefficients as parameters
     """Combined detection-to-entity match score: 0.7*IoU + 0.3*centroid_similarity."""
     return 0.7 * _iou(det_bbox, reg_bbox) + 0.3 * _centroid_similarity(
         det_bbox, reg_bbox, frame_diagonal
@@ -118,7 +115,6 @@ def _match_score(
 # ---------------------------------------------------------------------------
 
 
-# TODO: fix duplicate entities
 class Registry:
     """Persistent entity registry for the whiteboard pipeline.
 
@@ -192,7 +188,7 @@ class Registry:
         )
 
         for blk_id, ent_id in assignments.items():
-            self._update_entity(blocks[blk_id], self._registry[ent_id], frame, now)
+            self._update_entity(blocks[blk_id], self._registry[ent_id], now)
 
         self._erase_unmatched(active_entities, matched_entity_ids, now)
         self._create_new_entities(blocks, matched_block_ids, now)
@@ -216,7 +212,6 @@ class Registry:
     # Private helpers
     # -----------------------------------------------------------------------
 
-    # TODO: if board moves too much we lose all assignments
     def _get_assignments(self, blocks, active_entities, frame_diagonal):
         candidates = []
         for blk_id, block in enumerate(blocks):
@@ -238,7 +233,7 @@ class Registry:
                 matched_entity_ids.add(ent_id)
         return assignments, matched_block_ids, matched_entity_ids
 
-    def _update_entity(self, block: Block, ent: SemanticEntity, frame, now):
+    def _update_entity(self, block: Block, ent: SemanticEntity, now):
         """Advance state machine for a single matched entity."""
 
         # Detect movement — resets stabilization timer for all non-ERASED states.
@@ -260,18 +255,13 @@ class Registry:
 
         if ent.state == EntityState.STABILIZING:
             if now - ent.last_modified >= self._stable_time_threshold:
-                self._dispatch_for_inference(ent, block, frame, now)
+                self._dispatch_for_inference(ent, now)
 
-    def _dispatch_for_inference(self, ent: SemanticEntity, block: Block, frame, now):
-        """Capture crop and transition STABILIZING → INFERRING."""
-        x1, y1, x2, y2 = ent.bbox
-        crop = frame[y1:y2, x1:x2]
-        if crop.size > 0:
-            ent.last_stable_crop = crop.copy()
-            ent.last_stable_center = (ent.bbox[:2] + ent.bbox[2:]) / 2.0
-            ent.last_block = block
-            ent.state, ent.last_modified = EntityState.INFERRING, now
-            log.debug("Entity %d → INFERRING", ent.id)
+    def _dispatch_for_inference(self, ent: SemanticEntity, now):
+        """Transition STABILIZING → INFERRING and anchor the stable center."""
+        ent.last_stable_center = (ent.bbox[:2] + ent.bbox[2:]) / 2.0
+        ent.state, ent.last_modified = EntityState.INFERRING, now
+        log.debug("Entity %d → INFERRING", ent.id)
 
     def _erase_unmatched(self, active_entities, matched_ent_ids, now):
         """Erase entities absent for longer than erase_grace_period seconds."""
@@ -298,7 +288,6 @@ class Registry:
                     last_modified=now,
                     ocr_text=None,
                     ocr_confidence=None,
-                    last_stable_crop=None,
                     last_stable_center=np.array([cx, cy], dtype=np.float64),
                     line_bboxes=[line.bbox for line in block.lines],
                 )

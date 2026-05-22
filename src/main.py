@@ -32,7 +32,6 @@ from board_service.rectifier import Rectifier
 from discovery import Discovery
 from layout_service import (
     AABBTreeGrouper,
-    Block,
     HDBSCANGrouper,
     TextBlockDetector,
     UnionFindGrouper,
@@ -107,8 +106,6 @@ def main() -> None:
     pending_ocr: dict[int, object] = {}
     log.info("Ready. Model: %s | Press q or Ctrl-C to stop.", args.detector)
 
-    last_blocks: list[Block] = []
-
     try:
         while True:
             frame = frame_queue.get()
@@ -126,9 +123,6 @@ def main() -> None:
 
             # Stage 5 — layout detection (async, non-blocking)
             blocks = discovery.detect(composite)
-
-            if blocks:
-                last_blocks = blocks
 
             # Stage 6 — entity lifecycle (cross-frame persistence)
             entity_update = registry.tick(blocks, composite)
@@ -156,7 +150,7 @@ def main() -> None:
             # Render — stack raw (top) above composite (bottom) in one window
             board = renderer.render_board(
                 composite,
-                last_blocks,
+                blocks,
                 entity_update.entities,
                 discovery.is_busy,
             )
