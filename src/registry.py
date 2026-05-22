@@ -53,7 +53,6 @@ class SemanticEntity:
     last_modified: float
     last_seen: float
     ocr_text: str | None
-    ocr_confidence: float | None
     last_stable_center: np.ndarray | None = None  # shape (2,) float64 cx,cy
 
 
@@ -147,18 +146,18 @@ class Registry:
         self._registry: dict[int, SemanticEntity] = {}
         self._next_id: int = 0
 
-    def mark_active(
-        self,
-        entity: SemanticEntity,
-        text: str,
-        confidence: float,
-    ) -> None:
+    def mark_active(self, entity: SemanticEntity, text: str) -> None:
         """Record VLM result and transition INFERRING → ACTIVE."""
         entity.ocr_text = text
-        entity.ocr_confidence = confidence
         entity.state = EntityState.ACTIVE
         entity.last_modified = time.monotonic()
         log.debug("Entity %d → ACTIVE: %r", entity.id, text[:30])
+
+    def reset_to_stabilizing(self, entity: SemanticEntity) -> None:
+        """Reset INFERRING entity back to STABILIZING (e.g. degenerate crop)."""
+        entity.state = EntityState.STABILIZING
+        entity.last_modified = time.monotonic()
+        log.debug("Entity %d reset → STABILIZING (empty crop)", entity.id)
 
     def tick(
         self,
@@ -302,7 +301,6 @@ class Registry:
                     last_seen=now,
                     last_modified=now,
                     ocr_text=None,
-                    ocr_confidence=None,
                     last_stable_center=np.array([cx, cy], dtype=np.float64),
                 )
 

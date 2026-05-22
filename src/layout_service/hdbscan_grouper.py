@@ -25,7 +25,7 @@ class HDBSCANGrouper(TextLineGrouper):
         scale = np.maximum((h + h.T) / 2.0, 1e-5)
         norm_dx = dx / (self.horizontal_scale * scale)
         norm_dy = dy / scale
-        return np.sqrt(norm_dx**2 + norm_dy**2).astype(np.float32)
+        return np.sqrt(norm_dx**2 + norm_dy**2)
 
     def group(self, lines: list[TextLine]) -> list[Block]:
         if not lines:
@@ -42,7 +42,7 @@ class HDBSCANGrouper(TextLineGrouper):
             h = line.bbox[3] - line.bbox[1]
             centroids.append([cx, cy, h])
 
-        X = np.array(centroids, dtype=np.float32)
+        X = np.array(centroids, dtype=np.float64)
         dist_matrix = self._custom_pairwise_distance(X)
 
         clusterer = HDBSCAN(
@@ -50,7 +50,7 @@ class HDBSCANGrouper(TextLineGrouper):
             min_cluster_size=self.min_cluster_size,
             min_samples=1,
         )
-        labels = clusterer.fit_predict(dist_matrix.astype(np.float64))
+        labels = clusterer.fit_predict(dist_matrix)
 
         groups_dict = {}
         for idx, label in enumerate(labels):

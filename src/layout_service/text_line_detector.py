@@ -1,5 +1,4 @@
 import logging
-import multiprocessing as mp
 from dataclasses import dataclass
 
 import numpy as np
@@ -49,95 +48,42 @@ def _raw_to_lines(raw: list, h: int, w: int) -> list[TextLine]:
     return lines
 
 
-def _worker_main(
-    in_q: mp.Queue,
-    out_q: mp.Queue,
-    box_thresh: float,
-    unclip_ratio: float,
-) -> None:
-    """PaddleOCR text detection loop — runs in a dedicated child process."""
-    import logging as _log
-
-    _log.basicConfig(level=logging.DEBUG)
-    log = _log.getLogger(__name__)
-
-    from paddleocr import TextDetection
-
-    detector = TextDetection(
-        model_name="PP-OCRv5_server_det",
-        box_thresh=box_thresh,
-        unclip_ratio=unclip_ratio,
-    )
-    log.info("TextLineDetector: PP-OCRv5_server_det ready")
-
-    while True:
-        composite = in_q.get()  # block until work arrives
-        if composite is None:  # shutdown sentinel
-            break
-
-        lines: list[TextLine] = []
-        try:
-            h, w = composite.shape[:2]
-            raw = detector.predict(composite)
-            lines = _raw_to_lines(raw, h, w)
-            log.debug("TextLineDetector: %d text lines", len(lines))
-        except Exception:
-            log.exception("PaddleOCR detection failed")
-
-        try:
-            out_q.get_nowait()
-        except Exception:
-            pass
-        try:
-            out_q.put_nowait(lines)
-        except Exception:
-            pass
-
-
 class TextLineDetector:
-    """Non-blocking PaddleOCR text line detector."""
+    """Synchronous PaddleOCR text line detector.
 
-    def __init__(
-        self,
-        box_thresh: float = 0.6,
-        unclip_ratio: float = 1.2,
-    ) -> None:
-        self._cached: list[TextLine] = []
-        self._in_q: mp.Queue = mp.Queue(maxsize=1)
-        self._out_q: mp.Queue = mp.Queue(maxsize=1)
-        self._worker = mp.Process(
-            target=_worker_main,
-            args=(self._in_q, self._out_q, box_thresh, unclip_ratio),
-            daemon=True,
-            name="paddle-detect",
+    Runs PP-OCRv5_server_det directly in the calling process. Intended to be
+    called from inside the stage5-layout subprocess, which provides async
+    isolation relative to the main process.
+    """
+
+    def __init__(self, box_thresh: float = 0.6, unclip_ratio: float = 1.2) -> None:
+        self._box_thresh = box_thresh
+        self._unclip_ratio = unclip_ratio
+        self._detector = None
+
+    def load(self) -> None:
+        from paddleocr import TextDetection
+
+        self._detector = TextDetection(
+            model_name="PP-OCRv5_server_det",
+            box_thresh=self._box_thresh,
+            unclip_ratio=self._unclip_ratio,
         )
-        self._worker.start()
-        logger.info("TextLineDetector worker started (pid=%d)", self._worker.pid)
+        logger.info("TextLineDetector: PP-OCRv5_server_det ready")
 
     def detect(self, composite: np.ndarray) -> list[TextLine]:
-        """Submit composite for async detection; return latest cached result."""
+        h, w = composite.shape[:2]
         try:
-            self._in_q.put_nowait(composite)
+            raw = self._detector.predict(composite)
+            lines = _raw_to_lines(raw, h, w)
+            logger.debug("TextLineDetector: %d text lines", len(lines))
+            return lines
         except Exception:
-            pass
-
-        try:
-            self._cached = self._out_q.get_nowait()
-        except Exception:
-            pass
-
-        return self._cached
+            logger.exception("PaddleOCR detection failed")
+            return []
 
     def shutdown(self) -> None:
-        """Signal the worker to stop and wait for clean exit."""
-        try:
-            self._in_q.put_nowait(None)
-        except Exception:
-            pass
-        self._worker.join(timeout=5)
-        if self._worker.is_alive():
-            self._worker.terminate()
-        logger.info("TextLineDetector worker stopped")
+        pass
 
 
 class UnionFind:

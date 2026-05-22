@@ -54,6 +54,9 @@ class BoardReconstructor:
 
         if self._composite is None:
             self._composite = frame_float.copy()
+        elif not mask.any():
+            # No person: uniform EMA — skip O(H×W) distanceTransform
+            self._composite += self._max_lr * (frame_float - self._composite)
         else:
             visible = (mask == 0).astype(np.uint8)
             dist_map = cv2.distanceTransform(visible, cv2.DIST_L2, 5)

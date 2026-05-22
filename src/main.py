@@ -134,17 +134,20 @@ def main() -> None:
                 if crop.size > 0:
                     pending_ocr[entity.id] = entity
                     transcriber.submit(entity.id, crop)
+                else:
+                    registry.reset_to_stabilizing(entity)
 
             # Poll VLM results — update ledger and synthesise output files
             for result in transcriber.get_results():
                 entity = pending_ocr.pop(result.entity_id, None)
                 if entity is not None:
-                    registry.mark_active(entity, result.text, confidence=1.0)
+                    registry.mark_active(entity, result.text)
                     ledger.update(entity.id, entity.bbox, result.text)
                     log.debug("Ledger written for entity %d", entity.id)
 
             # Stage 8 — erasure events
             for entity in entity_update.newly_erased:
+                pending_ocr.pop(entity.id, None)
                 ledger.mark_erased(entity.id)
 
             # Render — stack raw (top) above composite (bottom) in one window

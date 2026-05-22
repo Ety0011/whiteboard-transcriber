@@ -28,12 +28,13 @@ class TextBlockDetector(BaseLayoutDetector):
 
     def load(self) -> None:
         log.info(
-            "TextBlockDetector: spawning TextLineDetector with strategy=%s",
+            "TextBlockDetector: loading TextLineDetector with strategy=%s",
             type(self.strategy).__name__,
         )
         self.line_detector = TextLineDetector(
             box_thresh=self.box_thresh, unclip_ratio=self.unclip_ratio
         )
+        self.line_detector.load()
 
     def detect(self, frame: np.ndarray) -> list[Block]:
         lines = self.line_detector.detect(frame)
