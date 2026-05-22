@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from functools import partial
 from pathlib import Path
 
@@ -77,7 +78,16 @@ def main() -> None:
         default=960,  # half of 1920x1080
         help="Display window width in pixels (default: 1280)",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Set log level to DEBUG (propagates to all worker subprocesses)",
+    )
     args = parser.parse_args()
+
+    if args.debug:
+        os.environ["LOG_LEVEL"] = "DEBUG"
+        logging.getLogger().setLevel(logging.DEBUG)
 
     frame_queue = capture.start(args.source)
 

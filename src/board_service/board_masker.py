@@ -32,10 +32,12 @@ def _worker_main(
 ) -> None:
     """SAM 3.1 board-segmentation worker — runs in a dedicated child process."""
     import logging as _log
+    import os
 
     from logging_config import devnull_fds, suppress_worker_noise
 
-    _log.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    _level = _log.DEBUG if os.getenv("LOG_LEVEL") == "DEBUG" else _log.INFO
+    _log.basicConfig(level=_level, format="%(levelname)s %(name)s: %(message)s")
     suppress_worker_noise()
 
     with devnull_fds(1, 2):

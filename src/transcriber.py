@@ -34,7 +34,9 @@ def _worker_main(
 
     from logging_config import suppress_worker_noise
 
-    _log.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    import os
+    _level = logging.DEBUG if os.getenv("LOG_LEVEL") == "DEBUG" else logging.INFO
+    _log.basicConfig(level=_level, format="%(levelname)s %(name)s: %(message)s")
     suppress_worker_noise()
     _log = _log.getLogger(__name__)
 
