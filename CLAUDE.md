@@ -1,150 +1,427 @@
-# CLAUDE.md — Temporal Semantic Whiteboard Ledger
+# CLAUDE.md — Whiteboard Transcriber Runbook
 
-This is the master specification for this project. All implementation decisions must align with this document.
-
----
-
-## 1. Project Vision: The "Lecture Historian"
-
-This system is not a scanner; it is a **Lecture Historian**. It captures the **evolution of knowledge** across a session. By utilizing Hierarchical Visual Grounding and Vision-Language Models (VLMs), it transforms a physical whiteboard into an append-only **Temporal Ledger**. Even when a professor erases the board, the information is preserved, timestamped, and semantically integrated into a final **Chronological Study Guide**.
+> **Lecture Historian** — a real-time CV/VLM pipeline that captures the *evolution* of whiteboard content across a lecture session. Every entity written, erased, or corrected is preserved in an append-only temporal ledger and synthesised into structured Markdown output.
 
 ---
 
-## 2. Tech Stack
+## Table of Contents
 
-| Component | Technology | Role |
-| :--- | :--- | :--- |
-| **Board Sensing** | **SAM 3.1 (Semantic Text Prompt)** | Async board region segmentation via `text=["whiteboard"]` — board mask drives homography in Stage 3. |
-| **Person Sensing** | **MediaPipe Selfie Segmenter** | Sync per-frame person mask — warped to rectified space and used by Stage 4. |
-| **Neural Surface** | **Distance-Weighted EMA** | Per-pixel learning rate scaled by distance from the person mask — freezes occluded pixels, updates visible ones. |
-| **Spatial Anchors** | **PaddleOCR PP-OCRv5_server_det** | Detects line-level `TEXT_LINE` anchors. |
-| **Grouping** | **Union-Find IoU Clustering** | Clusters anchors into "Semantic Entities" via pairwise IoU on expanded bboxes. |
-| **The Brain** | **GOT-OCR 2.0 (Masked Crop)** | High-fidelity VLM OCR/LaTeX on per-entity masked crops. float16 via HuggingFace Transformers on MPS. |
-| **Memory** | **Temporal Event Ledger** | Append-only registry with semantic versioning. |
-
----
-
-## 3. Hardware Target: MacBook Pro M4 — 24GB Unified Memory
-
-All inference runs on Apple Silicon via **MPS (Metal Performance Shaders)**.
-
-**Memory Partitioning:**
-- **CV Resident (9GB):** SAM 3.1 + PaddleOCR — always resident in unified memory.
-- **VLM Worker (11GB):** GOT-OCR 2.0 (float16) — runs in isolated process.
-- **OS / Buffers (4GB):** Frame queues, system overhead.
-
-**Non-Blocking Architecture:** SAM 3.1, PaddleOCR, and GOT-OCR 2.0 each run as independent `multiprocessing.Process` workers. The main loop reads from each model's result queue and always uses the latest cached result. No stage waits on any model.
+1. [Environment Setup](#1-environment-setup)
+2. [Running the Pipeline](#2-running-the-pipeline)
+3. [Architecture Overview](#3-architecture-overview)
+4. [8-Stage Pipeline](#4-8-stage-pipeline)
+5. [Entity State Machine](#5-entity-state-machine)
+6. [Subprocess Design](#6-subprocess-design)
+7. [Project Structure](#7-project-structure)
+8. [Testing](#8-testing)
+9. [Development Rules](#9-development-rules)
+10. [Engineering Constraints](#10-engineering-constraints)
 
 ---
 
-## 4. The 8-Stage Architecture
+## 1. Environment Setup
 
-### Stage 1: Board Masking (SAM 3.1) — Async
+### Prerequisites
 
-SAM 3.1 runs in a background process (`board_masker.py`), segmenting the whiteboard region each cycle (~10s cadence). Outputs a raw board mask in camera-frame space. Corner extraction and homography computation are **not** done here — that is Stage 3's responsibility.
+- macOS on Apple Silicon (M-series). MPS is required for model inference.
+- [Nix](https://nixos.org/) with flakes enabled.
+- [direnv](https://direnv.net/) (recommended).
 
-### Stage 2: Person Masking (MediaPipe) — Sync
+### Bootstrap
 
-MediaPipe selfie segmenter runs synchronously every frame (`person_masker.py`). Outputs a person mask in camera-frame space at ~5ms per frame. No background process — always fresh for the current frame.
+```bash
+# Allow direnv to activate the Nix dev shell automatically on cd
+direnv allow
 
-**Gesture Suppression:** Person mask pixels never contribute to the board model, even when the occluder is motionless.
+# Or enter the dev shell manually
+nix develop
 
-### Stage 3: Rectification
+# Install Python dependencies into the Nix-managed venv
+pip install -r requirements.txt
+```
 
-Owns all geometry for the pipeline. Each time a new board mask arrives from Stage 1, corners are extracted via contour approximation and the homography is recomputed and cached. Every frame, the cached homography warps both the raw frame and the person mask to the canonical **1920×1080** fronto-parallel view.
+The Nix flake (`flake.nix`) pins **Python 3.13** and manages the `.venv` via `venvShellHook`. If the venv Python version mismatches the flake version, delete `.venv` and reload the shell.
 
-> **Coordinate Space Rule:** All stages from Stage 3 onward operate exclusively in the 1920×1080 rectified coordinate space.
+### Model Weights
 
-### Stage 4: Specular-Free Board Reconstruction
+Place the following model files under `models/` before running:
 
-Maintains a **Clean Board Composite** — the "Gold Standard" image fed to the VLM.
+| File | Source |
+|------|--------|
+| `models/sam3.1_multiplex.pt` | Ultralytics SAM 3.1 |
+| `models/selfie_segmenter.tflite` | MediaPipe Selfie Segmenter |
 
-**Distance-Weighted EMA:** `lr(x) = max_lr × (dist(x) / falloff_distance) ^ power`. Pixels under/near the person mask have lr≈0 and are frozen at their last known composite value, preserving written content under occlusions.
-
-### Stage 5: Anchor Discovery (PaddleOCR PP-OCRv5_server_det) — Async
-
-Runs in a background process. Detects every individual line on the board as a `TEXT_LINE` **Spatial Anchor**. Anchors are the atomic unit of the Ledger — each has a bounding box in rectified 1920×1080 space and a confidence score.
-
-### Stage 6: Hierarchical Grouping (Union-Find IoU Clustering)
-
-Analyzes the set of Spatial Anchors and groups them into **Semantic Entities** using pairwise Union-Find clustering over expanded bbox IoU. Handles multi-column layouts by scanning all open groups.
-
-- A cluster of `TEXT_LINE` anchors that are spatially adjacent (same paragraph or derivation) → one Semantic Entity.
-- Each Semantic Entity is the unit that enters the Entity State Machine (Section 5) and is submitted to the VLM.
-
-### Stage 7: Grounded Brain (GOT-OCR 2.0) — Async
-
-Runs as a dedicated `multiprocessing.Process` (`transcriber.py`). Model: `stepfun-ai/GOT-OCR-2.0-hf` via HuggingFace Transformers, float16 on MPS. Input queue `maxsize=10`, output queue `maxsize=30` — multiple entities per frame are accepted without dropping.
-
-**Masked Crop:** Rather than coordinate-prompting the model, each entity is passed as a **masked crop** — a white canvas with only that entity's constituent anchor pixels copied onto it. Adjacent entities are blanked out, preventing hallucinations from background noise.
-
-Before inference, every crop is preprocessed with **CLAHE** (Contrast Limited Adaptive Histogram Equalization) on the L channel to maximise contrast regardless of marker quality. CLAHE is inlined in `transcriber.py` (`_preprocess_crop`).
-
-### Stage 8: Synthesis (The Ledger)
-
-Generates two output files from the UUID Ledger:
-- **`live.md`** — spatial snapshot of all currently `ACTIVE` entities, updated after every VLM result.
-- **`lecture_history.md`** — full chronological ledger. Every entity is present, including `ERASED` ones. Corrections appear as: `→ [HH:MM] Original: "[old text]"`.
+HuggingFace models (`stepfun-ai/GOT-OCR-2.0-hf`, `mlx-community/PaddleOCR-VL-1.5-8bit`) and PaddleOCR (`PP-OCRv5_server_det`) are downloaded automatically on first run.
 
 ---
 
-## 5. The Heart: The Entity State Machine
+## 2. Running the Pipeline
 
-The Ledger tracks each **Semantic Entity** through a strict 4-state lifecycle. Transition logic is handled by `anchor_service/entity_registry.py` (`EntityRegistry`).
+All commands are run from the project root. The entry point is `src/main.py`.
 
-| State | Definition | Transition Trigger |
-| :--- | :--- | :--- |
-| **STABILIZING** | Ink is settling; entity present but not yet stable. | New entity detected, or edit/drift detected on existing entity. |
-| **INFERRING** | Crop captured and submitted to GOT-OCR 2.0. | `stable_time_threshold` elapsed with no significant change. |
-| **ACTIVE** | OCR complete; entity visible and live in outputs. | VLM result received and written to Ledger. |
-| **ERASED** | Anchors absent from clean board composite. | Entity not matched by any anchor group in current frame. |
+```bash
+# Live webcam, default settings
+python src/main.py
 
-**Edit detection:** If an `ACTIVE` or `INFERRING` entity's centroid drifts beyond `drift_threshold_px`, it resets to `STABILIZING` with its UUID preserved and `ocr_text` cleared.
+# Video file input
+python src/main.py recording.mp4
+
+# Custom output directory
+python src/main.py --output-dir /tmp/lecture recording.mp4
+
+# Swap layout detector
+python src/main.py --detector hdbscan recording.mp4
+python src/main.py --detector aabbtree recording.mp4
+
+# Swap OCR backend
+python src/main.py --transcriber got recording.mp4
+python src/main.py --transcriber mock recording.mp4   # dev/test (no model load)
+
+# Verbose logging (propagates LOG_LEVEL=DEBUG to all subprocesses)
+python src/main.py --debug recording.mp4
+
+# Adjust display window width
+python src/main.py --display-width 1280
+```
+
+### CLI Reference
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `source` | positional | webcam | Video/image file path |
+| `--detector` | `unionfind\|hdbscan\|aabbtree` | `unionfind` | Stage 5/6 layout grouping strategy |
+| `--transcriber` | `mock\|got\|paddlevl` | `paddlevl` | Stage 7 OCR backend |
+| `--output-dir` | path | `output/` | Directory for `live.md` and `lecture_history.md` |
+| `--display-width` | int | `960` | Preview window width in pixels |
+| `--debug` | flag | off | Set root log level to DEBUG across all processes |
+
+### Keyboard Controls (Live Window)
+
+| Key | Action |
+|-----|--------|
+| `q` | Quit |
+| `w` | Toggle board corner overlay |
+| `p` | Toggle person mask overlay |
+| `t` | Toggle text-block overlay |
+| `r` | Toggle entity tracker overlay |
+
+### Output Files
+
+Both files are written atomically (tmp + rename) on every OCR result:
+
+- **`output/live.md`** — spatial snapshot of all currently visible entities, sorted top-to-bottom.
+- **`output/lecture_history.md`** — full chronological ledger including erased content, with a TOC and collapsible revision history per entity.
 
 ---
 
-## 6. Project Structure
+## 3. Architecture Overview
 
-```text
-src/
-├── main.py                 # Pipeline orchestrator — async model coordination & UI
-├── capture.py              # Frame ingestion (Queue maxsize=1, always latest frame)
-├── board_service/
-│   ├── board_masker.py     # Stage 1: SAM 3.1 (async) — board region mask
-│   ├── person_masker.py    # Stage 2: MediaPipe (sync) — person mask per frame
-│   ├── rectifier.py        # Stage 3: Corner extraction + H cache + warp to 1920×1080
-│   └── reconstructor.py    # Stage 4: Distance-weighted EMA (person mask occlusion handling)
-├── anchor_service/
-│   ├── detector.py         # Stage 5: PaddleOCR PP-OCRv5_server_det (async) — TEXT_LINE anchors
-│   ├── grouper.py          # Stage 6: Union-Find IoU clustering + masked crop helper
-│   └── entity_registry.py  # Entity lifecycle manager + state machine (STABILIZING → ERASED)
-├── transcriber_service/
-│   └── transcriber.py      # Stage 7: GOT-OCR 2.0 (async HF process) + MockTranscriber + _preprocess_crop (CLAHE)
-└── ledger_service/
-    ├── registry.py         # Append-only session ledger (LedgerRegistry)
-    └── assembly.py         # Stage 8: live.md + lecture_history.md synthesis
+The pipeline is built around three principles:
+
+**Non-blocking.** Every heavy model (SAM 3.1, PaddleOCR, VLM) runs in an isolated `multiprocessing.Process`. The main loop never waits for a model — it submits work and immediately returns the latest cached result.
+
+**Append-only.** The ledger never deletes. Erasure is recorded as a timestamp, not a deletion. Every OCR correction is a new version appended to the entity's history.
+
+**Coordinate-locked.** All geometry from Stage 3 onward is expressed exclusively in the canonical **1920×1080 rectified space**. Raw camera-space coordinates are never propagated downstream of the rectifier.
+
+### Data Flow Summary
+
+```
+Camera / File
+    │
+    ▼
+[Stage 0: capture.py]           Frame queue (maxsize=1, always latest)
+    │
+    ▼
+[Stage 1: BoardMasker]          Async SAM 3.1 → binary board mask
+[Stage 2: PersonMasker]         Sync MediaPipe → binary person mask
+    │
+    ▼
+[Stage 3: Rectifier]            Homography → 1920×1080 rectified frame + mask
+    │
+    ▼
+[Stage 4: BoardReconstructor]   Distance-weighted EMA → clean board composite
+    │
+    ├──▶ [Stage 5/6: Discovery] Async PaddleOCR + grouper → list[Block]
+    │
+    ▼
+[Registry]                      Block → SemanticEntity lifecycle (state machine)
+    │
+    ├──▶ [Stage 7: Transcriber] Async VLM → OCR text per entity
+    │
+    ▼
+[Stage 8: Ledger]               Append-only record → live.md + lecture_history.md
 ```
 
 ---
 
-## 7. Implementation Rules
+## 4. 8-Stage Pipeline
 
-**All Models Non-Blocking.** SAM 3.1, PaddleOCR, and GOT-OCR 2.0 each run as independent `multiprocessing.Process` workers with input and output queues. The main loop submits work and polls results; it never blocks. If a model is busy, the main loop continues with the last cached result.
+### Stage 0 — Frame Capture (`capture.py`)
 
-**Accuracy-First Preprocessing.** Before any VLM inference, crops receive CLAHE contrast enhancement on the L channel. The VLM must see crisp, high-contrast content regardless of lighting.
+Reads from webcam or file in a background thread. Uses a `Queue(maxsize=1)` — stale frames are dropped automatically, so the main loop always processes the latest frame.
 
-**Append-Only History.** When an entity enters `ERASED`, its `erased_at` timestamp is written. It moves to the "Archives" section of `lecture_history.md` but is never deleted from the Ledger.
+### Stage 1 — Board Masking (`board_service/board_masker.py`)
 
-**Spatial Identity.** An entity's UUID is tied to its Spatial Anchor Group, not its content. If a professor erases a formula and rewrites the same formula in a different position, it receives a **new UUID**. If the professor corrects a typo in-place, the **UUID is preserved** and the Ledger records a VERSIONED event.
+SAM 3.1 runs in a dedicated subprocess with a ~5s cadence. Takes a raw camera frame, returns a binary H×W uint8 mask (1=board, 0=background). Outputs `None` between cycles — the rectifier uses its cached homography when `None` is received. Does **not** perform corner extraction or homography computation.
 
-**Surgical Versioning.** A single-anchor change triggers re-inference of only the affected entity, not the entire board. The correction appears as a diff in `lecture_history.md`.
+### Stage 2 — Person Masking (`board_service/person_masker.py`)
 
-**Coordinate Integrity.** All geometry — bounding boxes, anchor coordinates, homography points — must be expressed in the 1920×1080 rectified coordinate space. Raw frame coordinates are never passed downstream of Stage 3.
+MediaPipe selfie segmenter runs synchronously every frame (~5ms). Returns a binary H×W uint8 mask (1=person). The person mask ensures that pixels under or near the body are never updated in Stage 4, preserving board content under occlusion.
+
+### Stage 3 — Rectification (`board_service/rectifier.py`)
+
+Owns all geometric computation. When a new board mask arrives from Stage 1, it extracts four corners via convex-hull approximation + `approxPolyDP`, orders them TL/TR/BR/BL, and computes a perspective homography to a canonical 1920×1080 rectangle. The homography is cached and reused every frame. Both the raw frame and person mask are warped to the rectified space.
+
+**Homography update trigger:** ≥2 corners shift >50px *or* the new quad is larger than cached (area ratio ≥0.98).
+
+### Stage 4 — Board Reconstruction (`board_service/reconstructor.py`)
+
+Maintains a clean board composite using distance-weighted EMA:
+
+```
+lr(x) = max_lr × (dist(x, person_mask) / falloff_distance) ^ power
+composite = (1 - lr) × composite + lr × frame
+```
+
+Pixels near or under the person mask have `lr≈0` and are frozen at their last known value. When no person is detected, a uniform EMA (`lr = max_lr`) is applied directly, skipping the expensive `distanceTransform`.
+
+### Stage 5/6 — Layout Detection (`discovery.py`, `layout_service/`)
+
+`Discovery` manages the `stage5-layout` subprocess. Inside the worker:
+1. `TextLineDetector` runs PaddleOCR `PP-OCRv5_server_det` synchronously, returning a list of `TextLine` objects (bbox + confidence).
+2. A `TextLineGrouper` strategy clusters lines into `Block` objects.
+
+Three grouping strategies are available:
+
+| Strategy | Class | Behaviour |
+|----------|-------|-----------|
+| `unionfind` | `UnionFindGrouper` | Asymmetric v/h dilation over median line height; early-break on y-gap; width-ratio guard against header absorption |
+| `hdbscan` | `HDBSCANGrouper` | Scale-invariant anisotropic distance; noise lines become singleton blocks |
+| `aabbtree` | `AABBTreeGrouper` | Greedy agglomerative merge via min-heap + AABB engulfment veto |
+
+### Stage 7 — OCR Transcription (`transcriber.py`, `transcriber_service/`)
+
+`Transcriber` manages the `transcription-worker` subprocess. The worker accepts `(entity_id, crop)` pairs from an input queue (`maxsize=10`) and writes `TranscriptionResult` objects to an output queue (`maxsize=30`). Three backends:
+
+| Backend | Class | Notes |
+|---------|-------|-------|
+| `paddlevl` | `PaddleVLTranscriber` | `mlx-community/PaddleOCR-VL-1.5-8bit` via MLX. Default. |
+| `got` | `GotTranscriber` | `stepfun-ai/GOT-OCR-2.0-hf` via HuggingFace, float16 on MPS. CLAHE preprocessing applied. |
+| `mock` | `MockTranscriber` | Returns `[mock OCR]`. No model loaded. Use for testing. |
+
+### Stage 8 — Ledger Synthesis (`ledger.py`)
+
+`Ledger` maintains an append-only in-memory record of every entity. On every OCR result or erasure event, it atomically overwrites both output files (write to `.tmp`, then `rename`). The history file includes a generated TOC and collapsible `<details>` revision blocks for versioned entities.
 
 ---
 
-## 8. Critical Warnings
+## 5. Entity State Machine
 
-**VRAM Contention.** If unified memory usage approaches 22GB, reduce GOT-OCR 2.0 inference frequency before degrading SAM 3.1. Tracking integrity takes priority over OCR throughput.
+The `Registry` (`registry.py`) tracks every detected layout block as a `SemanticEntity` through a 4-state lifecycle.
 
-**Coordinate Drift.** Homography recompute triggers when ≥2 corners shift >50px or the new quad is larger than the cached one (area ratio ≥0.98). Allowing drift to accumulate will misalign anchor coordinates with the VLM crops.
+```
+         new block detected
+               │
+               ▼
+        ┌─────────────┐
+        │ STABILIZING │ ◀─── centroid drift detected
+        └──────┬──────┘
+               │ stable_time_threshold elapsed (default: 10s)
+               ▼
+        ┌─────────────┐
+        │  INFERRING  │ ──── crop submitted to VLM worker
+        └──────┬──────┘
+               │ OCR result received (state must still be INFERRING)
+               ▼
+        ┌─────────────┐
+        │   ACTIVE    │
+        └──────┬──────┘
+               │ block absent for erase_grace_period (default: 1s)
+               ▼
+        ┌─────────────┐
+        │   ERASED    │ ──── tombstone retained for 3s, then pruned
+        └─────────────┘
+```
+
+**Key invariants:**
+
+- An entity transitions STABILIZING → INFERRING only after `stable_time_threshold` seconds with no centroid drift exceeding `drift_threshold_px` (default: 50px).
+- If drift is detected on an INFERRING or ACTIVE entity, it resets to STABILIZING. Any pending OCR result for that entity is discarded (state check on result receipt).
+- `EntityUpdate.entities` contains only non-ERASED entities. Newly-erased entities are reported separately in `EntityUpdate.newly_erased` and simultaneously removed from `pending_ocr` in the main loop.
+- Entity identity is spatial: the same text written in a new location gets a new ID; a correction in-place preserves the existing ID and appends a version.
+
+---
+
+## 6. Subprocess Design
+
+Three independent worker processes run throughout a session:
+
+| Process name | Owner class | Model | Queue design |
+|---|---|---|---|
+| `sam3-board-masker` | `BoardMasker` | SAM 3.1 | in: maxsize=1, out: maxsize=1 (drop-old pattern) |
+| `stage5-layout` | `Discovery` | PaddleOCR | in: maxsize=1, out: maxsize=1 (drop-old pattern) |
+| `transcription-worker` | `Transcriber` | VLM backend | in: maxsize=10, out: maxsize=30 |
+
+**Drop-old pattern** (used by board masker and layout): the output queue holds at most one result. Before publishing, the worker drains any stale result with `get_nowait()` before `put_nowait()`. The main loop always receives the freshest available result.
+
+**Logging in workers:** Workers call `logging.basicConfig(level=_level, format=...)` before any imports, then call `logging_config.suppress_worker_noise()` to set third-party loggers to WARNING. The level is inherited via the `LOG_LEVEL` environment variable set by `--debug`.
+
+---
+
+## 7. Project Structure
+
+```
+whiteboard-transcriber/
+├── flake.nix                       # Nix dev environment (Python 3.13, venv)
+├── requirements.txt                # Python dependencies
+├── models/                         # Local model weights (not committed)
+├── output/                         # Generated output (not committed)
+├── tests/                          # Pytest test suite
+└── src/
+    ├── main.py                     # Entry point — pipeline orchestrator + UI
+    ├── capture.py                  # Stage 0: frame ingestion thread
+    ├── logging_config.py           # Third-party noise suppression
+    ├── registry.py                 # Entity state machine + SemanticEntity
+    ├── ledger.py                   # Stage 8: append-only ledger + file synthesis
+    ├── discovery.py                # Stage 5/6: layout worker manager
+    ├── transcriber.py              # Stage 7: VLM worker manager
+    ├── renderer.py                 # OpenCV overlay rendering (display only)
+    ├── board_service/
+    │   ├── board_masker.py         # Stage 1: SAM 3.1 async subprocess
+    │   ├── person_masker.py        # Stage 2: MediaPipe sync per-frame
+    │   ├── rectifier.py            # Stage 3: homography + warp to 1920×1080
+    │   └── reconstructor.py        # Stage 4: distance-weighted EMA composite
+    ├── layout_service/
+    │   ├── base.py                 # BaseLayoutDetector ABC
+    │   ├── grouper.py              # Block dataclass + TextLineGrouper ABC
+    │   ├── text_line_detector.py   # PaddleOCR wrapper + UnionFind primitive
+    │   ├── text_block_detector.py  # Composes TextLineDetector + TextLineGrouper
+    │   ├── union_find_grouper.py   # Grouping: asymmetric dilation + Union-Find
+    │   ├── hdbscan_grouper.py      # Grouping: anisotropic HDBSCAN
+    │   └── AABB_tree_grouper.py    # Grouping: greedy agglomerative + AABB veto
+    └── transcriber_service/
+        ├── base.py                 # BaseTranscriber ABC + TranscriptionResult
+        ├── mock.py                 # MockTranscriber (no model)
+        ├── got.py                  # GotTranscriber (GOT-OCR 2.0, HuggingFace)
+        └── paddle_vl.py            # PaddleVLTranscriber (PaddleOCR-VL-1.5, MLX)
+```
+
+---
+
+## 8. Testing
+
+```bash
+# Run all tests
+pytest tests/
+
+# Run a specific test module
+pytest tests/test_rectifier.py
+
+# Run with verbose output
+pytest -v tests/
+
+# Run with debug logging
+pytest -s tests/
+```
+
+Use `--transcriber mock` during manual integration testing — it bypasses model loading and returns immediately, allowing full pipeline validation without GPU/memory overhead.
+
+---
+
+## 9. Development Rules
+
+### Typing
+
+All function signatures must have complete type annotations. No `Any` without a comment justifying it. Use `from __future__ import annotations` for forward references.
+
+```python
+# Correct
+def tick(self, blocks: list[Block], frame_shape: tuple[int, int]) -> EntityUpdate: ...
+
+# Wrong
+def tick(self, blocks, frame_shape): ...
+```
+
+### Docstrings
+
+Google-style docstrings are mandatory for all public functions and classes. Private helpers warrant a one-line docstring unless they are trivially obvious. Inline comments are reserved for non-obvious logic (algorithmic invariants, workarounds, non-obvious constraints) — do not comment self-explanatory code.
+
+```python
+# Correct: explains a non-obvious invariant
+# Lines are sorted by y1; once the vertical gap exceeds 2×v_expand
+# all subsequent j values are further away and can be skipped.
+if by1 - ay2 > v_expand * 2.0:
+    break
+
+# Wrong: restates the code
+x = x + 1  # increment x
+```
+
+### Model Loading
+
+Model weights must never be loaded in `__init__`. Constructors are picklable config containers only. Load in a `load()` method called inside the worker subprocess after unpickling.
+
+```python
+# Correct
+class MyDetector(BaseLayoutDetector):
+    def __init__(self, threshold: float = 0.6) -> None:
+        self._threshold = threshold
+        self._model = None  # loaded in load()
+
+    def load(self) -> None:
+        self._model = load_model(...)
+
+# Wrong: loads model in __init__ — breaks pickling
+class MyDetector(BaseLayoutDetector):
+    def __init__(self) -> None:
+        self._model = load_model(...)
+```
+
+### Subprocess Communication
+
+Use the drop-old queue pattern for single-result producers (board masker, layout detector). Use bounded queues (`maxsize > 1`) only for pipelines that must not drop results (transcription worker). Never use `queue.get()` with a blocking call in the main loop.
+
+### Adding a New Grouper
+
+1. Subclass `TextLineGrouper` from `layout_service/grouper.py`.
+2. Implement `group(lines: list[TextLine]) -> list[Block]`.
+3. Register in `main.py`'s `detector_factories` dict and add the choice to `--detector`.
+4. No other files need changes.
+
+### Adding a New Transcriber Backend
+
+1. Subclass `BaseTranscriber` from `transcriber_service/base.py`.
+2. Implement `load()` and `transcribe(crop: np.ndarray) -> str`.
+3. Register in `main.py`'s `transcriber_factories` dict and add the choice to `--transcriber`.
+4. No other files need changes.
+
+---
+
+## 10. Engineering Constraints
+
+### Coordinate Space
+
+All bounding boxes, centroids, and homography points from Stage 3 onward are expressed exclusively in the **1920×1080 rectified coordinate space**. Raw camera-space coordinates must never be passed to Stage 4 or beyond. The rectifier is the single source of truth for all geometry.
+
+### Non-Blocking Main Loop
+
+The main loop in `main.py` must never block on a model call. Every model interaction uses a non-blocking `put_nowait` / `get_nowait` pattern. If a worker is busy, the main loop proceeds with the last cached result.
+
+### Append-Only Ledger
+
+The `Ledger` class never deletes entries. Mark erasures with a timestamp; append new versions rather than overwriting. File writes use atomic rename (`path.tmp` → `path`) to prevent partial reads by external markdown viewers.
+
+### Subprocess Log Initialisation
+
+Every worker function must call `logging.basicConfig(...)` **before** importing any model library, then call `logging_config.suppress_worker_noise()` to silence third-party loggers. The log level is controlled by the `LOG_LEVEL` environment variable (set by `--debug` in main before workers spawn).
+
+### Memory Budget (Apple Silicon M4, 24GB)
+
+| Allocation | Budget |
+|---|---|
+| SAM 3.1 + PaddleOCR (CV resident) | ~9 GB |
+| VLM worker (GOT-OCR 2.0 float16 or PaddleVL-1.5 8-bit) | ~11 GB |
+| OS + frame queues + system overhead | ~4 GB |
+
+If unified memory approaches 22GB, reduce VLM inference frequency before degrading SAM 3.1. Tracking integrity takes priority over OCR throughput.
