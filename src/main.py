@@ -31,6 +31,7 @@ from board_service.reconstructor import BoardReconstructor
 from board_service.rectifier import Rectifier
 from discovery import Discovery
 from layout_service import (
+    AABBTreeGrouper,
     Block,
     HDBSCANGrouper,
     TextBlockDetector,
@@ -60,8 +61,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--detector",
-        choices=["proximity", "hdbscan"],
-        default="proximity",
+        choices=["unionfind", "hdbscan", "aabbtree"],
+        default="unionfind",
         help="Stage 5 layout detection backend",
     )
     parser.add_argument(
@@ -87,8 +88,9 @@ def main() -> None:
     reconstructor = BoardReconstructor()
 
     detector_factories = {
-        "proximity": partial(TextBlockDetector, strategy=UnionFindGrouper()),
+        "unionfind": partial(TextBlockDetector, strategy=UnionFindGrouper()),
         "hdbscan": partial(TextBlockDetector, strategy=HDBSCANGrouper()),
+        "aabbtree": partial(TextBlockDetector, strategy=AABBTreeGrouper()),
     }
 
     transcriber_factories = {

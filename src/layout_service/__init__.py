@@ -1,3 +1,4 @@
+from .AABB_tree_grouper import AABBTreeGrouper
 from .base import BaseLayoutDetector
 from .grouper import Block, TextLineGrouper
 from .hdbscan_grouper import HDBSCANGrouper
@@ -12,6 +13,7 @@ __all__ = [
     "TextLine",
     "TextBlockDetector",
     "UnionFindGrouper",
+    "AABBTreeGrouper",
     "HDBSCANGrouper",
     "TextLineDetector",
     "UnionFind",
