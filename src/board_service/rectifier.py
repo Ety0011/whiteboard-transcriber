@@ -50,28 +50,29 @@ def _sort_corners(pts: np.ndarray) -> np.ndarray:
     return sorted_corners
 
 
+def _quad_area(p: np.ndarray) -> float:
+    return 0.5 * abs(
+        np.dot(p[:, 0], np.roll(p[:, 1], 1)) - np.dot(p[:, 1], np.roll(p[:, 0], 1))
+    )
+
+
+def _quad_ratio(p: np.ndarray) -> float:
+    return np.linalg.norm(p[0] - p[2]) / (np.linalg.norm(p[1] - p[3]) + 1e-6)
+
+
 def _are_corners_shifted(
     new: np.ndarray,
     cached: np.ndarray,
     threshold: float = 50.0,
 ) -> bool:
     """Return True if *new* corners represent a meaningful shift from *cached*."""
-
-    def _area(p: np.ndarray) -> float:
-        return 0.5 * abs(
-            np.dot(p[:, 0], np.roll(p[:, 1], 1)) - np.dot(p[:, 1], np.roll(p[:, 0], 1))
-        )
-
-    def _ratio(p: np.ndarray) -> float:
-        return np.linalg.norm(p[0] - p[2]) / (np.linalg.norm(p[1] - p[3]) + 1e-6)
-
-    if _area(new) < _area(cached) * 0.98:
+    if _quad_area(new) < _quad_area(cached) * 0.98:
         return False
 
     dists = np.linalg.norm(new - cached, axis=1)
     count = int(np.count_nonzero(dists > threshold))
     if count == 1:
-        return abs(_ratio(new) - 1.0) < abs(_ratio(cached) - 1.0)
+        return abs(_quad_ratio(new) - 1.0) < abs(_quad_ratio(cached) - 1.0)
     return count >= 2
 
 

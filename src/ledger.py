@@ -149,12 +149,10 @@ class Ledger:
         toc_lines = ["## Contents\n"]
         for entry in all_entries:
             ts = self._mono_to_wall_str(entry.first_seen)
-            anchor = ts.replace(":", "")
+            anchor = f"ent{entry.entity_id}-{ts.replace(':', '')}"
             content_lines = [l for l in entry.versions[-1].text.splitlines() if l.strip()]
             preview = content_lines[0] if content_lines else ""
             if len(content_lines) > 1 or len(preview) > 60:
-                preview = preview[:60].rstrip() + "…"
-            if len(preview) > 60:
                 preview = preview[:60].rstrip() + "…"
             toc_lines.append(f"- [{ts}](#{anchor}): {preview}")
         toc = "\n".join(toc_lines)
@@ -167,7 +165,8 @@ class Ledger:
 
     def _render_entry(self, entry: LedgerEntry) -> str:
         ts = self._mono_to_wall_str(entry.first_seen)
-        parts = [f"## {ts}", "", entry.versions[-1].text]
+        anchor = f"ent{entry.entity_id}-{ts.replace(':', '')}"
+        parts = [f"## {ts} {{#{anchor}}}", "", entry.versions[-1].text]
 
         if len(entry.versions) > 1:
             n = len(entry.versions) - 1

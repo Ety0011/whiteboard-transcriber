@@ -55,7 +55,6 @@ class SemanticEntity:
     ocr_text: str | None
     ocr_confidence: float | None
     last_stable_center: np.ndarray | None = None  # shape (2,) float64 cx,cy
-    line_bboxes: list[np.ndarray] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -164,19 +163,19 @@ class Registry:
     def tick(
         self,
         blocks: list[Block],
-        frame: np.ndarray,
+        frame_shape: tuple[int, int],
     ) -> EntityUpdate:
         """Run one lifecycle cycle: match blocks, advance state machine.
 
         Args:
-            blocks: Layout blocks from Stage 5 (Discovery).
-            frame:  Current BGR board composite (Stage 4).
+            blocks:      Layout blocks from Stage 5 (Discovery).
+            frame_shape: (height, width) of the rectified board composite.
 
         Returns:
-            EntityUpdate with all active entities and transition lists.
+            EntityUpdate with all non-ERASED entities and transition lists.
         """
         now = time.monotonic()
-        h, w = frame.shape[:2]
+        h, w = frame_shape
         frame_diagonal = math.sqrt(h * h + w * w)
 
         active_entities = [
@@ -187,25 +186,23 @@ class Registry:
             blocks, active_entities, frame_diagonal
         )
 
+        newly_inferring: list[SemanticEntity] = []
         for blk_id, ent_id in assignments.items():
-            self._update_entity(blocks[blk_id], self._registry[ent_id], now)
+            self._update_entity(
+                blocks[blk_id], self._registry[ent_id], now, newly_inferring
+            )
 
-        self._erase_unmatched(active_entities, matched_entity_ids, now)
+        newly_erased: list[SemanticEntity] = []
+        self._erase_unmatched(active_entities, matched_entity_ids, now, newly_erased)
         self._create_new_entities(blocks, matched_block_ids, now)
         self._prune_tombstones(now)
 
         return EntityUpdate(
-            entities=list(self._registry.values()),
-            newly_inferring=[
-                e
-                for e in self._registry.values()
-                if e.state == EntityState.INFERRING and e.last_modified == now
+            entities=[
+                e for e in self._registry.values() if e.state != EntityState.ERASED
             ],
-            newly_erased=[
-                e
-                for e in self._registry.values()
-                if e.state == EntityState.ERASED and e.last_modified == now
-            ],
+            newly_inferring=newly_inferring,
+            newly_erased=newly_erased,
         )
 
     # -----------------------------------------------------------------------
@@ -233,7 +230,13 @@ class Registry:
                 matched_entity_ids.add(ent_id)
         return assignments, matched_block_ids, matched_entity_ids
 
-    def _update_entity(self, block: Block, ent: SemanticEntity, now):
+    def _update_entity(
+        self,
+        block: Block,
+        ent: SemanticEntity,
+        now: float,
+        newly_inferring: list[SemanticEntity],
+    ) -> None:
         """Advance state machine for a single matched entity."""
 
         # Detect movement — resets stabilization timer for all non-ERASED states.
@@ -251,24 +254,36 @@ class Registry:
         # Physical update — EMA bbox smoothing
         ent.bbox = (0.2 * block.bbox + 0.8 * ent.bbox).astype(np.int32)
         ent.confidence, ent.last_seen = block.confidence, now
-        ent.line_bboxes = [line.bbox for line in block.lines]
 
         if ent.state == EntityState.STABILIZING:
             if now - ent.last_modified >= self._stable_time_threshold:
-                self._dispatch_for_inference(ent, now)
+                self._dispatch_for_inference(ent, now, newly_inferring)
 
-    def _dispatch_for_inference(self, ent: SemanticEntity, now):
+    def _dispatch_for_inference(
+        self,
+        ent: SemanticEntity,
+        now: float,
+        newly_inferring: list[SemanticEntity],
+    ) -> None:
         """Transition STABILIZING → INFERRING and anchor the stable center."""
         ent.last_stable_center = (ent.bbox[:2] + ent.bbox[2:]) / 2.0
         ent.state, ent.last_modified = EntityState.INFERRING, now
+        newly_inferring.append(ent)
         log.debug("Entity %d → INFERRING", ent.id)
 
-    def _erase_unmatched(self, active_entities, matched_ent_ids, now):
+    def _erase_unmatched(
+        self,
+        active_entities: list[SemanticEntity],
+        matched_ent_ids: set[int],
+        now: float,
+        newly_erased: list[SemanticEntity],
+    ) -> None:
         """Erase entities absent for longer than erase_grace_period seconds."""
         for ent in active_entities:
             if ent.id not in matched_ent_ids:
                 if now - ent.last_seen >= self._erase_grace_period:
                     ent.state, ent.last_modified = EntityState.ERASED, now
+                    newly_erased.append(ent)
                     log.debug("Entity %d → ERASED", ent.id)
 
     def _create_new_entities(self, blocks, matched_indices, now):
@@ -289,7 +304,6 @@ class Registry:
                     ocr_text=None,
                     ocr_confidence=None,
                     last_stable_center=np.array([cx, cy], dtype=np.float64),
-                    line_bboxes=[line.bbox for line in block.lines],
                 )
 
     def _prune_tombstones(self, now):

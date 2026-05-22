@@ -136,9 +136,7 @@ class Renderer:
         if self.show_blocks:
             board = _draw_blocks(board, blocks)
         if self.show_tracker:
-            board = _draw_entities(
-                board, [e for e in entities if e.state != EntityState.ERASED]
-            )
+            board = _draw_entities(board, entities)
         cv2.circle(
             board,
             (board.shape[1] - 30, 30),

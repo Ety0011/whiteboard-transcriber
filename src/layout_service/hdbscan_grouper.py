@@ -16,29 +16,16 @@ class HDBSCANGrouper(TextLineGrouper):
         self.horizontal_scale = horizontal_scale
 
     def _custom_pairwise_distance(self, centroids: np.ndarray) -> np.ndarray:
-        """
-        Calculates a scale-invariant, anisotropic distance matrix.
-        X shape: (N, 3) -> [cx, cy, line_height]
-        """
-        n_samples = centroids.shape[0]
-        dist_matrix = np.zeros((n_samples, n_samples), dtype=np.float32)
-
-        for i in range(n_samples):
-            for j in range(i + 1, n_samples):
-                dx = abs(centroids[i, 0] - centroids[j, 0])
-                dy = abs(centroids[i, 1] - centroids[j, 1])
-                avg_h = (centroids[i, 2] + centroids[j, 2]) / 2.0
-
-                scale = max(avg_h, 1e-5)
-
-                norm_dx = dx / (self.horizontal_scale * scale)
-                norm_dy = dy / scale
-
-                dist = np.sqrt(norm_dx**2 + norm_dy**2)
-                dist_matrix[i, j] = dist
-                dist_matrix[j, i] = dist
-
-        return dist_matrix
+        """Scale-invariant anisotropic distance matrix. Input shape: (N, 3) [cx, cy, h]."""
+        cx = centroids[:, 0:1]
+        cy = centroids[:, 1:2]
+        h = centroids[:, 2:3]
+        dx = np.abs(cx - cx.T)
+        dy = np.abs(cy - cy.T)
+        scale = np.maximum((h + h.T) / 2.0, 1e-5)
+        norm_dx = dx / (self.horizontal_scale * scale)
+        norm_dy = dy / scale
+        return np.sqrt(norm_dx**2 + norm_dy**2).astype(np.float32)
 
     def group(self, lines: list[TextLine]) -> list[Block]:
         if not lines:

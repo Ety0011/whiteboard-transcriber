@@ -37,7 +37,7 @@ from layout_service import (
     UnionFindGrouper,
 )
 from ledger import Ledger
-from registry import Registry
+from registry import Registry, SemanticEntity
 from renderer import Renderer
 from transcriber import Transcriber
 from transcriber_service import (
@@ -103,7 +103,7 @@ def main() -> None:
     transcriber = Transcriber(factory=transcriber_factories[args.transcriber])
     ledger = Ledger(output_dir=Path("output"))
     renderer = Renderer()
-    pending_ocr: dict[int, object] = {}
+    pending_ocr: dict[int, SemanticEntity] = {}
     log.info("Ready. Model: %s | Press q or Ctrl-C to stop.", args.detector)
 
     try:
@@ -125,7 +125,7 @@ def main() -> None:
             blocks = discovery.detect(composite)
 
             # Stage 6 — entity lifecycle (cross-frame persistence)
-            entity_update = registry.tick(blocks, composite)
+            entity_update = registry.tick(blocks, composite.shape[:2])
 
             # Stage 7 — submit newly dispatched entities to VLM (non-blocking)
             for entity in entity_update.newly_inferring:
