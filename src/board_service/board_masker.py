@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import logging
 import multiprocessing as mp
+import time
 from pathlib import Path
 
-import cv2
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -94,8 +94,15 @@ class BoardMasker:
         model_path: Path to the SAM 3.1 model weights.
     """
 
-    def __init__(self, model_path: Path = _MODEL_PATH) -> None:
+    def __init__(
+        self,
+        model_path: Path = _MODEL_PATH,
+        recompute_interval: float = 5.0,
+    ) -> None:
         self._cached: np.ndarray | None = None
+        self._is_busy = False
+        self._recompute_interval = recompute_interval
+        self._last_submit: float = 0.0
         self._in_q: mp.Queue = mp.Queue(maxsize=1)
         self._out_q: mp.Queue = mp.Queue(maxsize=1)
         self._worker = mp.Process(
@@ -107,6 +114,10 @@ class BoardMasker:
         self._worker.start()
         logger.info("BoardMasker worker started (pid=%d)", self._worker.pid)
 
+    @property
+    def is_busy(self) -> bool:
+        return self._is_busy
+
     def segment(self, frame: np.ndarray) -> np.ndarray | None:
         """Submit *frame* for async SAM inference; return fresh board mask or None.
 
@@ -114,17 +125,26 @@ class BoardMasker:
         produces a new result, otherwise None. The rectifier should use its cached
         homography when None is returned.
         """
-        try:
-            self._in_q.put_nowait(frame)
-        except Exception:
-            pass
-
+        # Poll result first — clears busy before potentially re-submitting.
         try:
             new_mask = self._out_q.get_nowait()
             self._cached = new_mask
+            self._is_busy = False
             return new_mask
         except Exception:
-            return None
+            pass
+
+        # Only submit when idle and cadence interval has elapsed.
+        now = time.monotonic()
+        if not self._is_busy and (now - self._last_submit) >= self._recompute_interval:
+            try:
+                self._in_q.put_nowait(frame)
+                self._is_busy = True
+                self._last_submit = now
+            except Exception:
+                pass
+
+        return None
 
     def shutdown(self) -> None:
         """Signal the worker to stop and wait for it to exit."""
