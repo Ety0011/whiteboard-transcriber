@@ -144,7 +144,6 @@ def main() -> None:
                 if entity is not None:
                     registry.mark_active(entity, result.text)
                     ledger.update(entity.id, entity.bbox, result.text)
-                    log.debug("Ledger written for entity %d", entity.id)
 
             # Stage 8 — erasure events
             for entity in entity_update.newly_erased:

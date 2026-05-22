@@ -61,11 +61,7 @@ class PersonMasker:
             ksize = 2 * dilation_px + 1
             self._kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
 
-        logger.info(
-            "PersonMasker ready (MediaPipe threshold=%.2f, dilation=%dpx)",
-            threshold,
-            dilation_px,
-        )
+        logger.info("ready (threshold=%.2f, dilation=%dpx)", threshold, dilation_px)
 
     def segment(self, frame: np.ndarray) -> np.ndarray:
         """Return a fresh uint8 H×W person mask for *frame*.

@@ -35,7 +35,7 @@ def _worker_main(
 
     from logging_config import devnull_fds, suppress_worker_noise
 
-    _log.basicConfig(level=logging.WARNING)
+    _log.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     suppress_worker_noise()
 
     with devnull_fds(1, 2):
@@ -50,6 +50,7 @@ def _worker_main(
                 verbose=False,
             )
         )
+    logger.info("SAM worker ready")
 
     while True:
         frame = in_q.get()
@@ -65,7 +66,7 @@ def _worker_main(
                     areas = masks.sum(axis=(1, 2))
                     board_mask = (masks[areas.argmax()] > 0.5).astype(np.uint8)
         except Exception:
-            logging.getLogger(__name__).exception("SAM board segmentation failed")
+            logger.exception("SAM board segmentation failed")
 
         if board_mask is None:
             h, w = frame.shape[:2]
@@ -115,7 +116,7 @@ class BoardMasker:
             name="sam3-board-masker",
         )
         self._worker.start()
-        logger.info("BoardMasker worker started (pid=%d)", self._worker.pid)
+        logger.info("worker started (pid=%d)", self._worker.pid)
 
     @property
     def is_busy(self) -> bool:
@@ -158,4 +159,4 @@ class BoardMasker:
         self._worker.join(timeout=5)
         if self._worker.is_alive():
             self._worker.terminate()
-        logger.info("BoardMasker worker stopped")
+        logger.info("worker stopped")

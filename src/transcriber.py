@@ -34,13 +34,13 @@ def _worker_main(
 
     from logging_config import suppress_worker_noise
 
-    _log.basicConfig(level=logging.INFO)
+    _log.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     suppress_worker_noise()
     _log = _log.getLogger(__name__)
 
     transcriber = factory()
     transcriber.load()
-    _log.info("Transcriber: %s ready", type(transcriber).__name__)
+    _log.info("%s ready", type(transcriber).__name__)
 
     while True:
         item = in_q.get()  # block until work arrives
@@ -51,21 +51,14 @@ def _worker_main(
         text = ""
         try:
             text = transcriber.transcribe(crop)
-            _log.info(
-                "Transcriber: entity %d → %d chars: %r",
-                entity_id,
-                len(text),
-                text[:60],
-            )
+            _log.debug("entity %d → %d chars: %r", entity_id, len(text), text[:60])
         except Exception:
-            _log.exception("Transcriber: inference failed for entity %d", entity_id)
+            _log.exception("inference failed for entity %d", entity_id)
 
         try:
             out_q.put_nowait(TranscriptionResult(entity_id=entity_id, text=text))
         except Exception:
-            _log.warning(
-                "Transcriber: output queue full — entity %d dropped", entity_id
-            )
+            _log.warning("output queue full — entity %d dropped", entity_id)
 
 
 class Transcriber:
@@ -92,11 +85,7 @@ class Transcriber:
         try:
             self._in_q.put_nowait((entity_id, crop))
         except Exception:
-            log.warning(
-                "Transcriber: input queue full — entity %d dropped. "
-                "Will retry on next stable cycle.",
-                entity_id,
-            )
+            log.warning("input queue full — entity %d dropped", entity_id)
 
     def get_results(self) -> list[TranscriptionResult]:
         """Drain all completed transcriptions available right now. Non-blocking."""

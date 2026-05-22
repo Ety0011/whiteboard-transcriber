@@ -153,12 +153,14 @@ class Rectifier:
         if corners is None:
             return
         sorted_c = _sort_corners(corners)
-        if self._cached_corners is None or _are_corners_shifted(
-            sorted_c, self._cached_corners
-        ):
+        is_first = self._cached_corners is None
+        if is_first or _are_corners_shifted(sorted_c, self._cached_corners):
             self._homography = self._compute_homography(sorted_c)
             self._cached_corners = sorted_c
-            logger.debug("Homography updated — corners: %s", sorted_c)
+            if is_first:
+                logger.info("Homography established")
+            else:
+                logger.debug("Homography recomputed — board corners shifted")
 
     def _compute_homography(self, corners: np.ndarray) -> np.ndarray:
         """Compute perspective transform from *corners* to the output rectangle."""

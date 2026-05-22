@@ -33,7 +33,7 @@ class BoardReconstructor:
         self._power = power
         self._composite: np.ndarray | None = None  # float32 BGR
 
-        logger.info(
+        logger.debug(
             "BoardReconstructor initialised (max_lr=%.4f, falloff=%.1f, p=%.1f)",
             max_lr,
             falloff_distance,

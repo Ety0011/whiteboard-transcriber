@@ -113,4 +113,3 @@ def _video_source(source: int | str, q: queue.Queue) -> None:
     finally:
         cap.release()
         q.put(None)
-        log.info("Capture released: %r", source)

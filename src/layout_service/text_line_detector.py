@@ -71,15 +71,13 @@ class TextLineDetector:
                 box_thresh=self._box_thresh,
                 unclip_ratio=self._unclip_ratio,
             )
-        logger.info("TextLineDetector: PP-OCRv5_server_det ready")
+        logger.info("PP-OCRv5_server_det ready")
 
     def detect(self, composite: np.ndarray) -> list[TextLine]:
         h, w = composite.shape[:2]
         try:
             raw = self._detector.predict(composite)
-            lines = _raw_to_lines(raw, h, w)
-            logger.debug("TextLineDetector: %d text lines", len(lines))
-            return lines
+            return _raw_to_lines(raw, h, w)
         except Exception:
             logger.exception("PaddleOCR detection failed")
             return []

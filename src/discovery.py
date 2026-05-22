@@ -18,11 +18,11 @@ def _worker_main(
     """Layout detector loop — runs in a dedicated child process."""
     from logging_config import suppress_worker_noise
 
-    logging.basicConfig(level=logging.WARNING)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     suppress_worker_noise()
     detector = factory()
     detector.load()
-    log.info("Stage5: %s ready", type(detector).__name__)
+    log.info("%s ready", type(detector).__name__)
 
     while True:
         frame = in_q.get()  # block until work arrives
@@ -33,9 +33,9 @@ def _worker_main(
         blocks: list[Block] = []
         try:
             blocks = detector.detect(frame)
-            log.debug("Stage5: %d blocks", len(blocks))
+            log.debug("%d blocks detected", len(blocks))
         except Exception:
-            log.exception("Stage5 detect failed")
+            log.exception("detect failed")
 
         try:
             out_q.get_nowait()
@@ -66,7 +66,7 @@ class Discovery:
             name="stage5-layout",
         )
         self._worker.start()
-        log.info("Discovery worker started (pid=%d)", self._worker.pid)
+        log.info("worker started (pid=%d)", self._worker.pid)
 
     @property
     def is_busy(self) -> bool:
@@ -96,4 +96,4 @@ class Discovery:
         self._worker.join(timeout=5)
         if self._worker.is_alive():
             self._worker.terminate()
-        log.info("Discovery worker stopped")
+        log.info("worker stopped")

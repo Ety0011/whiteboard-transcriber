@@ -27,10 +27,7 @@ class TextBlockDetector(BaseLayoutDetector):
         self.line_detector: TextLineDetector | None = None
 
     def load(self) -> None:
-        log.info(
-            "TextBlockDetector: loading TextLineDetector with strategy=%s",
-            type(self.strategy).__name__,
-        )
+        log.info("loading with strategy=%s", type(self.strategy).__name__)
         self.line_detector = TextLineDetector(
             box_thresh=self.box_thresh, unclip_ratio=self.unclip_ratio
         )
