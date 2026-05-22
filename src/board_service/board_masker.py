@@ -42,6 +42,7 @@ def _worker_main(
 
     with devnull_fds(1, 2):
         from ultralytics.models.sam import SAM3SemanticPredictor
+
         sam = SAM3SemanticPredictor(
             overrides=dict(
                 model=model_path,

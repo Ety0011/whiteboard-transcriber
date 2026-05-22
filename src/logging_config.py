@@ -13,8 +13,16 @@ import warnings
 from collections.abc import Iterator
 
 _NOISY_LOGGERS = (
-    "httpx", "ultralytics", "paddleocr", "ppocr", "paddle", "paddlex",
-    "PIL", "transformers", "huggingface_hub", "mlx_vlm",
+    "httpx",
+    "ultralytics",
+    "paddleocr",
+    "ppocr",
+    "paddle",
+    "paddlex",
+    "PIL",
+    "transformers",
+    "huggingface_hub",
+    "mlx_vlm",
 )
 
 

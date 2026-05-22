@@ -31,10 +31,10 @@ def _worker_main(
 ) -> None:
     """Transcription inference loop — runs in a dedicated child process."""
     import logging as _log
+    import os
 
     from logging_config import suppress_worker_noise
 
-    import os
     _level = logging.DEBUG if os.getenv("LOG_LEVEL") == "DEBUG" else logging.INFO
     _log.basicConfig(level=_level, format="%(levelname)s %(name)s: %(message)s")
     suppress_worker_noise()
