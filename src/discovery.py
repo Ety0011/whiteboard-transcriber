@@ -1,6 +1,5 @@
 import logging
 import multiprocessing as mp
-import time
 from typing import Callable
 
 import numpy as np
@@ -28,12 +27,9 @@ def _worker_main(
             break
 
         blocks: list[Block] = []
-        latency = 0.0
         try:
-            t0 = time.monotonic()
             blocks = detector.detect(frame)
-            latency = time.monotonic() - t0
-            log.debug("Stage5: %d blocks (%.1fms)", len(blocks), latency * 1000)
+            log.debug("Stage5: %d blocks", len(blocks))
         except Exception:
             log.exception("Stage5 detect failed")
 
@@ -42,7 +38,7 @@ def _worker_main(
         except Exception:
             pass
         try:
-            out_q.put_nowait((blocks, latency))
+            out_q.put_nowait(blocks)
         except Exception:
             pass
 
@@ -51,11 +47,11 @@ class Discovery:
     """Non-blocking layout detector running in a dedicated subprocess.
 
     Call detect(frame) every pipeline tick — it submits the frame to the
-    worker and returns the latest cached (blocks, latency) pair immediately.
+    worker and returns the latest cached blocks immediately.
     """
 
     def __init__(self, factory: Callable[[], BaseLayoutDetector]) -> None:
-        self._cached: tuple[list[Block], float] = ([], 0.0)
+        self._cached: list[Block] = []
         self._is_busy = False
         self._in_q: mp.Queue = mp.Queue(maxsize=1)
         self._out_q: mp.Queue = mp.Queue(maxsize=1)
@@ -72,17 +68,8 @@ class Discovery:
     def is_busy(self) -> bool:
         return self._is_busy
 
-    def poll(self) -> tuple[list[Block], float]:
-        """Return latest cached result without submitting a new frame."""
-        try:
-            self._cached = self._out_q.get_nowait()
-            self._is_busy = False
-        except Exception:
-            pass
-        return self._cached
-
-    def detect(self, frame: np.ndarray) -> tuple[list[Block], float]:
-        """Submit frame and return latest (blocks, latency) — non-blocking."""
+    def detect(self, frame: np.ndarray) -> list[Block]:
+        """Submit frame and return latest cached blocks — non-blocking."""
         try:
             self._in_q.put_nowait(frame)
             self._is_busy = True

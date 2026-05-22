@@ -146,7 +146,7 @@ def main() -> None:
             composite = reconstructor.update(rect_frame, rect_mask)
 
             # Stage 5 — layout detection (async, non-blocking)
-            blocks, latency = discovery.detect(composite)
+            blocks = discovery.detect(composite)
 
             if blocks:
                 last_blocks = blocks
