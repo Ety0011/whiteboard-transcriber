@@ -46,26 +46,12 @@ class DocLayoutDetector(BaseLayoutDetector):
         )[0]
 
         scores = results["scores"].cpu()
-        labels = results["labels"].cpu()
         polygon_points_list = results.get("polygon_points", [])
 
         blocks = []
         for idx, score in enumerate(scores):
             if score < 0.35:
                 continue
-
-            label_id = labels[idx].item()
-            raw_label = self.model.config.id2label[label_id]
-
-            name_lower = raw_label.lower()
-            if "formula" in name_lower or "algorithm" in name_lower:
-                label = "MATH"
-            elif "table" in name_lower:
-                label = "TABLE"
-            elif "chart" in name_lower or "image" in name_lower or "pic" in name_lower:
-                label = "DIAGRAM"
-            else:
-                label = "TEXT"
 
             if idx < len(polygon_points_list):
                 poly_tensor = polygon_points_list[idx]
@@ -90,9 +76,6 @@ class DocLayoutDetector(BaseLayoutDetector):
             x2 = int(poly[:, 0].max())
             y2 = int(poly[:, 1].max())
             bbox = np.array([x1, y1, x2, y2], dtype=np.int32)
-
-            blocks.append(
-                Block(poly=poly, bbox=bbox, label=label, confidence=float(score), anchors=[])
-            )
+            blocks.append(Block(bbox=bbox, confidence=float(score)))
 
         return blocks

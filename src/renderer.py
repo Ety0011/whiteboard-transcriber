@@ -20,12 +20,6 @@ log = logging.getLogger(__name__)
 # Color palettes (BGR)
 # ---------------------------------------------------------------------------
 
-_LABEL_COLORS: dict[str, tuple[int, int, int]] = {
-    "TEXT": (255, 165, 0),
-    "MATH": (0, 200, 255),
-    "TABLE": (255, 255, 0),
-    "DIAGRAM": (255, 100, 0),
-}
 
 _STATE_COLORS: dict[EntityState, tuple[int, int, int]] = {
     EntityState.STABILIZING: (0, 165, 255),
@@ -75,34 +69,21 @@ def _draw_corners(frame: np.ndarray, corners: np.ndarray | None) -> np.ndarray:
     return frame
 
 
+_ANCHOR_COLOR = (255, 165, 0)  # sky blue (BGR)
+
+
 def _draw_blocks(frame: np.ndarray, blocks: list[Block]) -> np.ndarray:
     overlay = frame.copy()
     for block in blocks:
-        color = _LABEL_COLORS.get(block.label, (255, 255, 255))
-        pts = block.poly.reshape(-1, 1, 2)
-        cv2.fillPoly(overlay, [pts], color)
-        cv2.polylines(
-            frame,
-            [pts],
-            isClosed=True,
-            color=color,
-            thickness=1,
-            lineType=cv2.LINE_AA,
-        )
-        label_txt = f"{block.label} ({block.confidence:.0%})"
-        x1, y1 = int(block.poly[:, 0].min()), int(block.poly[:, 1].min())
-        (tw, th), _ = cv2.getTextSize(label_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)
-        cv2.rectangle(frame, (x1, y1 - th - 4), (x1 + tw + 4, y1), color, -1)
-        cv2.putText(
-            frame,
-            label_txt,
-            (x1 + 2, y1 - 2),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.35,
-            (0, 0, 0),
-            1,
-            cv2.LINE_AA,
-        )
+        if block.lines:
+            for line in block.lines:
+                x1, y1, x2, y2 = line.bbox.astype(int)
+                cv2.rectangle(overlay, (x1, y1), (x2, y2), _ANCHOR_COLOR, -1)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), _ANCHOR_COLOR, 1, cv2.LINE_AA)
+        else:
+            x1, y1, x2, y2 = block.bbox.astype(int)
+            cv2.rectangle(overlay, (x1, y1), (x2, y2), _ANCHOR_COLOR, -1)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), _ANCHOR_COLOR, 1, cv2.LINE_AA)
     cv2.addWeighted(overlay, 0.18, frame, 0.82, 0, frame)
     return frame
 

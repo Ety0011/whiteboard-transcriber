@@ -1,27 +1,16 @@
-import enum
 import logging
 import multiprocessing as mp
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
-class AnchorType(enum.Enum):
-    TEXT_LINE = "TEXT_LINE"
-
-
 @dataclass
-class Anchor:
+class TextLine:
     bbox: np.ndarray  # (4,) int32: x1, y1, x2, y2
     confidence: float
-    anchor_type: AnchorType
-
-
-@dataclass
-class DetectorResult:
-    anchors: list[Anchor] = field(default_factory=list)
 
 
 def _extract_polys(raw_results: list) -> list[tuple[list, float]]:
@@ -49,17 +38,15 @@ def _polygon_to_bbox(polygon: list, img_h: int, img_w: int) -> np.ndarray:
     return np.array([x1, y1, x2, y2], dtype=np.int32)
 
 
-def _raw_to_anchors(raw: list, h: int, w: int) -> list[Anchor]:
-    anchors = []
+def _raw_to_lines(raw: list, h: int, w: int) -> list[TextLine]:
+    lines = []
     for poly, score in _extract_polys(raw):
         bbox = _polygon_to_bbox(poly, h, w)
         x1, y1, x2, y2 = bbox
         if x2 <= x1 or y2 <= y1:
             continue
-        anchors.append(
-            Anchor(bbox=bbox, confidence=score, anchor_type=AnchorType.TEXT_LINE)
-        )
-    return anchors
+        lines.append(TextLine(bbox=bbox, confidence=score))
+    return lines
 
 
 def _worker_main(
@@ -88,35 +75,34 @@ def _worker_main(
         if composite is None:  # shutdown sentinel
             break
 
-        anchors: list[Anchor] = []
+        lines: list[TextLine] = []
         try:
             h, w = composite.shape[:2]
             raw = detector.predict(composite)
-            anchors = _raw_to_anchors(raw, h, w)
-            log.debug("TextLineDetector: %d TEXT_LINE anchors", len(anchors))
+            lines = _raw_to_lines(raw, h, w)
+            log.debug("TextLineDetector: %d text lines", len(lines))
         except Exception:
             log.exception("PaddleOCR detection failed")
 
-        result = DetectorResult(anchors=anchors)
         try:
             out_q.get_nowait()
         except Exception:
             pass
         try:
-            out_q.put_nowait(result)
+            out_q.put_nowait(lines)
         except Exception:
             pass
 
 
 class TextLineDetector:
-    """Non-blocking PaddleOCR anchor detector."""
+    """Non-blocking PaddleOCR text line detector."""
 
     def __init__(
         self,
         box_thresh: float = 0.6,
         unclip_ratio: float = 1.2,
     ) -> None:
-        self._cached = DetectorResult()
+        self._cached: list[TextLine] = []
         self._in_q: mp.Queue = mp.Queue(maxsize=1)
         self._out_q: mp.Queue = mp.Queue(maxsize=1)
         self._worker = mp.Process(
@@ -128,7 +114,7 @@ class TextLineDetector:
         self._worker.start()
         logger.info("TextLineDetector worker started (pid=%d)", self._worker.pid)
 
-    def detect(self, composite: np.ndarray) -> DetectorResult:
+    def detect(self, composite: np.ndarray) -> list[TextLine]:
         """Submit composite for async detection; return latest cached result."""
         try:
             self._in_q.put_nowait(composite)

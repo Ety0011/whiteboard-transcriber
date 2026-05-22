@@ -32,30 +32,10 @@ class YOLODetector(BaseLayoutDetector):
 
         blocks = []
         for box in results.boxes:
-            cls_id = int(box.cls[0].item())
-            class_name = self.model.names[cls_id]
             xyxy = box.xyxy[0].cpu().numpy().astype(np.int32)
             score = float(box.conf[0].item())
-
-            name_lower = class_name.lower()
-            if "math" in name_lower or "formula" in name_lower:
-                label = "MATH"
-            elif "table" in name_lower:
-                label = "TABLE"
-            elif (
-                "illus" in name_lower
-                or "pic" in name_lower
-                or "fig" in name_lower
-                or "chart" in name_lower
-            ):
-                label = "DIAGRAM"
-            else:
-                label = "TEXT"
-
             x1, y1, x2, y2 = int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])
-            poly = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32)
             bbox = np.array([x1, y1, x2, y2], dtype=np.int32)
-
-            blocks.append(Block(poly=poly, bbox=bbox, label=label, confidence=score, anchors=[]))
+            blocks.append(Block(bbox=bbox, confidence=score))
 
         return blocks

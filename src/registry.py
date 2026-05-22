@@ -256,7 +256,7 @@ class Registry:
         # Physical update — EMA bbox smoothing
         ent.bbox = (0.2 * block.bbox + 0.8 * ent.bbox).astype(np.int32)
         ent.confidence, ent.last_seen = block.confidence, now
-        ent.line_bboxes = [a.bbox for a in block.anchors]
+        ent.line_bboxes = [line.bbox for line in block.lines]
 
         if ent.state == EntityState.STABILIZING:
             if now - ent.last_modified >= self._stable_time_threshold:
@@ -300,7 +300,7 @@ class Registry:
                     ocr_confidence=None,
                     last_stable_crop=None,
                     last_stable_center=np.array([cx, cy], dtype=np.float64),
-                    line_bboxes=[a.bbox for a in block.anchors],
+                    line_bboxes=[line.bbox for line in block.lines],
                 )
 
     def _prune_tombstones(self, now):

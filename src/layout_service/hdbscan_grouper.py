@@ -1,10 +1,10 @@
 import numpy as np
 
-from .grouper import Block, AnchorGrouper
-from .text_line_detector import Anchor
+from .grouper import Block, TextLineGrouper
+from .text_line_detector import TextLine
 
 
-class HDBSCANGrouper(AnchorGrouper):
+class HDBSCANGrouper(TextLineGrouper):
     """
     Anisotropic spatial density clusterer utilizing HDBSCAN.
     Penalizes vertical distances tightly while allowing wide horizontal tracking
@@ -40,30 +40,19 @@ class HDBSCANGrouper(AnchorGrouper):
 
         return dist_matrix
 
-    def group(self, anchors: list[Anchor]) -> list[Block]:
-        if not anchors:
+    def group(self, lines: list[TextLine]) -> list[Block]:
+        if not lines:
             return []
-        if len(anchors) == 1:
-            bbox = anchors[0].bbox
-            x1, y1, x2, y2 = bbox.tolist()
-            poly = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32)
-            return [
-                Block(
-                    poly=poly,
-                    bbox=bbox,
-                    label="TEXT",
-                    confidence=anchors[0].confidence,
-                    anchors=anchors,
-                )
-            ]
+        if len(lines) == 1:
+            return [Block(bbox=lines[0].bbox, confidence=lines[0].confidence, lines=lines)]
 
         from hdbscan import HDBSCAN
 
         centroids = []
-        for a in anchors:
-            cx = (a.bbox[0] + a.bbox[2]) / 2.0
-            cy = (a.bbox[1] + a.bbox[3]) / 2.0
-            h = a.bbox[3] - a.bbox[1]
+        for line in lines:
+            cx = (line.bbox[0] + line.bbox[2]) / 2.0
+            cy = (line.bbox[1] + line.bbox[3]) / 2.0
+            h = line.bbox[3] - line.bbox[1]
             centroids.append([cx, cy, h])
 
         X = np.array(centroids, dtype=np.float32)
@@ -79,26 +68,16 @@ class HDBSCANGrouper(AnchorGrouper):
         groups_dict = {}
         for idx, label in enumerate(labels):
             if label == -1:
-                # Noise → independent structural entity
-                groups_dict[f"noise_{idx}"] = [anchors[idx]]
+                groups_dict[f"noise_{idx}"] = [lines[idx]]
             else:
                 if label not in groups_dict:
                     groups_dict[label] = []
-                groups_dict[label].append(anchors[idx])
+                groups_dict[label].append(lines[idx])
 
         blocks = []
-        for constituent_anchors in groups_dict.values():
-            macro_box = self.compute_macro_bbox(constituent_anchors)
-            macro_poly = self.compute_macro_poly(constituent_anchors)
-            max_conf = max(a.confidence for a in constituent_anchors)
-            blocks.append(
-                Block(
-                    poly=macro_poly,
-                    bbox=macro_box,
-                    label="TEXT",
-                    confidence=max_conf,
-                    anchors=constituent_anchors,
-                )
-            )
+        for constituent_lines in groups_dict.values():
+            bbox = self.compute_bbox(constituent_lines)
+            max_conf = max(line.confidence for line in constituent_lines)
+            blocks.append(Block(bbox=bbox, confidence=max_conf, lines=constituent_lines))
 
         return blocks

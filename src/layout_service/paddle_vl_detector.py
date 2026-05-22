@@ -45,7 +45,6 @@ class PaddleVLDetector(BaseLayoutDetector):
         )
         raw_text = gen_result.text if hasattr(gen_result, "text") else str(gen_result)
 
-        # Parse coordinate tokens matching the LOC template [10]
         blocks = []
         tokens_pattern = re.compile(r"((?:<\|LOC_\d+\|>)+)")
         parts = tokens_pattern.split(raw_text)
@@ -74,19 +73,6 @@ class PaddleVLDetector(BaseLayoutDetector):
             x2 = int(poly[:, 0].max())
             y2 = int(poly[:, 1].max())
             bbox = np.array([x1, y1, x2, y2], dtype=np.int32)
-
-            if (
-                "$$" in content
-                or "\\(" in content
-                or "e^{" in content
-                or "=" in content
-            ):
-                label = "MATH"
-            elif len(content) < 3 and not content.isalnum():
-                label = "DIAGRAM"
-            else:
-                label = "TEXT"
-
-            blocks.append(Block(poly=poly, bbox=bbox, label=label, confidence=1.0, anchors=[]))
+            blocks.append(Block(bbox=bbox, confidence=1.0))
 
         return blocks

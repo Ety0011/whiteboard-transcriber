@@ -1,42 +1,42 @@
+import logging
+
 import numpy as np
 
-from .grouper import AnchorGrouper, Block
+from .grouper import TextLineGrouper, Block
 from .text_line_detector import TextLineDetector
 from .base import BaseLayoutDetector
+
+log = logging.getLogger(__name__)
 
 
 class TextBlockDetector(BaseLayoutDetector):
     """
-    Composes TextLineDetector (PP-OCRv5_server_det) with any AnchorGrouper.
-    Bridges the anchor-based detection into the BaseLayoutDetector list[Block] contract.
+    Composes TextLineDetector (PP-OCRv5_server_det) with any TextLineGrouper.
+    Bridges text-line detection into the BaseLayoutDetector list[Block] contract.
     """
 
     def __init__(
         self,
-        strategy: AnchorGrouper,
+        strategy: TextLineGrouper,
         box_thresh: float = 0.6,
         unclip_ratio: float = 1.2,
     ):
         self.strategy = strategy
         self.box_thresh = box_thresh
         self.unclip_ratio = unclip_ratio
-        self.anchor_detector: TextLineDetector | None = None
+        self.line_detector: TextLineDetector | None = None
 
     def load(self) -> None:
-        print(
-            f"[TextBlockDetector] Spawning TextLineDetector "
-            f"with strategy={type(self.strategy).__name__}..."
+        log.info(
+            "TextBlockDetector: spawning TextLineDetector with strategy=%s",
+            type(self.strategy).__name__,
         )
-        self.anchor_detector = TextLineDetector(
+        self.line_detector = TextLineDetector(
             box_thresh=self.box_thresh, unclip_ratio=self.unclip_ratio
         )
 
     def detect(self, frame: np.ndarray) -> list[Block]:
-        result = self.anchor_detector.detect(frame)
-        anchors = result.anchors
-
-        if not anchors:
+        lines = self.line_detector.detect(frame)
+        if not lines:
             return []
-
-        blocks = self.strategy.group(anchors)
-        return sorted(blocks, key=lambda b: b.poly[:, 1].min())
+        return sorted(self.strategy.group(lines), key=lambda b: b.bbox[1])
