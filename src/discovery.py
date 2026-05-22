@@ -16,7 +16,10 @@ def _worker_main(
     out_q: mp.Queue,
 ) -> None:
     """Layout detector loop — runs in a dedicated child process."""
+    from logging_config import suppress_worker_noise
+
     logging.basicConfig(level=logging.WARNING)
+    suppress_worker_noise()
     detector = factory()
     detector.load()
     log.info("Stage5: %s ready", type(detector).__name__)

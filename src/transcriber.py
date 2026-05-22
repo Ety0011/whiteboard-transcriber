@@ -32,7 +32,10 @@ def _worker_main(
     """Transcription inference loop — runs in a dedicated child process."""
     import logging as _log
 
+    from logging_config import suppress_worker_noise
+
     _log.basicConfig(level=logging.INFO)
+    suppress_worker_noise()
     _log = _log.getLogger(__name__)
 
     transcriber = factory()

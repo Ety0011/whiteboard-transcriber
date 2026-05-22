@@ -33,20 +33,23 @@ def _worker_main(
     """SAM 3.1 board-segmentation worker — runs in a dedicated child process."""
     import logging as _log
 
+    from logging_config import devnull_fds, suppress_worker_noise
+
     _log.basicConfig(level=logging.WARNING)
+    suppress_worker_noise()
 
-    from ultralytics.models.sam import SAM3SemanticPredictor
-
-    sam = SAM3SemanticPredictor(
-        overrides=dict(
-            model=model_path,
-            task="segment",
-            mode="predict",
-            imgsz=644,
-            save=False,
-            verbose=False,
+    with devnull_fds(1, 2):
+        from ultralytics.models.sam import SAM3SemanticPredictor
+        sam = SAM3SemanticPredictor(
+            overrides=dict(
+                model=model_path,
+                task="segment",
+                mode="predict",
+                imgsz=644,
+                save=False,
+                verbose=False,
+            )
         )
-    )
 
     while True:
         frame = in_q.get()

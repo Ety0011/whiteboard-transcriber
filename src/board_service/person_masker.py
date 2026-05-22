@@ -13,6 +13,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from logging_config import devnull_fds
+
 logger = logging.getLogger(__name__)
 
 _MP_MODEL_PATH = (
@@ -39,19 +41,20 @@ class PersonMasker:
         threshold: float = 0.5,
         dilation_px: int = 5,
     ) -> None:
-        import mediapipe as mp_lib
-
         self._threshold = threshold
 
-        base_options = mp_lib.tasks.BaseOptions(model_asset_path=str(model_path))
-        options = mp_lib.tasks.vision.ImageSegmenterOptions(
-            base_options=base_options,
-            output_confidence_masks=True,
-            running_mode=mp_lib.tasks.vision.RunningMode.IMAGE,
-        )
-        self._segmenter = mp_lib.tasks.vision.ImageSegmenter.create_from_options(
-            options
-        )
+        with devnull_fds(2):
+            import mediapipe as mp_lib
+
+            base_options = mp_lib.tasks.BaseOptions(model_asset_path=str(model_path))
+            options = mp_lib.tasks.vision.ImageSegmenterOptions(
+                base_options=base_options,
+                output_confidence_masks=True,
+                running_mode=mp_lib.tasks.vision.RunningMode.IMAGE,
+            )
+            self._segmenter = mp_lib.tasks.vision.ImageSegmenter.create_from_options(
+                options
+            )
 
         self._kernel: np.ndarray | None = None
         if dilation_px > 0:

@@ -37,6 +37,7 @@ from layout_service import (
     UnionFindGrouper,
 )
 from ledger import Ledger
+from logging_config import suppress_noise
 from registry import Registry, SemanticEntity
 from renderer import Renderer
 from transcriber import Transcriber
@@ -49,8 +50,8 @@ from transcriber_service import (
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
 
-
 def main() -> None:
+    suppress_noise()
     parser = argparse.ArgumentParser(description="Whiteboard transcription pipeline")
     parser.add_argument(
         "source",

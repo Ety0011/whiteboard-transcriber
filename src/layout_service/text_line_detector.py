@@ -62,13 +62,15 @@ class TextLineDetector:
         self._detector = None
 
     def load(self) -> None:
-        from paddleocr import TextDetection
+        from logging_config import devnull_fds
 
-        self._detector = TextDetection(
-            model_name="PP-OCRv5_server_det",
-            box_thresh=self._box_thresh,
-            unclip_ratio=self._unclip_ratio,
-        )
+        with devnull_fds(1, 2):
+            from paddleocr import TextDetection
+            self._detector = TextDetection(
+                model_name="PP-OCRv5_server_det",
+                box_thresh=self._box_thresh,
+                unclip_ratio=self._unclip_ratio,
+            )
         logger.info("TextLineDetector: PP-OCRv5_server_det ready")
 
     def detect(self, composite: np.ndarray) -> list[TextLine]:
