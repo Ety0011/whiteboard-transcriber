@@ -1,7 +1,11 @@
+import logging
+
 import numpy as np
 
 from .base import BaseLayoutDetector
 from .grouper import Block
+
+log = logging.getLogger(__name__)
 
 
 class PaddleVLDetector(BaseLayoutDetector):
@@ -16,7 +20,7 @@ class PaddleVLDetector(BaseLayoutDetector):
     def load(self):
         from mlx_vlm import load as load_mlx
 
-        print(f"[PaddleVLDetector] Loading native VLM on MLX: {self.model_id}...")
+        log.info("Loading native VLM on MLX: %s", self.model_id)
         self.model, self.processor = load_mlx(self.model_id)
         self.config = self.model.config
 

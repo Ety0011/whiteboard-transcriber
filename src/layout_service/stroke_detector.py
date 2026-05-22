@@ -1,8 +1,12 @@
+import logging
+
 import cv2
 import numpy as np
 
 from .base import BaseLayoutDetector
 from .grouper import Block
+
+log = logging.getLogger(__name__)
 
 
 class StrokeDetector(BaseLayoutDetector):
@@ -20,7 +24,7 @@ class StrokeDetector(BaseLayoutDetector):
         self.min_area = min_area
 
     def load(self):
-        print("[StrokeDetector] Initializing spatial clustering...")
+        log.info("Initializing spatial clustering...")
 
     def detect(self, frame: np.ndarray) -> list[Block]:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)

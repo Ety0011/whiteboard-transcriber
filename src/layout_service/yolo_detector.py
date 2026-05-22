@@ -1,8 +1,12 @@
+import logging
+
 import numpy as np
 import torch
 
 from .base import BaseLayoutDetector
 from .grouper import Block
+
+log = logging.getLogger(__name__)
 
 
 class YOLODetector(BaseLayoutDetector):
@@ -20,7 +24,7 @@ class YOLODetector(BaseLayoutDetector):
         from huggingface_hub import hf_hub_download
         from ultralytics import YOLO
 
-        print("[YOLODetector] Downloading weights...")
+        log.info("Downloading weights...")
         weights_path = hf_hub_download(repo_id=self.repo_id, filename=self.filename)
         self.model = YOLO(weights_path)
         self.device = "mps" if torch.backends.mps.is_available() else "cpu"
