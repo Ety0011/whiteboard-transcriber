@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Real-Time Whiteboard Transcription Poster</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    @page {
+      size: A4 portrait;
+      margin: 0;
+    }
+
+    /* ─── Design tokens ──────────────────────────────────────── */
+    :root {
+      /* Pipeline */
+      --node-w:          140px;
+      --node-r:            4px;
+      /* Lifecycle state machine */
+      --state-w:         110px;
+      --state-h:          26px;
+      --state-r:           4px;
+      --rail-reserve:     90px;   /* px reserved right of state node for back-arrow rail + labels */
+      --lifecycle-min-h: 145px;
+      /* Brand */
+      --color-blue:   #0057A8;
+      --color-text:   #333333;
+      --color-annot:  #555555;
+    }
+
+    body {
+      width: 210mm;
+      height: 297mm;
+      font-family: 'Helvetica Neue', Helvetica, Inter, Arial, sans-serif;
+      background-color: #FFFFFF;
+      color: var(--color-text);
+      padding: 10mm 12mm 14mm 12mm;
+      display: flex;
+      flex-direction: column;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
+    h2 {
+      font-size: 13pt;
+      font-weight: bold;
+      color: #000000;
+      border-left: 4px solid var(--color-blue);
+      padding-left: 8px;
+      margin-bottom: 6px;
+    }
+
+    p {
+      font-size: 9pt;
+      line-height: 1.3;
+      color: var(--color-text);
+    }
+
+    .italic-annotation {
+      font-size: 7.5pt;
+      font-style: italic;
+      color: var(--color-annot);
+    }
+
+    .monospace {
+      font-family: 'Courier New', Courier, monospace;
+    }
+
+    /* ─── ZONE 1 — HEADER ────────────────────────────────────── */
+    header {
+      margin-bottom: 12px;
+    }
+
+    .header-top {
+      display: flex;
+      align-items: flex-start;
+      margin-bottom: 10px;
+    }
+
+    .logo-placeholder {
+      width: 40mm;
+      height: 15mm;
+      border: 1px dashed #000000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      font-size: 7.5pt;
+      font-weight: bold;
+      margin-right: 15px;
+      flex-shrink: 0;
+    }
+
+    .title-area { flex-grow: 1; }
+
+    .main-title {
+      font-size: 23pt;
+      font-weight: bold;
+      color: #000000;
+      line-height: 1.1;
+      margin-bottom: 4px;
+    }
+
+    .subtitle {
+      font-size: 10pt;
+      font-style: italic;
+      color: var(--color-annot);
+    }
+
+    .header-rule {
+      border: none;
+      border-top: 1px solid var(--color-blue);
+      margin-bottom: 6px;
+    }
+
+    .header-bottom {
+      display: grid;
+      grid-template-columns: 4.5fr 3fr 4.5fr;
+      font-size: 7.5pt;
+    }
+
+    /* ─── ZONE 2 & 3 — COLUMNS ───────────────────────────────── */
+    .poster-body {
+      display: flex;
+      flex-grow: 1;
+      gap: 16px;
+      overflow: hidden;
+    }
+
+    .left-column, .right-column {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .left-column  { width: 41%; }
+    .right-column { width: 59%; }
+
+    .panel {
+      display: flex;
+      flex-direction: column;
+      flex-grow: 1;
+    }
+
+    /* ─── SECTION A — THE PROBLEM ────────────────────────────── */
+    .problem-section {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .problem-chip {
+      background-color: #FFF0F0;
+      border: 1px solid #EF4444;
+      border-radius: 20px;
+      padding: 5px 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .chip-icon {
+      color: #EF4444;
+      font-weight: bold;
+      font-size: 9pt;
+      width: 10px;
+    }
+
+    .chip-text {
+      font-size: 8pt;
+      line-height: 1.2;
+    }
+
+    /* ─── SECTION B — PIPELINE ───────────────────────────────── */
+    .flowchart-section {
+      display: flex;
+      flex-direction: column;
+      flex-grow: 1;
+    }
+
+    .pipeline-container {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      flex-grow: 1;
+      margin-top: 4px;
+    }
+
+    .pipeline-row {
+      display: flex;
+      align-items: center;
+    }
+
+    .node-block {
+      width: var(--node-w);
+      padding: 4px 6px;
+      border-radius: var(--node-r);
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    .node-label {
+      font-size: 8pt;
+      font-weight: bold;
+      line-height: 1.1;
+    }
+
+    .model-badge {
+      background-color: var(--color-blue);
+      color: #FFFFFF;
+      font-size: 6.5pt;
+      padding: 1px 4px;
+      border-radius: 8px;
+      margin-top: 2px;
+      display: inline-block;
+    }
+
+    .node-annotation {
+      margin-left: 10px;
+      line-height: 1.2;
+    }
+
+    .pipeline-arrow {
+      width: var(--node-w);
+      text-align: center;
+      font-size: 7pt;
+      color: var(--color-annot);
+      line-height: 1;
+      flex-shrink: 0;
+    }
+
+    /* ─── PANEL 1 — SYSTEM IN ACTION ─────────────────────────── */
+    .system-action-box {
+      border: 1px dashed #333333;
+      background-color: #F4F4F4;
+      border-radius: 4px;
+      flex-grow: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      text-align: center;
+      margin-top: 4px;
+    }
+
+    .system-action-box p {
+      font-size: 8.5pt;
+      color: var(--color-annot);
+      font-style: italic;
+    }
+
+    /* ─── PANEL 2 — OUTPUT FILES ─────────────────────────────── */
+    .panes-container {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      flex-grow: 1;
+      margin-top: 4px;
+    }
+
+    .terminal-pane-wrapper {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .terminal-pane {
+      background-color: #1E1E2E;
+      border-top: 3px solid var(--color-blue);
+      border-radius: 4px;
+      padding: 8px;
+      flex-grow: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .terminal-header {
+      color: #FFFFFF;
+      font-size: 8pt;
+      font-weight: bold;
+      margin-bottom: 6px;
+    }
+
+    .terminal-inner-box {
+      border: 1px dashed #777777;
+      border-radius: 3px;
+      padding: 8px;
+      flex-grow: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+
+    .terminal-inner-box p {
+      color: #B5B5BC;
+      font-size: 7.5pt;
+      font-style: italic;
+    }
+
+    .pane-caption {
+      margin-top: 4px;
+      font-size: 7pt;
+      font-style: italic;
+    }
+
+    /* ─── PANEL 3 — LIFECYCLE STATE MACHINE ──────────────────── */
+    .lifecycle-layout {
+      position: relative;
+      flex-grow: 1;
+      margin-top: 6px;
+      min-height: var(--lifecycle-min-h);
+    }
+
+    .lifecycle-nodes {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      height: 100%;
+    }
+
+    .state-node-row {
+      display: flex;
+      align-items: center;
+    }
+
+    .state-node {
+      width: var(--state-w);
+      height: var(--state-h);
+      border-radius: var(--state-r);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 8pt;
+      font-weight: bold;
+      flex-shrink: 0;
+    }
+
+    /* annotations pushed right of state node + rail area */
+    .state-annotation {
+      margin-left: var(--rail-reserve);
+      white-space: nowrap;
+    }
+
+    /* SVG overlay — JS writes all paths/arrows into this */
+    .lifecycle-svg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      overflow: visible;
+    }
+
+    .lifecycle-footer-note {
+      margin-top: 6px;
+      font-size: 7.5pt;
+      font-style: italic;
+      color: var(--color-annot);
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="header-top">
+      <div class="logo-placeholder">
+        USI logo —<br>insert from<br>desk.usi.ch
+      </div>
+      <div class="title-area">
+        <h1 class="main-title">Real-Time Whiteboard Transcription</h1>
+        <p class="subtitle">A system that watches a whiteboard like a historian — recording every idea written, corrected, and erased.</p>
+      </div>
+    </div>
+    <hr class="header-rule">
+    <div class="header-bottom">
+      <div>USI Università della Svizzera italiana / Faculty of Informatics</div>
+      <div style="text-align: center;">Etienne Orio · Sara Mashhadi Alizadeh</div>
+      <div style="text-align: right;">Computer Vision · M.Sc. Artificial Intelligence · May 28, 2026</div>
+    </div>
+  </header>
+
+  <div class="poster-body">
+
+    <!-- ── LEFT COLUMN ── -->
+    <div class="left-column">
+
+      <div class="problem-section">
+        <h2>The Problem</h2>
+        <p>A professor walks up to a whiteboard. They write, explain, erase, correct, and move on. By the end of the lecture the board looks nothing like it did at the start. A photo of the final board captures the conclusion — it misses everything that happened in between. We wanted to capture the full story.</p>
+        <div class="problem-chip">
+          <span class="chip-icon">&#x2715;</span>
+          <span class="chip-text">Students spend all their time copying and miss the actual explanation.</span>
+        </div>
+        <div class="problem-chip">
+          <span class="chip-icon">&#x2715;</span>
+          <span class="chip-text">When the professor erases to make room, that content is gone forever.</span>
+        </div>
+        <div class="problem-chip">
+          <span class="chip-icon">&#x2715;</span>
+          <span class="chip-text">There's no way to replay how an idea developed, only its final form survives.</span>
+        </div>
+      </div>
+
+      <div class="flowchart-section">
+        <h2>How It Works</h2>
+        <p>A camera feeds a 10-stage real-time pipeline. Models run in isolated subprocesses — the main loop never blocks on inference.</p>
+
+        <div class="pipeline-container">
+          <div class="pipeline-row">
+            <div class="node-block" style="background-color:#EA4335;color:#FFFFFF"><span class="node-label">Video Feed</span></div>
+            <div class="node-annotation italic-annotation">Queue(maxsize=1) — stale frames dropped. Always the freshest.</div>
+          </div>
+          <div class="pipeline-arrow">&#9660;</div>
+
+          <div class="pipeline-row">
+            <div class="node-block" style="background-color:#FA7B17;color:#FFFFFF">
+              <span class="node-label">Board Segmentation</span><br><span class="model-badge">SAM 3.1</span>
+            </div>
+            <div class="node-annotation italic-annotation">Segments whiteboard region. Async subprocess · ~5 s cadence.</div>
+          </div>
+          <div class="pipeline-arrow">&#9660;</div>
+
+          <div class="pipeline-row">
+            <div class="node-block" style="background-color:#FA7B17;color:#FFFFFF">
+              <span class="node-label">Person Segmentation</span><br><span class="model-badge">MediaPipe Selfie Segmenter</span>
+            </div>
+            <div class="node-annotation italic-annotation">Tracks lecturer's body every frame. Sync · ~5 ms.</div>
+          </div>
+          <div class="pipeline-arrow">&#9660;</div>
+
+          <div class="pipeline-row">
+            <div class="node-block" style="background-color:#FA7B17;color:#FFFFFF"><span class="node-label">Perspective Correction</span></div>
+            <div class="node-annotation italic-annotation">Homography &rarr; canonical 1920&times;1080. All downstream geometry locked to this space.</div>
+          </div>
+          <div class="pipeline-arrow">&#9660;</div>
+
+          <div class="pipeline-row">
+            <div class="node-block" style="background-color:#F9AB00;color:#1A1A1A"><span class="node-label">Surface Reconstruction</span></div>
+            <div class="node-annotation italic-annotation">Distance-weighted EMA. Pixels under body frozen at last known value.</div>
+          </div>
+          <div class="pipeline-arrow">&#9660;</div>
+
+          <div class="pipeline-row">
+            <div class="node-block" style="background-color:#34A853;color:#FFFFFF">
+              <span class="node-label">Text Line Detection</span><br><span class="model-badge">PaddleOCR PP-OCRv5_server_det</span>
+            </div>
+            <div class="node-annotation italic-annotation">Detects every text line on clean composite. Async subprocess.</div>
+          </div>
+          <div class="pipeline-arrow">&#9660;</div>
+
+          <div class="pipeline-row">
+            <div class="node-block" style="background-color:#34A853;color:#FFFFFF"><span class="node-label">Block Grouping</span></div>
+            <div class="node-annotation italic-annotation">Clusters lines into blocks. Pluggable strategy: Union-Find · HDBSCAN · AABB-Tree.</div>
+          </div>
+          <div class="pipeline-arrow">&#9660;</div>
+
+          <div class="pipeline-row">
+            <div class="node-block" style="background-color:#1A73E8;color:#FFFFFF"><span class="node-label">Entity Registry</span></div>
+            <div class="node-annotation italic-annotation">Tracks blocks across frames. IoU + centroid matching. EMA bbox. Stable 10 s &rarr; dispatch OCR.</div>
+          </div>
+          <div class="pipeline-arrow">&#9660;</div>
+
+          <div class="pipeline-row">
+            <div class="node-block" style="background-color:#5C6BC0;color:#FFFFFF">
+              <span class="node-label">OCR Transcription</span><br><span class="model-badge">PaddleOCR-VL-1.5 (default) · GOT-OCR 2.0 (alt)</span>
+            </div>
+            <div class="node-annotation italic-annotation">VLM reads each stable entity crop. Async subprocess.</div>
+          </div>
+          <div class="pipeline-arrow">&#9660;</div>
+
+          <div class="pipeline-row">
+            <div class="node-block" style="background-color:#9334E6;color:#FFFFFF"><span class="node-label">Ledger Synthesis</span></div>
+            <div class="node-annotation italic-annotation">Re-renders live.md + lecture_history.md from in-memory ledger. Atomic overwrite (tmp &rarr; rename). In-memory record never deletes — only accumulates.</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── RIGHT COLUMN ── -->
+    <div class="right-column">
+
+      <div class="panel">
+        <h2>System in Action</h2>
+        <div class="system-action-box">
+          <p>[ INSERT SCREENSHOT HERE — live pipeline with colour-coded entity bounding boxes: orange=STABILIZING · yellow=INFERRING · green=ACTIVE ]</p>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Output Files</h2>
+        <div class="panes-container">
+          <div class="terminal-pane-wrapper">
+            <div class="terminal-pane">
+              <div class="terminal-header monospace">📄 live.md</div>
+              <div class="terminal-inner-box">
+                <p>[ INSERT SCREENSHOT HERE — live.md: current board snapshot, one block per active entity, sorted top-to-bottom ]</p>
+              </div>
+            </div>
+            <div class="pane-caption">Always up to date. Reflects exactly what is visible on the board right now.</div>
+          </div>
+          <div class="terminal-pane-wrapper">
+            <div class="terminal-pane">
+              <div class="terminal-header monospace">📖 lecture_history.md</div>
+              <div class="terminal-inner-box">
+                <p>[ INSERT SCREENSHOT HERE — lecture_history.md: full session ledger with TOC, timestamps, and collapsible revision history per entity ]</p>
+              </div>
+            </div>
+            <div class="pane-caption">Nothing is lost. Erased content is timestamped and stays in the in-memory ledger. Corrections appear as numbered revisions.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Every Block Has a Lifecycle</h2>
+        <p style="margin-bottom:4px">Once detected, a block lives through four states. Identity is spatial — a correction in-place is a new version of the same entity; a rewrite at a new location is a new entity entirely.</p>
+
+        <!--
+          Nodes are plain flex rows. The SVG overlay is empty on load;
+          drawLifecycle() reads actual DOM positions and writes all
+          arrows + labels into it — no hardcoded coordinates.
+        -->
+        <div class="lifecycle-layout" id="lifecycle-layout">
+          <div class="lifecycle-nodes">
+            <div class="state-node-row">
+              <div class="state-node" data-state="stabilizing" style="background-color:#FFA500;color:#FFFFFF">STABILIZING</div>
+              <div class="state-annotation italic-annotation">new block, or drift reset</div>
+            </div>
+            <div class="state-node-row">
+              <div class="state-node" data-state="inferring" style="background-color:#FFC800;color:#1A1A1A">INFERRING</div>
+              <div class="state-annotation italic-annotation">crop sent to VLM</div>
+            </div>
+            <div class="state-node-row">
+              <div class="state-node" data-state="active" style="background-color:#22C55E;color:#1A1A1A">ACTIVE</div>
+              <div class="state-annotation italic-annotation">text written to ledger</div>
+            </div>
+            <div class="state-node-row">
+              <div class="state-node" data-state="erased" style="background-color:#DC2626;color:#FFFFFF">ERASED</div>
+              <div class="state-annotation italic-annotation">archived with timestamp · pruned after 3 s</div>
+            </div>
+          </div>
+          <svg class="lifecycle-svg" id="lifecycle-svg" aria-hidden="true"></svg>
+        </div>
+
+        <div class="lifecycle-footer-note">Any movement — including edits to already-transcribed blocks — resets the stability clock.</div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    /**
+     * Reads the rendered positions of [data-state] nodes inside #lifecycle-layout,
+     * then writes all SVG arrows and labels into #lifecycle-svg.
+     * Re-runs on resize so the diagram stays correct at any zoom / print scale.
+     */
+    function drawLifecycle() {
+      const layout = document.getElementById('lifecycle-layout');
+      const svg    = document.getElementById('lifecycle-svg');
+      const nodes  = Array.from(layout.querySelectorAll('[data-state]'));
+      if (nodes.length < 4) return;
+
+      const base = layout.getBoundingClientRect();
+      const pos  = nodes.map(n => {
+        const r = n.getBoundingClientRect();
+        return {
+          top:    r.top    - base.top,
+          bottom: r.bottom - base.top,
+          left:   r.left   - base.left,
+          right:  r.right  - base.left,
+          cx:    (r.left  + r.right)  / 2 - base.left,
+          cy:    (r.top   + r.bottom) / 2 - base.top,
+        };
+      });
+
+      const W = layout.offsetWidth;
+      const H = layout.offsetHeight;
+      svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+      // Right-side vertical rail: sits just past the node right edge
+      const railX  = pos[0].right + 16;
+      const labelX = railX + 4;
+
+      const arrow = d => `<path d="${d}" stroke="#333" stroke-width="1.2" fill="none" marker-end="url(#lc-arr)"/>`;
+      const label = (x, y, t) => `<text x="${x}" y="${y}" font-size="7.5" font-style="italic" fill="#555555">${t}</text>`;
+
+      let s = `<defs>
+        <marker id="lc-arr" viewBox="0 0 10 10" refX="8" refY="5"
+                markerWidth="4" markerHeight="4" orient="auto-start-reverse">
+          <path d="M 0 2 L 8 5 L 0 8 z" fill="#333"/>
+        </marker>
+      </defs>`;
+
+      // ── Downward arrows (0→1, 1→2, 2→3) ──────────────────────
+      const downLabels = ['stable for 10 s', 'OCR result received', 'absent for 1 s'];
+      for (let i = 0; i < 3; i++) {
+        const x  = pos[i].cx;
+        const y1 = pos[i].bottom + 1;
+        const y2 = pos[i + 1].top - 1;
+        s += arrow(`M ${x} ${y1} L ${x} ${y2}`);
+        // label offset below midpoint so it doesn't collide with back-arrow labels
+        s += label(x + 4, (y1 + y2) / 2 + 5, downLabels[i]);
+      }
+
+      // ── Back arrows (INFERRING→STAB, ACTIVE→STAB) via right rail ──
+      // Both share the same vertical rail; each contributes a horizontal stub.
+      const stabCY = pos[0].cy;
+      const stabRX = pos[0].right;
+      [1, 2].forEach(i => {
+        const { right, cy } = pos[i];
+        s += arrow(`M ${right} ${cy} L ${railX} ${cy} L ${railX} ${stabCY} L ${stabRX} ${stabCY}`);
+      });
+
+      // Label positioned between STAB and INFERRING, beside the rail
+      const midY = (pos[0].cy + pos[1].cy) / 2;
+      s += label(labelX, midY - 4, 'drift > 50 px');
+      s += label(labelX, midY + 6, '(edit in place)');
+
+      svg.innerHTML = s;
+    }
+
+    window.addEventListener('load',   drawLifecycle);
+    window.addEventListener('resize', drawLifecycle);
+  </script>
+
+</body>
+</html>
