@@ -108,4 +108,4 @@ class Transcriber:
         self._worker.join(timeout=10)
         if self._worker.is_alive():
             self._worker.terminate()
-        log.info("Transcriber stopped")
+        log.info("worker stopped")

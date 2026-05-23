@@ -56,6 +56,10 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 log = logging.getLogger(__name__)
 
 
+# TODO: fix aabb grouper not working as intended
+# TODO: add revisions label "pill" in video
+# TODO: make all stages async
+# TODO: remove annoyint mediapipe warning E0000
 def main() -> None:
     suppress_noise()
     parser = argparse.ArgumentParser(description="Whiteboard transcription pipeline")
