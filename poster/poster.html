@@ -403,7 +403,7 @@
            style="width: calc(40mm * var(--poster-scale)); height: calc(15mm * var(--poster-scale)); object-fit: contain; object-position: left center; flex-shrink: 0; margin-right: calc(15px * var(--poster-scale));">
       <div class="title-area">
         <h1 class="main-title">Real-Time Whiteboard Transcription</h1>
-        <p class="subtitle">A system that watches a whiteboard like a historian — recording every idea written, corrected, and erased.</p>
+        <p class="subtitle">Captures the full evolution of a lecture: everything written, corrected, and erased.</p>
       </div>
     </div>
     <hr class="header-rule">
@@ -421,7 +421,7 @@
 
       <div class="problem-section">
         <h2>The Problem</h2>
-        <p>A professor walks up to a whiteboard. They write, explain, erase, correct, and move on. By the end of the lecture the board looks nothing like it did at the start. A photo of the final board captures the conclusion — it misses everything that happened in between. We wanted to capture the full story.</p>
+        <p>A professor walks up to a whiteboard. They write, explain, erase, correct, and move on. By the end of the lecture the board looks nothing like it did at the start. A photo of the final board captures the conclusion, missing everything that happened in between. We wanted to capture the full story.</p>
         <div class="problem-chip">
           <span class="chip-icon">&#x2715;</span>
           <span class="chip-text">Students spend all their time copying and miss the actual explanation.</span>
@@ -438,12 +438,12 @@
 
       <div class="flowchart-section">
         <h2>How It Works</h2>
-        <p>A camera feeds a 10-stage real-time pipeline. Models run in isolated subprocesses — the main loop never blocks on inference.</p>
+        <p>A camera feeds a 10-stage real-time pipeline. Models run in isolated subprocesses: the main loop never blocks on inference.</p>
 
         <div class="pipeline-container">
           <div class="pipeline-row">
             <div class="node-block" style="background-color:#EA4335;color:#FFFFFF"><span class="node-label">Video Feed</span></div>
-            <div class="node-annotation italic-annotation">Queue(maxsize=1) — stale frames dropped. Always the freshest.</div>
+            <div class="node-annotation italic-annotation">Queue(maxsize=1): stale frames dropped. Always the freshest.</div>
           </div>
           <div class="pipeline-arrow">&#9660;</div>
 
@@ -470,7 +470,7 @@
           <div class="pipeline-arrow">&#9660;</div>
 
           <div class="pipeline-row">
-            <div class="node-block" style="background-color:#F9AB00;color:#1A1A1A"><span class="node-label">Surface Reconstruction</span></div>
+            <div class="node-block" style="background-color:#F9AB00;color:#FFFFFF"><span class="node-label">Surface Reconstruction</span></div>
             <div class="node-annotation italic-annotation">Distance-weighted EMA. Pixels under body frozen at last known value.</div>
           </div>
           <div class="pipeline-arrow">&#9660;</div>
@@ -554,7 +554,7 @@
 
       <div class="panel">
         <h2>Every Block Has a Lifecycle</h2>
-        <p style="margin-bottom: calc(4px * var(--poster-scale))">Once detected, a block lives through four states. Identity is spatial — a correction in-place is a new version of the same entity; a rewrite at a new location is a new entity entirely.</p>
+        <p style="margin-bottom: calc(4px * var(--poster-scale))">Once detected, a block lives through four states. Identity is spatial: a correction in-place is a new version of the same entity; a rewrite at a new location is a new entity entirely.</p>
 
         <div class="lifecycle-layout" id="lifecycle-layout">
           <div class="lifecycle-nodes">
@@ -563,11 +563,11 @@
               <div class="state-annotation italic-annotation">new block, or drift reset</div>
             </div>
             <div class="state-node-row">
-              <div class="state-node" data-state="inferring" style="background-color:#FFC800;color:#1A1A1A">INFERRING</div>
+              <div class="state-node" data-state="inferring" style="background-color:#FFC800;color:#FFFFFF">INFERRING</div>
               <div class="state-annotation italic-annotation">crop sent to VLM</div>
             </div>
             <div class="state-node-row">
-              <div class="state-node" data-state="active" style="background-color:#22C55E;color:#1A1A1A">ACTIVE</div>
+              <div class="state-node" data-state="active" style="background-color:#22C55E;color:#FFFFFF">ACTIVE</div>
               <div class="state-annotation italic-annotation">text written to ledger</div>
             </div>
             <div class="state-node-row">
@@ -578,7 +578,7 @@
           <svg class="lifecycle-svg" id="lifecycle-svg" aria-hidden="true"></svg>
         </div>
 
-        <div class="lifecycle-footer-note">Any movement — including edits to already-transcribed blocks — resets the stability clock.</div>
+        <div class="lifecycle-footer-note">Any movement, including edits to already-transcribed blocks, resets the stability clock.</div>
       </div>
 
     </div>
