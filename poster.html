@@ -19,6 +19,7 @@
     :root {
       /* Pipeline */
       --node-w:          140px;
+      --node-h:           40px;   /* uniform height — tallest node has label + badge */
       --node-r:            4px;
       /* Lifecycle state machine */
       --state-w:         110px;
@@ -197,10 +198,15 @@
 
     .node-block {
       width: var(--node-w);
+      min-height: var(--node-h);
       padding: 4px 6px;
       border-radius: var(--node-r);
       text-align: center;
       flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
     }
 
     .node-label {
@@ -488,7 +494,9 @@
       <div class="panel">
         <h2>System in Action</h2>
         <div class="system-action-box">
-          <p>[ INSERT SCREENSHOT HERE — live pipeline with colour-coded entity bounding boxes: orange=STABILIZING · yellow=INFERRING · green=ACTIVE ]</p>
+          <img src="screenshots/pipeline_live.png"
+               alt="Live pipeline with colour-coded entity bounding boxes: orange=STABILIZING · yellow=INFERRING · green=ACTIVE"
+               style="max-width:100%;max-height:100%;object-fit:contain;display:block;">
         </div>
       </div>
 
@@ -499,7 +507,9 @@
             <div class="terminal-pane">
               <div class="terminal-header monospace">📄 live.md</div>
               <div class="terminal-inner-box">
-                <p>[ INSERT SCREENSHOT HERE — live.md: current board snapshot, one block per active entity, sorted top-to-bottom ]</p>
+                <img src="screenshots/live_md.png"
+                     alt="live.md: current board snapshot, one block per active entity, sorted top-to-bottom"
+                     style="max-width:100%;max-height:100%;object-fit:contain;display:block;">
               </div>
             </div>
             <div class="pane-caption">Always up to date. Reflects exactly what is visible on the board right now.</div>
@@ -508,7 +518,9 @@
             <div class="terminal-pane">
               <div class="terminal-header monospace">📖 lecture_history.md</div>
               <div class="terminal-inner-box">
-                <p>[ INSERT SCREENSHOT HERE — lecture_history.md: full session ledger with TOC, timestamps, and collapsible revision history per entity ]</p>
+                <img src="screenshots/lecture_history_md.png"
+                     alt="lecture_history.md: full session ledger with TOC, timestamps, and collapsible revision history per entity"
+                     style="max-width:100%;max-height:100%;object-fit:contain;display:block;">
               </div>
             </div>
             <div class="pane-caption">Nothing is lost. Erased content is timestamped and stays in the in-memory ledger. Corrections appear as numbered revisions.</div>
