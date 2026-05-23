@@ -96,7 +96,7 @@ def _draw_entities(frame: np.ndarray, entities: list[SemanticEntity]) -> np.ndar
         cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
 
-        label = ent.state.value
+        label = f"#{ent.id} {ent.state.value}"
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
         cv2.rectangle(frame, (x1, y1), (x1 + tw + 4, y1 + th + 4), color, -1)
         cv2.putText(
