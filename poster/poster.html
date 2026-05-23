@@ -89,19 +89,6 @@
       margin-bottom: calc(10px * var(--poster-scale));
     }
 
-    .logo-placeholder {
-      width:        calc(40mm  * var(--poster-scale));
-      height:       calc(15mm  * var(--poster-scale));
-      border:       calc(1px   * var(--poster-scale)) dashed #000000;
-      font-size:    calc(7.5pt * var(--poster-scale));
-      font-weight: bold;
-      margin-right: calc(15px  * var(--poster-scale));
-      flex-shrink: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-    }
 
     .title-area { flex-grow: 1; }
 
@@ -388,9 +375,9 @@
 
   <header>
     <div class="header-top">
-      <div class="logo-placeholder">
-        USI logo —<br>insert from<br>desk.usi.ch
-      </div>
+      <img src="usi_logo.svg"
+           alt="USI Università della Svizzera italiana"
+           style="width: calc(40mm * var(--poster-scale)); height: calc(15mm * var(--poster-scale)); object-fit: contain; object-position: left center; flex-shrink: 0; margin-right: calc(15px * var(--poster-scale));">
       <div class="title-area">
         <h1 class="main-title">Real-Time Whiteboard Transcription</h1>
         <p class="subtitle">A system that watches a whiteboard like a historian — recording every idea written, corrected, and erased.</p>
