@@ -115,7 +115,7 @@
     .header-bottom {
       display: grid;
       grid-template-columns: 4.5fr 3fr 4.5fr;
-      font-size: calc(7.5pt * var(--poster-scale));
+      font-size: calc(6.8pt * var(--poster-scale));
     }
 
     /* ─── ZONE 2 & 3 — COLUMNS ───────────────────────────────── */
@@ -263,39 +263,59 @@
       flex-direction: column;
     }
 
-    .terminal-pane {
-      background-color: #1E1E2E;
-      border-top:    calc(3px * var(--poster-scale)) solid var(--color-blue);
-      border-radius: calc(4px * var(--poster-scale));
-      padding:       calc(8px * var(--poster-scale));
+    .macos-window {
+      border-radius: calc(8px * var(--poster-scale));
+      box-shadow: 0 calc(2px * var(--poster-scale)) calc(10px * var(--poster-scale)) rgba(0,0,0,0.18);
+      border: calc(1px * var(--poster-scale)) solid #c8c8c8;
+      overflow: hidden;
       flex-grow: 1;
       display: flex;
       flex-direction: column;
     }
 
-    .terminal-header {
-      color: #FFFFFF;
-      font-size:     calc(8pt * var(--poster-scale));
-      font-weight: bold;
-      margin-bottom: calc(6px * var(--poster-scale));
-    }
-
-    .terminal-inner-box {
-      border:        calc(1px * var(--poster-scale)) dashed #777777;
-      border-radius: calc(3px * var(--poster-scale));
-      padding:       calc(8px * var(--poster-scale));
-      flex-grow: 1;
+    .macos-titlebar {
+      background: #f2f2f2;
+      height: calc(20px * var(--poster-scale));
       display: flex;
       align-items: center;
-      justify-content: center;
-      text-align: center;
+      padding: 0 calc(7px * var(--poster-scale));
+      gap: calc(4px * var(--poster-scale));
+      flex-shrink: 0;
+      border-bottom: calc(1px * var(--poster-scale)) solid #d8d8d8;
     }
 
-    .terminal-inner-box p {
-      color: #B5B5BC;
-      font-size:  calc(7.5pt * var(--poster-scale));
-      font-style: italic;
+    .tl-red    { width: calc(8px * var(--poster-scale)); height: calc(8px * var(--poster-scale)); border-radius: 50%; background: #FF5F57; flex-shrink: 0; }
+    .tl-yellow { width: calc(8px * var(--poster-scale)); height: calc(8px * var(--poster-scale)); border-radius: 50%; background: #FEBC2E; flex-shrink: 0; }
+    .tl-green  { width: calc(8px * var(--poster-scale)); height: calc(8px * var(--poster-scale)); border-radius: 50%; background: #28C840; flex-shrink: 0; }
+
+    .macos-titlebar-title {
+      flex: 1;
+      text-align: center;
+      font-size: calc(6.5pt * var(--poster-scale));
+      color: #444444;
+      font-weight: 500;
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
     }
+
+    .macos-content {
+      flex-grow: 1;
+      padding: calc(7px * var(--poster-scale)) calc(9px * var(--poster-scale));
+      overflow: hidden;
+      background: #ffffff;
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      font-size: calc(6.5pt * var(--poster-scale));
+      line-height: 1.3;
+      color: #222222;
+    }
+
+    .macos-content h1   { font-size: calc(8pt * var(--poster-scale)); font-weight: bold; border-bottom: calc(1px * var(--poster-scale)) solid #e0e0e0; padding-bottom: calc(2px * var(--poster-scale)); margin-bottom: calc(4px * var(--poster-scale)); }
+    .macos-content h2   { font-size: calc(7pt * var(--poster-scale)); font-weight: bold; color: #111; margin-top: calc(5px * var(--poster-scale)); margin-bottom: calc(2px * var(--poster-scale)); }
+    .macos-content hr   { border: none; border-top: calc(1px * var(--poster-scale)) solid #e8e8e8; margin: calc(4px * var(--poster-scale)) 0; }
+    .macos-content code { font-family: 'Courier New', Courier, monospace; background: #f5f5f5; border-radius: calc(3px * var(--poster-scale)); padding: calc(2px * var(--poster-scale)) calc(5px * var(--poster-scale)); font-size: calc(6pt * var(--poster-scale)); color: #1a1a1a; }
+    .macos-content p    { margin-bottom: calc(3px * var(--poster-scale)); }
+    .macos-content ul   { padding-left: calc(14px * var(--poster-scale)); margin-bottom: calc(3px * var(--poster-scale)); }
+    .macos-content li   { margin-bottom: calc(1px * var(--poster-scale)); color: #333; }
+    .macos-content details { font-size: calc(5.5pt * var(--poster-scale)); color: #777; font-style: italic; border-left: calc(2px * var(--poster-scale)) solid #e0e0e0; padding-left: calc(5px * var(--poster-scale)); margin: calc(2px * var(--poster-scale)) 0 calc(4px * var(--poster-scale)); }
 
     .pane-caption {
       margin-top: calc(4px * var(--poster-scale));
@@ -372,6 +392,7 @@
       document.head.appendChild(el);
     })();
   </script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
 
@@ -507,26 +528,26 @@
         <h2>Output Files</h2>
         <div class="panes-container">
           <div class="terminal-pane-wrapper">
-            <div class="terminal-pane">
-              <div class="terminal-header monospace">📄 live.md</div>
-              <div class="terminal-inner-box">
-                <img src="screenshots/live_md.png"
-                     alt="live.md: current board snapshot, one block per active entity, sorted top-to-bottom"
-                     style="max-width:100%;max-height:100%;object-fit:contain;display:block;">
+            <div class="macos-window">
+              <div class="macos-titlebar">
+                <div class="tl-red"></div><div class="tl-yellow"></div><div class="tl-green"></div>
+                <div class="macos-titlebar-title">live.md</div>
+                <div style="width:calc(32px * var(--poster-scale));flex-shrink:0;"></div>
               </div>
+              <div class="macos-content" id="live-md-content"></div>
             </div>
             <div class="pane-caption">Always up to date. Reflects exactly what is visible on the board right now.</div>
           </div>
           <div class="terminal-pane-wrapper">
-            <div class="terminal-pane">
-              <div class="terminal-header monospace">📖 lecture_history.md</div>
-              <div class="terminal-inner-box">
-                <img src="screenshots/lecture_history_md.png"
-                     alt="lecture_history.md: full session ledger with TOC, timestamps, and collapsible revision history per entity"
-                     style="max-width:100%;max-height:100%;object-fit:contain;display:block;">
+            <div class="macos-window">
+              <div class="macos-titlebar">
+                <div class="tl-red"></div><div class="tl-yellow"></div><div class="tl-green"></div>
+                <div class="macos-titlebar-title">lecture_history.md</div>
+                <div style="width:calc(32px * var(--poster-scale));flex-shrink:0;"></div>
               </div>
+              <div class="macos-content" id="history-md-content"></div>
             </div>
-            <div class="pane-caption">Nothing is lost. Erased content is timestamped and stays in the in-memory ledger. Corrections appear as numbered revisions.</div>
+            <div class="pane-caption">Chronological record of the full lecture. Every block in appearance order, with revisions.</div>
           </div>
         </div>
       </div>
@@ -641,6 +662,59 @@
 
     window.addEventListener('load',   drawLifecycle);
     window.addEventListener('resize', drawLifecycle);
+  </script>
+
+  <script>
+    const liveMd = `# Whiteboard
+
+## Gradient Descent
+
+\`∂L/∂w = −η · (1/n) Σ xᵢ(yᵢ − ŷᵢ)\`
+
+---
+
+## Backpropagation
+
+\`δˡ = ((Wˡ⁺¹)ᵀ δˡ⁺¹) ⊙ σ'(zˡ)\`
+
+---
+
+## Chain Rule
+
+\`∂L/∂wˡ = δˡ · (aˡ⁻¹)ᵀ\`
+`;
+
+    const historyMd = `# Lecture Notes
+
+## Contents
+
+- 09:14 — Gradient Descent
+- 09:22 — Backpropagation
+- 09:31 — Chain Rule
+
+---
+
+## 09:14
+
+\`∂L/∂w = −η · (1/n) Σ xᵢ(yᵢ − ŷᵢ)\`
+
+<details><summary>1 revision</summary>
+
+w ← w − α · ∂L/∂w
+
+</details>
+
+## 09:22
+
+\`δˡ = ((Wˡ⁺¹)ᵀ δˡ⁺¹) ⊙ σ'(zˡ)\`
+
+## 09:31
+
+\`∂L/∂wˡ = δˡ · (aˡ⁻¹)ᵀ\`
+`;
+
+    document.getElementById('live-md-content').innerHTML    = marked.parse(liveMd);
+    document.getElementById('history-md-content').innerHTML = marked.parse(historyMd);
   </script>
 
 </body>
