@@ -21,7 +21,7 @@ def generate_pdf():
 
         # Render the PDF with exact A0 specifications
         page.pdf(
-            path="output_poster_A0.pdf",
+            path="poster.pdf",
             width="841mm",
             height="1189mm",
             print_background=True,  # Ensures background colors are preserved
