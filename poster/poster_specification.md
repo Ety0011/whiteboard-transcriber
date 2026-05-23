@@ -2,6 +2,9 @@ A0 academic research poster, portrait orientation (841 × 1189 mm, ~1:1.41 ratio
 
 ---
 
+<!-- TODO: pipeline colors are misleading with states -->
+<!-- TODO: The problem chips could worded more precisely -->
+
 ## COLOR PALETTE (USI brand)
 
 - Black #000000 — section rule borders, primary headings
