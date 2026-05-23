@@ -11,7 +11,7 @@ A0 academic research poster, portrait orientation (841 × 1189 mm, ~1:1.41 ratio
 - Pipeline nodes follow a rainbow gradient top-to-bottom (Google Material palette). Same-stage nodes share a color stop:
     Node 1  (Video Feed)                      — Google Red    #EA4335, white text
     Nodes 2–4 (Board/Person/Perspective)      — Google Orange #FA7B17, white text
-    Node 5  (Surface Reconstruction)          — Google Yellow #F9AB00, dark text #1a1a1a
+    Node 5  (Surface Reconstruction)          — Google Yellow #F9AB00, white text
     Nodes 6–7 (Text Detection/Block Grouping) — Google Green  #34A853, white text
     Node 8  (Entity Registry)                 — Google Blue   #1A73E8, white text
     Node 9  (OCR Transcription)               — Indigo        #5C6BC0, white text
@@ -19,7 +19,7 @@ A0 academic research poster, portrait orientation (841 × 1189 mm, ~1:1.41 ratio
 - Red tint #FFF0F0 with thin #ef4444 border — problem callout chip backgrounds
 - Terminal pane backgrounds: dark charcoal #1E1E2E
 - Body text: dark gray #333333
-- State machine colors match codebase renderer.py exactly: STABILIZING #FFA500, INFERRING #FFC800, ACTIVE #22C55E, ERASED #DC2626
+- State machine colors match codebase renderer.py exactly: STABILIZING #FFA500, INFERRING #FFC800, ACTIVE #00E600, ERASED #DC0000
 
 ---
 
@@ -41,9 +41,9 @@ A0 academic research poster, portrait orientation (841 × 1189 mm, ~1:1.41 ratio
 
 White background. Two rows.
 
-**Top row:** Left-aligned: small rectangular placeholder box, dashed border, labeled "USI logo — insert from desk.usi.ch" (approx 40×15mm). To the right of logo, two lines stacked:
+**Top row:** Left-aligned: USI logo SVG (usi_logo.svg), 40×15mm, object-fit contain. To the right of logo, two lines stacked:
 - Line 1 — very large bold black: "Real-Time Whiteboard Transcription"
-- Line 2 — medium italic gray: "A system that watches a whiteboard like a historian — recording every idea written, corrected, and erased."
+- Line 2 — medium italic gray: "Captures the full evolution of a lecture: everything written, corrected, and erased."
 
 **Bottom row:** thin 1px #0057A8 horizontal rule, then three columns of small text beneath it:
 - LEFT: "USI Università della Svizzera italiana / Faculty of Informatics"
@@ -61,7 +61,7 @@ White background. Two rows.
 Section title with blue left border: "The Problem"
 
 Body text:
-"A professor walks up to a whiteboard. They write, explain, erase, correct, and move on. By the end of the lecture the board looks nothing like it did at the start. A photo of the final board captures the conclusion — it misses everything that happened in between. We wanted to capture the full story."
+"A professor walks up to a whiteboard. They write, explain, erase, correct, and move on. By the end of the lecture the board looks nothing like it did at the start. A photo of the final board captures the conclusion, missing everything that happened in between. We wanted to capture the full story."
 
 Three callout chips, each full-width, pill-shaped, light red-tinted fill #FFF0F0, thin red border, small red ✕ icon on the left:
 
@@ -76,13 +76,13 @@ Three callout chips, each full-width, pill-shaped, light red-tinted fill #FFF0F0
 Section title with blue left border: "How It Works"
 
 Intro line (body text):
-"A camera feeds a 10-stage real-time pipeline. Models run in isolated subprocesses — the main loop never blocks on inference."
+"A camera feeds a 10-stage real-time pipeline. Models run in isolated subprocesses: the main loop never blocks on inference."
 
 **Vertical flowchart.** 10 rounded-rectangle nodes, connected by downward arrows. Each node: bold white label centered inside, small italic gray annotation to the right, model badge (small white text on #0057A8 pill) below the label where specified. Consistent width. Tight vertical spacing.
 
 Node 1 — Google Red #EA4335 fill, white text:
   Label: "Video Feed"
-  Annotation: "Queue(maxsize=1) — stale frames dropped. Always the freshest."
+  Annotation: "Queue(maxsize=1): stale frames dropped. Always the freshest."
 
 Node 2 — Google Orange #FA7B17 fill, white text:
   Label: "Board Segmentation"
@@ -98,7 +98,7 @@ Node 4 — Google Orange #FA7B17 fill, white text:
   Label: "Perspective Correction"
   Annotation: "Homography → canonical 1920×1080. All downstream geometry locked to this space."
 
-Node 5 — Google Yellow #F9AB00 fill, dark text #1a1a1a:
+Node 5 — Google Yellow #F9AB00 fill, white text:
   Label: "Surface Reconstruction"
   Annotation: "Distance-weighted EMA. Pixels under body frozen at last known value."
 
@@ -134,8 +134,7 @@ Node 10 — Google Purple #9334E6 fill, white text:
 
 Section title with blue left border: "System in Action"
 
-Large dashed-border rectangle, #F4F4F4 fill, centered italic text:
-"[ INSERT SCREENSHOT HERE — live pipeline with colour-coded entity bounding boxes: orange=STABILIZING · yellow=INFERRING · green=ACTIVE ]"
+Image: whiteboard_live.png, fills panel edge-to-edge (object-fit: fill). Rounded corners (8px), subtle drop shadow, thin #c8c8c8 border. No padding.
 
 ---
 
@@ -143,17 +142,17 @@ Large dashed-border rectangle, #F4F4F4 fill, centered italic text:
 
 Section title with blue left border: "Output Files"
 
-Two side-by-side terminal-style panes. Each pane: charcoal #1E1E2E background, thin #0057A8 top border accent, monospace font, subtle drop shadow.
+Two side-by-side macOS-style windows. Each window: white content background, rounded corners (8px), subtle drop shadow, thin #c8c8c8 border. Titlebar: #f2f2f2, traffic-light dots (red/yellow/green), filename centered.
 
-Left pane:
-- Header bar: "📄 live.md" in white monospace, left #0057A8 accent stripe
-- Body: dashed-border box, light gray italic text: "[ INSERT SCREENSHOT HERE — live.md: current board snapshot, one block per active entity, sorted top-to-bottom ]"
-- Caption below (small italic black): "Always up to date. Reflects exactly what is visible on the board right now."
+Left window:
+- Titlebar: "live.md"
+- Body: markdown rendered via marked.js. Content: current board snapshot, one block per active entity, sorted top-to-bottom.
+- Caption below (small italic): "Always up to date. Reflects exactly what is visible on the board right now."
 
-Right pane:
-- Header bar: "📖 lecture_history.md" in white monospace, left #0057A8 accent stripe
-- Body: dashed-border box, light gray italic text: "[ INSERT SCREENSHOT HERE — lecture_history.md: full session ledger with TOC, timestamps, and collapsible revision history per entity ]"
-- Caption below (small italic black): "Nothing is lost. Erased content is timestamped and stays in the in-memory ledger. Corrections appear as numbered revisions."
+Right window:
+- Titlebar: "lecture_history.md"
+- Body: markdown rendered via marked.js. Content: full session ledger with TOC, timestamps, collapsible revision history per entity. Heading anchors use `<a id>` tags for marked.js compatibility.
+- Caption below (small italic): "Chronological record of the full lecture. Every block in appearance order, with revisions."
 
 ---
 
@@ -162,7 +161,7 @@ Right pane:
 Section title with blue left border: "Every Block Has a Lifecycle"
 
 Body text:
-"Once detected, a block lives through four states. Identity is spatial — a correction in-place is a new version of the same entity; a rewrite at a new location is a new entity entirely."
+"Once detected, a block lives through four states. Identity is spatial: a correction in-place is a new version of the same entity; a rewrite at a new location is a new entity entirely."
 
 Render this diagram faithfully, using the ASCII layout below as the exact structural reference. Replace ASCII boxes with styled rounded-rectangle nodes filled with the specified colors. Replace ASCII arrows with clean vector arrows. Render all labels verbatim.
 
@@ -192,9 +191,9 @@ Render this diagram faithfully, using the ASCII layout below as the exact struct
 
 Node colors (fill, white bold label):
 - STABILIZING: orange #FFA500
-- INFERRING: golden #FFC800, dark text
-- ACTIVE: bright green #22C55E, dark text
-- ERASED: red #DC2626
+- INFERRING: golden #FFC800, white text
+- ACTIVE: bright green #00E600, white text
+- ERASED: red #DC0000, white text
 
 Small italic annotation to the right of each node:
 - STABILIZING: "new block, or drift reset"
@@ -203,7 +202,7 @@ Small italic annotation to the right of each node:
 - ERASED: "archived with timestamp · pruned after 3 s"
 
 Small note below diagram, italic #555555:
-"Any movement — including edits to already-transcribed blocks — resets the stability clock."
+"Any movement, including edits to already-transcribed blocks, resets the stability clock."
 
 ---
 
