@@ -156,8 +156,9 @@ class Renderer:
         person_mask: np.ndarray,
         cached_corners: np.ndarray | None,
         is_busy: bool,
+        fps: float = 0.0,
     ) -> np.ndarray:
-        """Draw mask + corner overlays and SAM busy dot. Returns the frame."""
+        """Draw mask + corner overlays, SAM busy dot, and FPS. Returns the frame."""
         raw = frame.copy()
         if self.show_mask:
             raw = _apply_mask_overlay(raw, person_mask)
@@ -169,6 +170,19 @@ class Renderer:
             10,
             (0, 165, 255) if is_busy else (0, 255, 0),
             -1,
+        )
+        fps_label = f"{fps:.1f} fps"
+        (tw, th), _ = cv2.getTextSize(fps_label, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 1)
+        cv2.rectangle(raw, (6, 6), (14 + tw, 14 + th), (0, 0, 0), -1)
+        cv2.putText(
+            raw,
+            fps_label,
+            (10, 10 + th),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 255, 0),
+            1,
+            cv2.LINE_AA,
         )
         return raw
 
