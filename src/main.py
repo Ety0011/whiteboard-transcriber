@@ -22,17 +22,18 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import time
 from functools import partial
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-import capture
 from board.compositor import BoardReconstructor
 from board.masker import BoardMasker
 from board.person import PersonMasker
 from board.rectifier import Rectifier
+from capture import Capture
 from layout import (
     AABBTreeGrouper,
     HDBSCANGrouper,
@@ -100,7 +101,7 @@ def main() -> None:
         os.environ["LOG_LEVEL"] = "DEBUG"
         logging.getLogger().setLevel(logging.DEBUG)
 
-    frame_queue = capture.start(args.source)
+    cap = Capture(args.source).start()
 
     log.info("Loading models …")
     board_masker = BoardMasker()
@@ -126,14 +127,37 @@ def main() -> None:
     ledger = Ledger(output_dir=args.output_dir)
     renderer = Renderer()
     pending_ocr: dict[int, SemanticEntity] = {}
+    paused = False
+    fps = 0.0
+    _last_t = time.monotonic()
     log.info("Ready. Model: %s | Press q or Ctrl-C to stop.", args.detector)
 
     try:
         while True:
-            frame = frame_queue.get()
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                log.info("[q] Quit")
+                break
+            elif key == ord(" "):
+                paused = not paused
+                if paused:
+                    cap.pause()
+                else:
+                    cap.resume()
+                log.info("[space] %s", "Paused" if paused else "Resumed")
+            else:
+                renderer.handle_key(key)
+
+            if paused:
+                continue
+
+            frame = cap.read()
             if frame is None:
                 log.info("End of stream.")
                 break
+            now = time.monotonic()
+            fps = 0.9 * fps + 0.1 / max(now - _last_t, 1e-6)
+            _last_t = now
 
             # Stage 1 — board mask (SAM, async, ~10s cadence)
             board_mask = board_masker.segment(frame)
@@ -183,6 +207,7 @@ def main() -> None:
                 person_mask,
                 rectifier.cached_corners,
                 board_masker.is_busy,
+                fps,
             )
             if raw.shape[1] != board.shape[1]:
                 scale = board.shape[1] / raw.shape[1]
@@ -194,17 +219,10 @@ def main() -> None:
             combined = cv2.resize(combined, (target_w, target_h))
             cv2.imshow("Lecture Historian", combined)
 
-            # Keyboard
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
-                log.info("[q] Quit")
-                break
-            else:
-                renderer.handle_key(key)
-
     except KeyboardInterrupt:
         pass
     finally:
+        cap.stop()
         board_masker.shutdown()
         discovery.shutdown()
         transcriber.shutdown()
