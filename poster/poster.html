@@ -237,16 +237,15 @@
 
     /* ─── PANEL 1 — SYSTEM IN ACTION ─────────────────────────── */
     .system-action-box {
-      border:           calc(1px  * var(--poster-scale)) dashed #333333;
-      background-color: #F4F4F4;
-      border-radius:    calc(4px  * var(--poster-scale));
+      border-radius: calc(8px * var(--poster-scale));
+      box-shadow: 0 calc(2px * var(--poster-scale)) calc(10px * var(--poster-scale)) rgba(0,0,0,0.18);
+      border: calc(1px * var(--poster-scale)) solid #c8c8c8;
+      overflow: hidden;
       flex-grow: 1;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding:    calc(16px * var(--poster-scale));
-      text-align: center;
-      margin-top: calc(4px  * var(--poster-scale));
+      margin-top: calc(4px * var(--poster-scale));
     }
 
     /* ─── PANEL 2 — OUTPUT FILES ─────────────────────────────── */
@@ -316,6 +315,7 @@
     .macos-content ul   { padding-left: calc(14px * var(--poster-scale)); margin-bottom: calc(3px * var(--poster-scale)); }
     .macos-content li   { margin-bottom: calc(1px * var(--poster-scale)); color: #333; }
     .macos-content details { font-size: calc(5.5pt * var(--poster-scale)); color: #777; font-style: italic; border-left: calc(2px * var(--poster-scale)) solid #e0e0e0; padding-left: calc(5px * var(--poster-scale)); margin: calc(2px * var(--poster-scale)) 0 calc(4px * var(--poster-scale)); }
+    .macos-content details ol { padding-left: 0; list-style-position: inside; margin: 0; }
 
     .pane-caption {
       margin-top: calc(4px * var(--poster-scale));
@@ -518,9 +518,9 @@
       <div class="panel">
         <h2>System in Action</h2>
         <div class="system-action-box">
-          <img src="screenshots/pipeline_live.png"
+          <img src="whiteboard_live.png"
                alt="Live pipeline with colour-coded entity bounding boxes: orange=STABILIZING · yellow=INFERRING · green=ACTIVE"
-               style="max-width:100%;max-height:100%;object-fit:contain;display:block;">
+               style="width:100%;height:100%;object-fit:fill;display:block;">
         </div>
       </div>
 
@@ -684,25 +684,31 @@ w = w - lr * grad
 
 ---
 
-## 09:03 {#ent1-0903}
+<a id="ent1-0903"></a>
+
+## 09:03
 
 Training is iterative
 
 ---
 
-## 09:07 {#ent2-0907}
+<a id="ent2-0907"></a>
+
+## 09:07
 
 Forward pass: make a prediction
 
 <details><summary>1 revision</summary>
 
-1. It guesses
+1. Forward pass: make a guess
 
 </details>
 
 ---
 
-## 09:18 {#ent4-0918}
+<a id="ent4-0918"></a>
+
+## 09:18
 
 w = w - lr * grad
 `;
