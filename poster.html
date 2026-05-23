@@ -10,36 +10,43 @@
       padding: 0;
     }
 
-    @page {
-      size: A4 portrait;
-      margin: 0;
-    }
-
-    /* ─── Design tokens ──────────────────────────────────────── */
+    /* ═══════════════════════════════════════════════════════════
+       SCALE CONTROL — change ONE variable to switch paper size:
+         --poster-scale: 1   →  A4  (210 × 297 mm)
+         --poster-scale: 4   →  A0  (841 × 1189 mm)
+       @page size is injected automatically by the script below.
+    ═══════════════════════════════════════════════════════════ */
     :root {
-      /* Pipeline */
-      --node-w:          140px;
-      --node-h:           40px;   /* uniform height — tallest node has label + badge */
-      --node-r:            4px;
+      --poster-scale: 1;
+
+      /* Pipeline nodes */
+      --node-w:  calc(140px * var(--poster-scale));
+      --node-h:  calc( 40px * var(--poster-scale));
+      --node-r:  calc(  4px * var(--poster-scale));
+
       /* Lifecycle state machine */
-      --state-w:         110px;
-      --state-h:          26px;
-      --state-r:           4px;
-      --rail-reserve:     90px;   /* px reserved right of state node for back-arrow rail + labels */
-      --lifecycle-min-h: 145px;
+      --state-w:         calc(110px * var(--poster-scale));
+      --state-h:         calc( 26px * var(--poster-scale));
+      --state-r:         calc(  4px * var(--poster-scale));
+      --rail-reserve:    calc( 90px * var(--poster-scale));
+      --lifecycle-min-h: calc(145px * var(--poster-scale));
+
       /* Brand */
-      --color-blue:   #0057A8;
-      --color-text:   #333333;
-      --color-annot:  #555555;
+      --color-blue:  #0057A8;
+      --color-text:  #333333;
+      --color-annot: #555555;
     }
 
     body {
-      width: 210mm;
-      height: 297mm;
+      width:  calc(210mm * var(--poster-scale));
+      height: calc(297mm * var(--poster-scale));
       font-family: 'Helvetica Neue', Helvetica, Inter, Arial, sans-serif;
       background-color: #FFFFFF;
       color: var(--color-text);
-      padding: 10mm 12mm 14mm 12mm;
+      padding: calc(10mm * var(--poster-scale))
+               calc(12mm * var(--poster-scale))
+               calc(14mm * var(--poster-scale))
+               calc(12mm * var(--poster-scale));
       display: flex;
       flex-direction: column;
       -webkit-print-color-adjust: exact;
@@ -47,22 +54,22 @@
     }
 
     h2 {
-      font-size: 13pt;
+      font-size:     calc(13pt * var(--poster-scale));
       font-weight: bold;
       color: #000000;
-      border-left: 4px solid var(--color-blue);
-      padding-left: 8px;
-      margin-bottom: 6px;
+      border-left:   calc(4px * var(--poster-scale)) solid var(--color-blue);
+      padding-left:  calc(8px * var(--poster-scale));
+      margin-bottom: calc(6px * var(--poster-scale));
     }
 
     p {
-      font-size: 9pt;
+      font-size:   calc(9pt * var(--poster-scale));
       line-height: 1.3;
       color: var(--color-text);
     }
 
     .italic-annotation {
-      font-size: 7.5pt;
+      font-size:  calc(7.5pt * var(--poster-scale));
       font-style: italic;
       color: var(--color-annot);
     }
@@ -73,69 +80,69 @@
 
     /* ─── ZONE 1 — HEADER ────────────────────────────────────── */
     header {
-      margin-bottom: 12px;
+      margin-bottom: calc(12px * var(--poster-scale));
     }
 
     .header-top {
       display: flex;
       align-items: flex-start;
-      margin-bottom: 10px;
+      margin-bottom: calc(10px * var(--poster-scale));
     }
 
     .logo-placeholder {
-      width: 40mm;
-      height: 15mm;
-      border: 1px dashed #000000;
+      width:        calc(40mm  * var(--poster-scale));
+      height:       calc(15mm  * var(--poster-scale));
+      border:       calc(1px   * var(--poster-scale)) dashed #000000;
+      font-size:    calc(7.5pt * var(--poster-scale));
+      font-weight: bold;
+      margin-right: calc(15px  * var(--poster-scale));
+      flex-shrink: 0;
       display: flex;
       align-items: center;
       justify-content: center;
       text-align: center;
-      font-size: 7.5pt;
-      font-weight: bold;
-      margin-right: 15px;
-      flex-shrink: 0;
     }
 
     .title-area { flex-grow: 1; }
 
     .main-title {
-      font-size: 23pt;
+      font-size:     calc(23pt * var(--poster-scale));
       font-weight: bold;
       color: #000000;
       line-height: 1.1;
-      margin-bottom: 4px;
+      margin-bottom: calc(4px * var(--poster-scale));
     }
 
     .subtitle {
-      font-size: 10pt;
+      font-size:  calc(10pt * var(--poster-scale));
       font-style: italic;
       color: var(--color-annot);
     }
 
     .header-rule {
       border: none;
-      border-top: 1px solid var(--color-blue);
-      margin-bottom: 6px;
+      border-top:    calc(1px * var(--poster-scale)) solid var(--color-blue);
+      margin-bottom: calc(6px * var(--poster-scale));
     }
 
     .header-bottom {
       display: grid;
       grid-template-columns: 4.5fr 3fr 4.5fr;
-      font-size: 7.5pt;
+      font-size: calc(7.5pt * var(--poster-scale));
     }
 
     /* ─── ZONE 2 & 3 — COLUMNS ───────────────────────────────── */
     .poster-body {
       display: flex;
       flex-grow: 1;
-      gap: 16px;
+      gap: calc(16px * var(--poster-scale));
       overflow: hidden;
     }
 
     .left-column, .right-column {
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: calc(12px * var(--poster-scale));
     }
 
     .left-column  { width: 41%; }
@@ -151,28 +158,28 @@
     .problem-section {
       display: flex;
       flex-direction: column;
-      gap: 5px;
+      gap: calc(5px * var(--poster-scale));
     }
 
     .problem-chip {
       background-color: #FFF0F0;
-      border: 1px solid #EF4444;
-      border-radius: 20px;
-      padding: 5px 10px;
+      border:        calc(1px  * var(--poster-scale)) solid #EF4444;
+      border-radius: calc(20px * var(--poster-scale));
+      padding:       calc(5px  * var(--poster-scale)) calc(10px * var(--poster-scale));
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: calc(8px * var(--poster-scale));
     }
 
     .chip-icon {
       color: #EF4444;
       font-weight: bold;
-      font-size: 9pt;
-      width: 10px;
+      font-size: calc(9pt  * var(--poster-scale));
+      width:     calc(10px * var(--poster-scale));
     }
 
     .chip-text {
-      font-size: 8pt;
+      font-size:   calc(8pt * var(--poster-scale));
       line-height: 1.2;
     }
 
@@ -188,7 +195,7 @@
       flex-direction: column;
       justify-content: space-between;
       flex-grow: 1;
-      margin-top: 4px;
+      margin-top: calc(4px * var(--poster-scale));
     }
 
     .pipeline-row {
@@ -197,9 +204,9 @@
     }
 
     .node-block {
-      width: var(--node-w);
-      min-height: var(--node-h);
-      padding: 4px 6px;
+      width:         var(--node-w);
+      min-height:    var(--node-h);
+      padding:       calc(4px * var(--poster-scale)) calc(6px * var(--poster-scale));
       border-radius: var(--node-r);
       text-align: center;
       flex-shrink: 0;
@@ -210,7 +217,7 @@
     }
 
     .node-label {
-      font-size: 8pt;
+      font-size:   calc(8pt * var(--poster-scale));
       font-weight: bold;
       line-height: 1.1;
     }
@@ -218,22 +225,22 @@
     .model-badge {
       background-color: var(--color-blue);
       color: #FFFFFF;
-      font-size: 6.5pt;
-      padding: 1px 4px;
-      border-radius: 8px;
-      margin-top: 2px;
+      font-size:     calc(6.5pt * var(--poster-scale));
+      padding:       calc(1px   * var(--poster-scale)) calc(4px * var(--poster-scale));
+      border-radius: calc(8px   * var(--poster-scale));
+      margin-top:    calc(2px   * var(--poster-scale));
       display: inline-block;
     }
 
     .node-annotation {
-      margin-left: 10px;
+      margin-left: calc(10px * var(--poster-scale));
       line-height: 1.2;
     }
 
     .pipeline-arrow {
-      width: var(--node-w);
+      width:      var(--node-w);
       text-align: center;
-      font-size: 7pt;
+      font-size:  calc(7pt * var(--poster-scale));
       color: var(--color-annot);
       line-height: 1;
       flex-shrink: 0;
@@ -241,31 +248,25 @@
 
     /* ─── PANEL 1 — SYSTEM IN ACTION ─────────────────────────── */
     .system-action-box {
-      border: 1px dashed #333333;
+      border:           calc(1px  * var(--poster-scale)) dashed #333333;
       background-color: #F4F4F4;
-      border-radius: 4px;
+      border-radius:    calc(4px  * var(--poster-scale));
       flex-grow: 1;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 16px;
+      padding:    calc(16px * var(--poster-scale));
       text-align: center;
-      margin-top: 4px;
-    }
-
-    .system-action-box p {
-      font-size: 8.5pt;
-      color: var(--color-annot);
-      font-style: italic;
+      margin-top: calc(4px  * var(--poster-scale));
     }
 
     /* ─── PANEL 2 — OUTPUT FILES ─────────────────────────────── */
     .panes-container {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 12px;
+      gap:        calc(12px * var(--poster-scale));
       flex-grow: 1;
-      margin-top: 4px;
+      margin-top: calc(4px  * var(--poster-scale));
     }
 
     .terminal-pane-wrapper {
@@ -275,9 +276,9 @@
 
     .terminal-pane {
       background-color: #1E1E2E;
-      border-top: 3px solid var(--color-blue);
-      border-radius: 4px;
-      padding: 8px;
+      border-top:    calc(3px * var(--poster-scale)) solid var(--color-blue);
+      border-radius: calc(4px * var(--poster-scale));
+      padding:       calc(8px * var(--poster-scale));
       flex-grow: 1;
       display: flex;
       flex-direction: column;
@@ -285,15 +286,15 @@
 
     .terminal-header {
       color: #FFFFFF;
-      font-size: 8pt;
+      font-size:     calc(8pt * var(--poster-scale));
       font-weight: bold;
-      margin-bottom: 6px;
+      margin-bottom: calc(6px * var(--poster-scale));
     }
 
     .terminal-inner-box {
-      border: 1px dashed #777777;
-      border-radius: 3px;
-      padding: 8px;
+      border:        calc(1px * var(--poster-scale)) dashed #777777;
+      border-radius: calc(3px * var(--poster-scale));
+      padding:       calc(8px * var(--poster-scale));
       flex-grow: 1;
       display: flex;
       align-items: center;
@@ -303,13 +304,13 @@
 
     .terminal-inner-box p {
       color: #B5B5BC;
-      font-size: 7.5pt;
+      font-size:  calc(7.5pt * var(--poster-scale));
       font-style: italic;
     }
 
     .pane-caption {
-      margin-top: 4px;
-      font-size: 7pt;
+      margin-top: calc(4px * var(--poster-scale));
+      font-size:  calc(7pt  * var(--poster-scale));
       font-style: italic;
     }
 
@@ -317,7 +318,7 @@
     .lifecycle-layout {
       position: relative;
       flex-grow: 1;
-      margin-top: 6px;
+      margin-top: calc(6px * var(--poster-scale));
       min-height: var(--lifecycle-min-h);
     }
 
@@ -334,13 +335,13 @@
     }
 
     .state-node {
-      width: var(--state-w);
-      height: var(--state-h);
+      width:         var(--state-w);
+      height:        var(--state-h);
       border-radius: var(--state-r);
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 8pt;
+      font-size:   calc(8pt * var(--poster-scale));
       font-weight: bold;
       flex-shrink: 0;
     }
@@ -354,21 +355,34 @@
     /* SVG overlay — JS writes all paths/arrows into this */
     .lifecycle-svg {
       position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
       pointer-events: none;
       overflow: visible;
     }
 
     .lifecycle-footer-note {
-      margin-top: 6px;
-      font-size: 7.5pt;
+      margin-top: calc(6px   * var(--poster-scale));
+      font-size:  calc(7.5pt * var(--poster-scale));
       font-style: italic;
       color: var(--color-annot);
     }
   </style>
+
+  <script>
+    /* Inject @page size for print/PDF based on --poster-scale. Runs in <head>
+       so the rule is available before the first paint. */
+    (function () {
+      const scale = parseFloat(
+        getComputedStyle(document.documentElement)
+          .getPropertyValue('--poster-scale').trim()
+      ) || 1;
+      const size = scale >= 4 ? 'A0' : scale >= 2 ? 'A2' : 'A4';
+      const el = document.createElement('style');
+      el.textContent = `@page { size: ${size} portrait; margin: 0; }`;
+      document.head.appendChild(el);
+    })();
+  </script>
 </head>
 <body>
 
@@ -530,13 +544,8 @@
 
       <div class="panel">
         <h2>Every Block Has a Lifecycle</h2>
-        <p style="margin-bottom:4px">Once detected, a block lives through four states. Identity is spatial — a correction in-place is a new version of the same entity; a rewrite at a new location is a new entity entirely.</p>
+        <p style="margin-bottom: calc(4px * var(--poster-scale))">Once detected, a block lives through four states. Identity is spatial — a correction in-place is a new version of the same entity; a rewrite at a new location is a new entity entirely.</p>
 
-        <!--
-          Nodes are plain flex rows. The SVG overlay is empty on load;
-          drawLifecycle() reads actual DOM positions and writes all
-          arrows + labels into it — no hardcoded coordinates.
-        -->
         <div class="lifecycle-layout" id="lifecycle-layout">
           <div class="lifecycle-nodes">
             <div class="state-node-row">
@@ -567,15 +576,20 @@
 
   <script>
     /**
-     * Reads the rendered positions of [data-state] nodes inside #lifecycle-layout,
-     * then writes all SVG arrows and labels into #lifecycle-svg.
-     * Re-runs on resize so the diagram stays correct at any zoom / print scale.
+     * Reads --poster-scale, then measures actual DOM positions of [data-state]
+     * nodes and writes all SVG arrows + labels into #lifecycle-svg.
+     * All offsets scale with S so the diagram is correct at any poster size.
      */
     function drawLifecycle() {
       const layout = document.getElementById('lifecycle-layout');
       const svg    = document.getElementById('lifecycle-svg');
       const nodes  = Array.from(layout.querySelectorAll('[data-state]'));
       if (nodes.length < 4) return;
+
+      const S = parseFloat(
+        getComputedStyle(document.documentElement)
+          .getPropertyValue('--poster-scale').trim()
+      ) || 1;
 
       const base = layout.getBoundingClientRect();
       const pos  = nodes.map(n => {
@@ -594,16 +608,18 @@
       const H = layout.offsetHeight;
       svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
 
-      // Right-side vertical rail: sits just past the node right edge
-      const railX  = pos[0].right + 16;
-      const labelX = railX + 4;
+      const railX  = pos[0].right + 16 * S;
+      const labelX = railX + 4 * S;
+      const sw     = (1.2 * S).toFixed(2);
+      const fs     = (7.5 * S).toFixed(1);
+      const mSize  = Math.round(4 * S);
 
-      const arrow = d => `<path d="${d}" stroke="#333" stroke-width="1.2" fill="none" marker-end="url(#lc-arr)"/>`;
-      const label = (x, y, t) => `<text x="${x}" y="${y}" font-size="7.5" font-style="italic" fill="#555555">${t}</text>`;
+      const arrow = d  => `<path d="${d}" stroke="#333" stroke-width="${sw}" fill="none" marker-end="url(#lc-arr)"/>`;
+      const label = (x, y, t) => `<text x="${x}" y="${y}" font-size="${fs}" font-style="italic" fill="#555555">${t}</text>`;
 
       let s = `<defs>
         <marker id="lc-arr" viewBox="0 0 10 10" refX="8" refY="5"
-                markerWidth="4" markerHeight="4" orient="auto-start-reverse">
+                markerWidth="${mSize}" markerHeight="${mSize}" orient="auto-start-reverse">
           <path d="M 0 2 L 8 5 L 0 8 z" fill="#333"/>
         </marker>
       </defs>`;
@@ -612,15 +628,13 @@
       const downLabels = ['stable for 10 s', 'OCR result received', 'absent for 1 s'];
       for (let i = 0; i < 3; i++) {
         const x  = pos[i].cx;
-        const y1 = pos[i].bottom + 1;
-        const y2 = pos[i + 1].top - 1;
+        const y1 = pos[i].bottom + S;
+        const y2 = pos[i + 1].top - S;
         s += arrow(`M ${x} ${y1} L ${x} ${y2}`);
-        // label offset below midpoint so it doesn't collide with back-arrow labels
-        s += label(x + 4, (y1 + y2) / 2 + 5, downLabels[i]);
+        s += label(x + 4 * S, (y1 + y2) / 2 + 5 * S, downLabels[i]);
       }
 
       // ── Back arrows (INFERRING→STAB, ACTIVE→STAB) via right rail ──
-      // Both share the same vertical rail; each contributes a horizontal stub.
       const stabCY = pos[0].cy;
       const stabRX = pos[0].right;
       [1, 2].forEach(i => {
@@ -628,10 +642,10 @@
         s += arrow(`M ${right} ${cy} L ${railX} ${cy} L ${railX} ${stabCY} L ${stabRX} ${stabCY}`);
       });
 
-      // Label positioned between STAB and INFERRING, beside the rail
+      // Label between STAB and INFERRING, beside the rail
       const midY = (pos[0].cy + pos[1].cy) / 2;
-      s += label(labelX, midY - 4, 'drift > 50 px');
-      s += label(labelX, midY + 6, '(edit in place)');
+      s += label(labelX, midY - 4 * S, 'drift > 50 px');
+      s += label(labelX, midY + 6 * S, '(edit in place)');
 
       svg.innerHTML = s;
     }
