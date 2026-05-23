@@ -16,21 +16,21 @@ On the whiteboard, handwritten in black marker, are five text blocks in differen
 **Label style (applies to all blocks):** Every state label tag is a flat rectangular chip with sharp square corners. Background color matches the bounding box color exactly. Text is black. Same height and padding across all labels. No rounded corners anywhere.
 
 **Block 1 — top-left, ERASED:**
-The text has been completely erased. No letters visible. Inside the box is only a faint diffuse dark cloud — a soft, slightly grayish smudge on the white surface, the kind of residue left after a thorough wipe. No streaks, no readable text, just a subtle dark haze. Bounding box is a solid rectangle in color #DC0000 (red). Label tag: #DC0000 background, black text, sharp square corners, reads `#1 ERASED`
+The text has been completely erased. No letters visible. Inside the box is only a faint diffuse dark cloud — a soft, slightly grayish smudge on the white surface, the kind of residue left after a thorough wipe. No streaks, no readable text, just a subtle dark haze. Bounding box is a solid rectangle in color #DC2626 (red). Label tag: #DC2626 background, black text, sharp square corners, reads `#1 ERASED`
 
 **Block 2 — top-center, ACTIVE:**
-Text: "Forward pass: make a prediction" — clean dark handwriting, naturally wrapping across two lines. Solid bounding box in color #00E600 (green). On the top-left corner of the box, sitting on top of the bounding box border, one label badge: flat rectangular chip with sharp square corners, green (#00E600) background, black text, reads `#2 ACTIVE`.
+Text: "Forward pass: make a prediction" — clean dark handwriting, naturally wrapping across two lines. Solid bounding box in color #22C55E (green). On the top-left corner of the box, sitting on top of the bounding box border, one label badge: flat rectangular chip with sharp square corners, green (#22C55E) background, black text, reads `#2 ACTIVE`.
 
 **Block 3 — middle-left, INFERRING:**
 Text: "Loss: measure how wrong" — clean dark handwriting, on a single line. Solid bounding box in color #FFC800 (amber/yellow). Label tag reads: `#3 INFERRING`
 
 **Block 4 — middle-right, ACTIVE:**
-Text: "w = w - lr * grad" — clean dark handwriting, all on a single line, written like a simple equation. Solid bounding box in color #00E600 (green). Label tag reads: `#4 ACTIVE`
+Text: "w = w - lr * grad" — clean dark handwriting, all on a single line, written like a simple equation. Solid bounding box in color #22C55E (green). Label tag reads: `#4 ACTIVE`
 
 **Block 5 — bottom-center, STABILIZING:**
 Text: "Repeat millions of times" — clean handwriting, slightly fresher ink as if just written, naturally wrapping across two lines. Solid bounding box in color #FFA500 (orange). Label tag reads: `#5 STABILIZING`
 
-The bounding box colors must be exactly: STABILIZING boxes are #FFA500 (orange), INFERRING boxes are #FFC800 (amber), ACTIVE boxes are #00E600 (medium green), ERASED boxes are #DC0000 (red). The label tags use the same color as their box. All bounding boxes are solid.
+The bounding box colors must be exactly: STABILIZING boxes are #FFA500 (orange), INFERRING boxes are #FFC800 (amber), ACTIVE boxes are #22C55E (medium green), ERASED boxes are #DC2626 (red). The label tags use the same color as their box. All bounding boxes are solid.
 
 The overall aesthetic is a developer tool UI overlay — precise, geometric colored rectangles on a clean white surface. No humans, no room background, no shadows from a person. The whiteboard fills the frame edge to edge. Lighting is flat and even. Photorealistic, not illustrated.
 

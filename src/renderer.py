@@ -24,8 +24,8 @@ log = logging.getLogger(__name__)
 _STATE_COLORS: dict[EntityState, tuple[int, int, int]] = {
     EntityState.STABILIZING: (0, 165, 255),
     EntityState.INFERRING: (0, 200, 255),
-    EntityState.ACTIVE: (0, 230, 0),
-    EntityState.ERASED: (0, 0, 220),
+    EntityState.ACTIVE: (94, 197, 34),    # #22C55E
+    EntityState.ERASED: (38, 38, 220),    # #DC2626
 }
 
 _CORNER_LABELS = ["TL", "TR", "BR", "BL"]

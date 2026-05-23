@@ -19,7 +19,7 @@ A0 academic research poster, portrait orientation (841 × 1189 mm, ~1:1.41 ratio
 - Red tint #FFF0F0 with thin #ef4444 border — problem callout chip backgrounds
 - Terminal pane backgrounds: dark charcoal #1E1E2E
 - Body text: dark gray #333333
-- State machine colors match codebase renderer.py exactly: STABILIZING #FFA500, INFERRING #FFC800, ACTIVE #00E600, ERASED #DC0000
+- State machine colors match codebase renderer.py exactly: STABILIZING #FFA500, INFERRING #FFC800, ACTIVE #22C55E, ERASED #DC2626
 
 ---
 
@@ -192,8 +192,8 @@ Render this diagram faithfully, using the ASCII layout below as the exact struct
 Node colors (fill, white bold label):
 - STABILIZING: orange #FFA500
 - INFERRING: golden #FFC800, white text
-- ACTIVE: bright green #00E600, white text
-- ERASED: red #DC0000, white text
+- ACTIVE: bright green #22C55E, white text
+- ERASED: red #DC2626, white text
 
 Small italic annotation to the right of each node:
 - STABILIZING: "new block, or drift reset"
