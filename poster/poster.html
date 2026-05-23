@@ -145,28 +145,28 @@
     .problem-section {
       display: flex;
       flex-direction: column;
-      gap: calc(5px * var(--poster-scale));
+      gap: calc(3px * var(--poster-scale));
     }
 
     .problem-chip {
       background-color: #FFF0F0;
       border:        calc(1px  * var(--poster-scale)) solid #EF4444;
       border-radius: calc(20px * var(--poster-scale));
-      padding:       calc(5px  * var(--poster-scale)) calc(10px * var(--poster-scale));
+      padding:       calc(3px  * var(--poster-scale)) calc(8px * var(--poster-scale));
       display: flex;
       align-items: center;
-      gap: calc(8px * var(--poster-scale));
+      gap: calc(6px * var(--poster-scale));
     }
 
     .chip-icon {
       color: #EF4444;
       font-weight: bold;
-      font-size: calc(9pt  * var(--poster-scale));
+      font-size: calc(8pt  * var(--poster-scale));
       width:     calc(10px * var(--poster-scale));
     }
 
     .chip-text {
-      font-size:   calc(8pt * var(--poster-scale));
+      font-size:   calc(7.5pt * var(--poster-scale));
       line-height: 1.2;
     }
 
@@ -180,7 +180,6 @@
     .pipeline-container {
       display: flex;
       flex-direction: column;
-      justify-content: space-between;
       flex-grow: 1;
       margin-top: calc(4px * var(--poster-scale));
     }
@@ -188,6 +187,7 @@
     .pipeline-row {
       display: flex;
       align-items: center;
+      flex: 1;
     }
 
     .node-block {
@@ -226,10 +226,12 @@
 
     .pipeline-arrow {
       width:      var(--node-w);
-      text-align: center;
+      height:     calc(16px * var(--poster-scale));
+      display: flex;
+      align-items: center;
+      justify-content: center;
       font-size:  calc(7pt * var(--poster-scale));
       color: var(--color-annot);
-      line-height: 1;
       flex-shrink: 0;
     }
 
@@ -454,7 +456,7 @@
 
           <div class="pipeline-row">
             <div class="node-block" style="background-color:#34A853;color:#FFFFFF">
-              <span class="node-label">Text Line Detection</span><br><span class="model-badge">PaddleOCR PP-OCRv5_server_det</span>
+              <span class="node-label">Text Line Detection</span><br><span class="model-badge">PP-OCRv5 server det</span>
             </div>
             <div class="node-annotation italic-annotation">Detects every text line on clean composite. Async subprocess.</div>
           </div>
@@ -474,7 +476,7 @@
 
           <div class="pipeline-row">
             <div class="node-block" style="background-color:#5C6BC0;color:#FFFFFF">
-              <span class="node-label">OCR Transcription</span><br><span class="model-badge">PaddleOCR-VL-1.5 (default) · GOT-OCR 2.0 (alt)</span>
+              <span class="node-label">OCR Transcription</span><br><span class="model-badge">PaddleOCR-VL-1.5</span>
             </div>
             <div class="node-annotation italic-annotation">VLM reads each stable entity crop. Async subprocess.</div>
           </div>
@@ -482,7 +484,7 @@
 
           <div class="pipeline-row">
             <div class="node-block" style="background-color:#9334E6;color:#FFFFFF"><span class="node-label">Ledger Synthesis</span></div>
-            <div class="node-annotation italic-annotation">Re-renders live.md + lecture_history.md from in-memory ledger. Atomic overwrite (tmp &rarr; rename). In-memory record never deletes — only accumulates.</div>
+            <div class="node-annotation italic-annotation">Atomic overwrite of live.md + lecture_history.</div>
           </div>
         </div>
       </div>
