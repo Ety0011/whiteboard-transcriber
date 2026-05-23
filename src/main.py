@@ -60,6 +60,7 @@ log = logging.getLogger(__name__)
 # TODO: add revisions label "pill" in video
 # TODO: make all stages async
 # TODO: remove annoyint mediapipe warning E0000
+# TODO: update doc to reflect actual 10 stages pipeline
 def main() -> None:
     suppress_noise()
     parser = argparse.ArgumentParser(description="Whiteboard transcription pipeline")
