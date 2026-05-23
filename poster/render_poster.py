@@ -5,7 +5,7 @@ from playwright.sync_api import sync_playwright
 
 def generate_pdf():
     # Get absolute path to your HTML file
-    html_path = os.path.abspath("poster_A0.html")
+    html_path = os.path.abspath("poster.html")
 
     with sync_playwright() as p:
         # Launch a headless browser
@@ -29,7 +29,7 @@ def generate_pdf():
         )
 
         browser.close()
-    print("Success: A0 PDF generated as 'output_poster_A0.pdf'")
+    print("Success: A0 PDF generated as 'poster.pdf'")
 
 
 if __name__ == "__main__":

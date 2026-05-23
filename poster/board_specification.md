@@ -92,7 +92,7 @@ Training is iterative
 
 Forward pass: make a prediction
 
-<details><summary>1 revision</summary>
+<details open><summary>1 revision</summary>
 
 1. Forward pass: make a guess
 
