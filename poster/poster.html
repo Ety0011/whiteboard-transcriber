@@ -667,50 +667,44 @@
   <script>
     const liveMd = `# Whiteboard
 
-## Gradient Descent
-
-\`∂L/∂w = −η · (1/n) Σ xᵢ(yᵢ − ŷᵢ)\`
+Forward pass: make a prediction
 
 ---
 
-## Backpropagation
-
-\`δˡ = ((Wˡ⁺¹)ᵀ δˡ⁺¹) ⊙ σ'(zˡ)\`
-
----
-
-## Chain Rule
-
-\`∂L/∂wˡ = δˡ · (aˡ⁻¹)ᵀ\`
+w = w - lr * grad
 `;
 
     const historyMd = `# Lecture Notes
 
 ## Contents
 
-- 09:14 — Gradient Descent
-- 09:22 — Backpropagation
-- 09:31 — Chain Rule
+- [09:03](#ent1-0903): Training is iterative
+- [09:07](#ent2-0907): Forward pass: make a prediction
+- [09:18](#ent4-0918): w = w - lr * grad
 
 ---
 
-## 09:14
+## 09:03 {#ent1-0903}
 
-\`∂L/∂w = −η · (1/n) Σ xᵢ(yᵢ − ŷᵢ)\`
+Training is iterative
+
+---
+
+## 09:07 {#ent2-0907}
+
+Forward pass: make a prediction
 
 <details><summary>1 revision</summary>
 
-w ← w − α · ∂L/∂w
+1. It guesses
 
 </details>
 
-## 09:22
+---
 
-\`δˡ = ((Wˡ⁺¹)ᵀ δˡ⁺¹) ⊙ σ'(zˡ)\`
+## 09:18 {#ent4-0918}
 
-## 09:31
-
-\`∂L/∂wˡ = δˡ · (aˡ⁻¹)ᵀ\`
+w = w - lr * grad
 `;
 
     document.getElementById('live-md-content').innerHTML    = marked.parse(liveMd);
