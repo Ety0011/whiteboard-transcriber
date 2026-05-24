@@ -35,10 +35,11 @@ from board.person import PersonMasker
 from board.rectifier import Rectifier
 from capture import Capture
 from layout import (
-    AABBTreeGrouper,
-    HDBSCANGrouper,
+    AABBTreeClusterer,
+    HDBSCANClusterer,
+    SingleLinkageClusterer,
     TextBlockDetector,
-    UnionFindGrouper,
+    UnionFindClusterer,
 )
 from layout.discovery import Discovery
 from ledger import Ledger
@@ -56,7 +57,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 log = logging.getLogger(__name__)
 
 
-# TODO: fix aabb grouper not working as intended
+# TODO: fix aabb clusterer not working as intended
 # TODO: add revisions label "pill" in video
 # TODO: make all stages async
 # TODO: remove annoyint mediapipe warning E0000
@@ -72,7 +73,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--detector",
-        choices=["unionfind", "hdbscan", "aabbtree"],
+        choices=["unionfind", "hdbscan", "aabbtree", "singlelinkage"],
         default="unionfind",
         help="Stage 5 layout detection backend",
     )
@@ -115,9 +116,10 @@ def main() -> None:
     reconstructor = BoardReconstructor()
 
     detector_factories = {
-        "unionfind": partial(TextBlockDetector, strategy=UnionFindGrouper()),
-        "hdbscan": partial(TextBlockDetector, strategy=HDBSCANGrouper()),
-        "aabbtree": partial(TextBlockDetector, strategy=AABBTreeGrouper()),
+        "unionfind": partial(TextBlockDetector, strategy=UnionFindClusterer()),
+        "hdbscan": partial(TextBlockDetector, strategy=HDBSCANClusterer()),
+        "aabbtree": partial(TextBlockDetector, strategy=AABBTreeClusterer()),
+        "singlelinkage": partial(TextBlockDetector, strategy=SingleLinkageClusterer()),
     }
 
     transcriber_factories = {
