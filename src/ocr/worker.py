@@ -1,4 +1,4 @@
-"""Transcriber — subprocess manager for any BaseTranscriber backend.
+"""TranscriptionWorker — subprocess manager for any BaseTranscriber backend.
 
 Mirrors LayoutWorker: factory is pickled and shipped to the worker process;
 model loading happens inside the subprocess after unpickling. Main process
@@ -63,7 +63,7 @@ def _worker_main(
             _log.warning("output queue full — entity %d dropped", entity_id)
 
 
-class Transcriber:
+class TranscriptionWorker:
     """Non-blocking transcription worker running in a dedicated subprocess.
 
     submit() enqueues a crop. get_results() drains completed transcriptions.
@@ -80,7 +80,7 @@ class Transcriber:
             name="transcription-worker",
         )
         self._worker.start()
-        log.info("Transcriber started (pid=%d)", self._worker.pid)
+        log.info("TranscriptionWorker started (pid=%d)", self._worker.pid)
 
     def submit(self, entity_id: int, crop: np.ndarray) -> None:
         """Enqueue *crop* for transcription. Non-blocking; logs if queue full."""

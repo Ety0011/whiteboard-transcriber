@@ -29,9 +29,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from board.compositor import BoardReconstructor
 from board.masker import BoardMasker
-from board.person import PersonMasker
+from board.person_masker import PersonMasker
+from board.reconstructor import BoardReconstructor
 from board.rectifier import Rectifier
 from capture import Capture
 from layout import (
@@ -49,7 +49,7 @@ from ocr import (
     MockTranscriber,
     PaddleVLTranscriber,
 )
-from ocr.transcriber import Transcriber
+from ocr.worker import TranscriptionWorker
 from registry import EntityState, Registry, SemanticEntity
 from renderer import Renderer
 
@@ -130,7 +130,7 @@ def main() -> None:
 
     layout_worker = LayoutWorker(factory=detector_factories[args.detector])
     registry = Registry()
-    transcriber = Transcriber(factory=transcriber_factories[args.transcriber])
+    transcriber = TranscriptionWorker(factory=transcriber_factories[args.transcriber])
     ledger = Ledger(output_dir=args.output_dir)
     renderer = Renderer()
     pending_ocr: dict[int, SemanticEntity] = {}
