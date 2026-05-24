@@ -1,7 +1,7 @@
 """PaddleOCR text-line detector.
 
 TextLineDetector wraps PP-OCRv5_server_det and runs synchronously inside the
-stage5-layout subprocess.
+layout-detector subprocess.
 """
 
 import logging
@@ -76,7 +76,7 @@ class TextLineDetector:
     """Synchronous PaddleOCR text line detector.
 
     Runs PP-OCRv5_server_det directly in the calling process. Intended to be
-    called from inside the stage5-layout subprocess, which provides async
+    called from inside the layout-detector subprocess, which provides async
     isolation relative to the main process.
     """
 
@@ -85,7 +85,7 @@ class TextLineDetector:
         self,
         box_thresh: float = 0.6,
         unclip_ratio: float = 1.2,
-        thresh: float | None = 0.2,
+        thresh: float = 0.3,
     ) -> None:
         """Configure the detector.
 
@@ -119,9 +119,8 @@ class TextLineDetector:
                 model_name="PP-OCRv5_server_det",
                 box_thresh=self._box_thresh,
                 unclip_ratio=self._unclip_ratio,
+                thresh=self._thresh,
             )
-            if self._thresh is not None:
-                kwargs["thresh"] = self._thresh
             self._detector = TextDetection(**kwargs)
         logger.info("PP-OCRv5_server_det ready")
 

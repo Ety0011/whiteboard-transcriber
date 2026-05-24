@@ -74,7 +74,7 @@ class LayoutWorker:
             target=_worker_main,
             args=(factory, self._in_q, self._out_q),
             daemon=False,
-            name="stage5-layout",
+            name="layout-detector",
         )
         self._worker.start()
         log.info("worker started (pid=%d)", self._worker.pid)

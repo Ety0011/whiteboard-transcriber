@@ -1,4 +1,4 @@
-"""Composite layout detector: PP-OCRv5_server_det + any TextLineClusterer strategy."""
+"""Composite layout detector: PP-OCRv5_server_det + any BaseTextLineClusterer strategy."""
 
 import logging
 
@@ -6,14 +6,14 @@ import numpy as np
 
 from .base import BaseLayoutDetector
 from .block import Block
-from .clusterer import TextLineClusterer
+from .clusterer import BaseTextLineClusterer
 from .text_detector import TextLineDetector
 
 log = logging.getLogger(__name__)
 
 
 class BlockDetector(BaseLayoutDetector):
-    """Compose TextLineDetector with a pluggable TextLineClusterer.
+    """Compose TextLineDetector with a pluggable BaseTextLineClusterer.
 
     Bridges Stage 5 text-line detection and Stage 6 grouping into the
     BaseLayoutDetector list[Block] contract expected by LayoutWorker.
@@ -27,7 +27,7 @@ class BlockDetector(BaseLayoutDetector):
     # TODO: thresh not exposed here
     def __init__(
         self,
-        strategy: TextLineClusterer,
+        strategy: BaseTextLineClusterer,
         box_thresh: float = 0.3,
         unclip_ratio: float = 1.2,
     ):

@@ -10,7 +10,7 @@ from .text_detector import TextLine
 from .block import Block
 
 
-class TextLineClusterer(ABC):
+class BaseTextLineClusterer(ABC):
     """Abstract interface for strategies that cluster TextLines into Blocks."""
 
     @abstractmethod

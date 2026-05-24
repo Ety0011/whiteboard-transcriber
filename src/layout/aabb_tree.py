@@ -11,7 +11,7 @@ import heapq
 import numpy as np
 
 from .block import Block
-from .clusterer import TextLineClusterer
+from .clusterer import BaseTextLineClusterer
 from .text_detector import TextLine
 
 
@@ -34,7 +34,7 @@ class AABBNode:
         return self.block is not None
 
 
-class AABBTreeClusterer(TextLineClusterer):
+class AABBTreeClusterer(BaseTextLineClusterer):
     """Greedy agglomerative line clusterer using anisotropic cost and AABB engulfment veto.
 
     Merges are processed cheapest-first via a min-heap.  The anisotropic cost

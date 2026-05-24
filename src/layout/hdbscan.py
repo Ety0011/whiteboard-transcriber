@@ -9,11 +9,11 @@ they share limited x-range.
 import numpy as np
 
 from .block import Block
-from .clusterer import TextLineClusterer
+from .clusterer import BaseTextLineClusterer
 from .text_detector import TextLine
 
 
-class HDBSCANClusterer(TextLineClusterer):
+class HDBSCANClusterer(BaseTextLineClusterer):
     """Density-based text-block clusterer using HDBSCAN with a custom distance metric.
 
     Args:

@@ -9,11 +9,11 @@ body lines in adjacent columns.
 import numpy as np
 
 from .block import Block
-from .clusterer import TextLineClusterer
+from .clusterer import BaseTextLineClusterer
 from .text_detector import TextLine
 
 
-class UnionFindClusterer(TextLineClusterer):
+class UnionFindClusterer(BaseTextLineClusterer):
     """Union-Find clusterer with asymmetric vertical/horizontal dilation.
 
     Clusters text lines into blocks by unioning any pair whose expanded

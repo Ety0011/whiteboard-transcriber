@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .block import Block
-from .clusterer import TextLineClusterer
+from .clusterer import BaseTextLineClusterer
 from .text_detector import TextLine
 
 
@@ -82,7 +82,7 @@ def _intersects(a: np.ndarray, b: np.ndarray) -> bool:
     return bool(a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1])
 
 
-class SingleLinkageClusterer(TextLineClusterer):
+class SingleLinkageClusterer(BaseTextLineClusterer):
     """Agglomerative clustering with obstacle veto and distance cap.
 
     Merges the closest cluster pair whose union bbox does not newly enclose
