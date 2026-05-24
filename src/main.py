@@ -29,7 +29,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from board.masker import BoardMasker
+from board.board_masker import BoardMasker
 from board.person_masker import PersonMasker
 from board.reconstructor import BoardReconstructor
 from board.rectifier import Rectifier

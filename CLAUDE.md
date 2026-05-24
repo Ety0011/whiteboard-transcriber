@@ -161,7 +161,7 @@ Camera / File
 
 Reads from webcam or file in a background thread. Uses a `Queue(maxsize=1)` — stale frames are dropped automatically, so the main loop always processes the latest frame.
 
-### Stage 1 — Board Masking (`board/masker.py`)
+### Stage 1 — Board Masking (`board/board_masker.py`)
 
 SAM 3.1 runs in a dedicated subprocess with a ~5s cadence. Takes a raw camera frame, returns a binary H×W uint8 mask (1=board, 0=background). Outputs `None` between cycles — the rectifier uses its cached homography when `None` is received. Does **not** perform corner extraction or homography computation.
 
@@ -287,7 +287,7 @@ whiteboard-transcriber/
     ├── ledger.py               # Stage 8: append-only ledger + file synthesis
     ├── renderer.py             # OpenCV overlay rendering (display only)
     ├── board/                  # Stages 1–4: visual surface pipeline
-    │   ├── masker.py           # Stage 1: SAM 3.1 async subprocess
+    │   ├── board_masker.py     # Stage 1: SAM 3.1 async subprocess
     │   ├── person_masker.py    # Stage 2: MediaPipe sync per-frame
     │   ├── rectifier.py        # Stage 3: homography + warp to 1920×1080
     │   └── reconstructor.py    # Stage 4: distance-weighted EMA composite
