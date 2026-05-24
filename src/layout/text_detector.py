@@ -80,7 +80,6 @@ class TextLineDetector:
     isolation relative to the main process.
     """
 
-    # TODO: just remove None option from thresh
     def __init__(
         self,
         box_thresh: float = 0.6,
@@ -97,7 +96,7 @@ class TextLineDetector:
                 inter-fragment gaps seen by the clusterer.
             thresh: Pixel-level binarization threshold on the probability map.
                 Lower values produce larger connected text regions and fewer
-                fragments before expansion. Pass None to use the model default.
+                fragments before expansion.
         """
         self._box_thresh = box_thresh
         self._unclip_ratio = unclip_ratio
@@ -133,6 +132,10 @@ class TextLineDetector:
         Returns:
             List of TextLine objects, or empty list on detection failure.
         """
+        if self._detector is None:
+            logger.error("Detect called before load completed")
+            return []
+
         h, w = composite.shape[:2]
         try:
             raw = self._detector.predict(composite)

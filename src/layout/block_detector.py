@@ -20,29 +20,16 @@ class BlockDetector(BaseLayoutDetector):
 
     Args:
         strategy: Clustering algorithm to apply to detected text lines.
-        box_thresh: Minimum confidence for PaddleOCR to report a text line.
-        unclip_ratio: Expansion ratio applied to detected polygon outlines.
     """
 
-    # TODO: thresh not exposed here
-    def __init__(
-        self,
-        strategy: BaseTextLineClusterer,
-        box_thresh: float = 0.3,
-        unclip_ratio: float = 1.2,
-    ):
+    def __init__(self, strategy: BaseTextLineClusterer) -> None:
         self.strategy = strategy
-        self.box_thresh = box_thresh
-        self.unclip_ratio = unclip_ratio
         self.line_detector: TextLineDetector | None = None
 
     def load(self) -> None:
         """Instantiate and load TextLineDetector inside the worker subprocess."""
         log.info("loading with strategy=%s", type(self.strategy).__name__)
-        self.line_detector = TextLineDetector(
-            box_thresh=self.box_thresh,
-            unclip_ratio=self.unclip_ratio,
-        )
+        self.line_detector = TextLineDetector()
         self.line_detector.load()
 
     def detect(self, frame: np.ndarray) -> list[Block]:
