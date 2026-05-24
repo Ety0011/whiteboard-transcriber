@@ -89,7 +89,7 @@ python src/main.py --display-width 1280
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `source` | positional | webcam | Video/image file path |
-| `--detector` | `unionfind\|hdbscan\|aabbtree` | `unionfind` | Stage 5/6 layout grouping strategy |
+| `--detector` | `unionfind\|hdbscan\|aabbtree\|singlelinkage` | `unionfind` | Stage 5/6 layout grouping strategy |
 | `--transcriber` | `mock\|got\|paddlevl` | `paddlevl` | Stage 7 OCR backend |
 | `--output-dir` | path | `output/` | Directory for `live.md` and `lecture_history.md` |
 | `--display-width` | int | `960` | Preview window width in pixels |
@@ -147,7 +147,7 @@ Camera / File
     ▼
 [Registry]                      Block → SemanticEntity lifecycle (state machine)
     │
-    ├──▶ [Stage 7: Transcriber] Async VLM → OCR text per entity
+    ├──▶ [Stage 7: TranscriptionWorker] Async VLM → OCR text per entity
     │
     ▼
 [Stage 8: Ledger]               Append-only record → live.md + lecture_history.md
@@ -165,7 +165,7 @@ Reads from webcam or file in a background thread. Uses a `Queue(maxsize=1)` — 
 
 SAM 3.1 runs in a dedicated subprocess with a ~5s cadence. Takes a raw camera frame, returns a binary H×W uint8 mask (1=board, 0=background). Outputs `None` between cycles — the rectifier uses its cached homography when `None` is received. Does **not** perform corner extraction or homography computation.
 
-### Stage 2 — Person Masking (`board/person.py`)
+### Stage 2 — Person Masking (`board/person_masker.py`)
 
 MediaPipe selfie segmenter runs synchronously every frame (~5ms). Returns a binary H×W uint8 mask (1=person). The person mask ensures that pixels under or near the body are never updated in Stage 4, preserving board content under occlusion.
 
@@ -175,7 +175,7 @@ Owns all geometric computation. When a new board mask arrives from Stage 1, it e
 
 **Homography update trigger:** ≥2 corners shift >50px *or* the new quad is larger than cached (area ratio ≥0.98).
 
-### Stage 4 — Board Reconstruction (`board/compositor.py`)
+### Stage 4 — Board Reconstruction (`board/reconstructor.py`)
 
 Maintains a clean board composite using distance-weighted EMA:
 
@@ -186,23 +186,24 @@ composite = (1 - lr) × composite + lr × frame
 
 Pixels near or under the person mask have `lr≈0` and are frozen at their last known value. When no person is detected, a uniform EMA (`lr = max_lr`) is applied directly, skipping the expensive `distanceTransform`.
 
-### Stage 5/6 — Layout Detection (`layout/discovery.py`, `layout/`)
+### Stage 5/6 — Layout Detection (`layout/worker.py`, `layout/`)
 
-`Discovery` manages the `stage5-layout` subprocess. Inside the worker:
+`LayoutWorker` manages the `layout-detector` subprocess. Inside the worker:
 1. `TextLineDetector` runs PaddleOCR `PP-OCRv5_server_det` synchronously, returning a list of `TextLine` objects (bbox + confidence).
-2. A `TextLineGrouper` strategy clusters lines into `Block` objects.
+2. A `BaseTextLineClusterer` strategy clusters lines into `Block` objects.
 
-Three grouping strategies are available:
+Four grouping strategies are available:
 
 | Strategy | Class | Behaviour |
 |----------|-------|-----------|
-| `unionfind` | `UnionFindGrouper` | Asymmetric v/h dilation over median line height; early-break on y-gap; width-ratio guard against header absorption |
-| `hdbscan` | `HDBSCANGrouper` | Scale-invariant anisotropic distance; noise lines become singleton blocks |
-| `aabbtree` | `AABBTreeGrouper` | Greedy agglomerative merge via min-heap + AABB engulfment veto |
+| `unionfind` | `UnionFindClusterer` | Asymmetric v/h dilation over median line height; early-break on y-gap; width-ratio guard against header absorption |
+| `hdbscan` | `HDBSCANClusterer` | Scale-invariant anisotropic distance; noise lines become singleton blocks |
+| `aabbtree` | `AABBTreeClusterer` | Greedy agglomerative merge via min-heap + AABB engulfment veto |
+| `singlelinkage` | `SingleLinkageClusterer` | Obstacle-vetoed agglomerative merge; nearest-point distance cap |
 
-### Stage 7 — OCR Transcription (`ocr/transcriber.py`, `ocr/`)
+### Stage 7 — OCR Transcription (`ocr/worker.py`, `ocr/`)
 
-`Transcriber` manages the `transcription-worker` subprocess. The worker accepts `(entity_id, crop)` pairs from an input queue (`maxsize=10`) and writes `TranscriptionResult` objects to an output queue (`maxsize=30`). Three backends:
+`TranscriptionWorker` manages the `transcription-worker` subprocess. The worker accepts `(entity_id, crop)` pairs from an input queue (`maxsize=10`) and writes `TranscriptionResult` objects to an output queue (`maxsize=30`). Three backends:
 
 | Backend | Class | Notes |
 |---------|-------|-------|
@@ -260,8 +261,8 @@ Three independent worker processes run throughout a session:
 | Process name | Owner class | Model | Queue design |
 |---|---|---|---|
 | `sam3-board-masker` | `BoardMasker` | SAM 3.1 | in: maxsize=1, out: maxsize=1 (drop-old pattern) |
-| `stage5-layout` | `Discovery` | PaddleOCR | in: maxsize=1, out: maxsize=1 (drop-old pattern) |
-| `transcription-worker` | `Transcriber` | VLM backend | in: maxsize=10, out: maxsize=30 |
+| `layout-detector` | `LayoutWorker` | PaddleOCR | in: maxsize=1, out: maxsize=1 (drop-old pattern) |
+| `transcription-worker` | `TranscriptionWorker` | VLM backend | in: maxsize=10, out: maxsize=30 |
 
 **Drop-old pattern** (used by board masker and layout): the output queue holds at most one result. Before publishing, the worker drains any stale result with `get_nowait()` before `put_nowait()`. The main loop always receives the freshest available result.
 
@@ -287,21 +288,23 @@ whiteboard-transcriber/
     ├── renderer.py             # OpenCV overlay rendering (display only)
     ├── board/                  # Stages 1–4: visual surface pipeline
     │   ├── masker.py           # Stage 1: SAM 3.1 async subprocess
-    │   ├── person.py           # Stage 2: MediaPipe sync per-frame
+    │   ├── person_masker.py    # Stage 2: MediaPipe sync per-frame
     │   ├── rectifier.py        # Stage 3: homography + warp to 1920×1080
-    │   └── compositor.py       # Stage 4: distance-weighted EMA composite
+    │   └── reconstructor.py    # Stage 4: distance-weighted EMA composite
     ├── layout/                 # Stages 5–6: text detection + grouping
     │   ├── base.py             # BaseLayoutDetector ABC
-    │   ├── block.py            # Block dataclass + TextLineGrouper ABC
-    │   ├── detector.py         # PaddleOCR text-line detection + UnionFind
-    │   ├── pipeline.py         # Composes detector + grouper strategy
-    │   ├── worker.py           # Discovery subprocess manager
+    │   ├── block.py            # Block dataclass
+    │   ├── clusterer.py        # BaseTextLineClusterer ABC
+    │   ├── text_detector.py    # TextLine dataclass + PaddleOCR detection
+    │   ├── block_detector.py   # Composes TextLineDetector + clusterer strategy
+    │   ├── worker.py           # LayoutWorker subprocess manager
     │   ├── union_find.py       # Grouping: asymmetric dilation + Union-Find
     │   ├── hdbscan.py          # Grouping: anisotropic HDBSCAN
-    │   └── aabb_tree.py        # Grouping: greedy agglomerative + AABB veto
+    │   ├── aabb_tree.py        # Grouping: greedy agglomerative + AABB veto
+    │   └── single_linkage.py   # Grouping: obstacle-vetoed agglomeration
     └── ocr/                    # Stage 7: VLM transcription
         ├── base.py             # BaseTranscriber ABC + TranscriptionResult
-        ├── worker.py           # Transcriber subprocess manager
+        ├── worker.py           # TranscriptionWorker subprocess manager
         ├── got.py              # GotTranscriber (GOT-OCR 2.0, HuggingFace)
         ├── paddle_vl.py        # PaddleVLTranscriber (PaddleOCR-VL-1.5, MLX)
         └── mock.py             # MockTranscriber (no model, for testing)
@@ -384,8 +387,8 @@ Use the drop-old queue pattern for single-result producers (board masker, layout
 
 ### Adding a New Grouper
 
-1. Subclass `TextLineGrouper` from `layout/block.py`.
-2. Implement `group(lines: list[TextLine]) -> list[Block]`.
+1. Subclass `BaseTextLineClusterer` from `layout/clusterer.py`.
+2. Implement `cluster(lines: list[TextLine]) -> list[Block]`.
 3. Add the module to `layout/__init__.py` exports.
 4. Register in `main.py`'s `detector_factories` dict and add the choice to `--detector`.
 
