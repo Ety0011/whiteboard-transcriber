@@ -80,9 +80,28 @@ class TextLineDetector:
     isolation relative to the main process.
     """
 
-    def __init__(self, box_thresh: float = 0.6, unclip_ratio: float = 1.2) -> None:
+    # TODO: just remove None option from thresh
+    def __init__(
+        self,
+        box_thresh: float = 0.6,
+        unclip_ratio: float = 1.2,
+        thresh: float | None = 0.2,
+    ) -> None:
+        """Configure the detector.
+
+        Args:
+            box_thresh: Minimum average pixel score inside a polygon for it to
+                be reported as a text line.
+            unclip_ratio: Vatti clipping expansion factor applied to each
+                detected polygon. Higher values grow bboxes outward, reducing
+                inter-fragment gaps seen by the clusterer.
+            thresh: Pixel-level binarization threshold on the probability map.
+                Lower values produce larger connected text regions and fewer
+                fragments before expansion. Pass None to use the model default.
+        """
         self._box_thresh = box_thresh
         self._unclip_ratio = unclip_ratio
+        self._thresh = thresh
         self._detector = None
 
     def load(self) -> None:
@@ -96,11 +115,14 @@ class TextLineDetector:
         with devnull_fds(1, 2):
             from paddleocr import TextDetection
 
-            self._detector = TextDetection(
+            kwargs: dict = dict(
                 model_name="PP-OCRv5_server_det",
                 box_thresh=self._box_thresh,
                 unclip_ratio=self._unclip_ratio,
             )
+            if self._thresh is not None:
+                kwargs["thresh"] = self._thresh
+            self._detector = TextDetection(**kwargs)
         logger.info("PP-OCRv5_server_det ready")
 
     def detect(self, composite: np.ndarray) -> list[TextLine]:
