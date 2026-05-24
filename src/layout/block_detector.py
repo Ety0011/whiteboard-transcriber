@@ -5,28 +5,30 @@ import logging
 import numpy as np
 
 from .base import BaseLayoutDetector
-from .block import Block, TextLineClusterer
+from .block import Block
+from .clusterer import TextLineClusterer
 from .text_detector import TextLineDetector
 
 log = logging.getLogger(__name__)
 
 
-class TextBlockDetector(BaseLayoutDetector):
+class BlockDetector(BaseLayoutDetector):
     """Compose TextLineDetector with a pluggable TextLineClusterer.
 
     Bridges Stage 5 text-line detection and Stage 6 grouping into the
-    BaseLayoutDetector list[Block] contract expected by Discovery.
+    BaseLayoutDetector list[Block] contract expected by LayoutWorker.
 
     Args:
-        strategy: Grouping algorithm to apply to detected text lines.
+        strategy: Clustering algorithm to apply to detected text lines.
         box_thresh: Minimum confidence for PaddleOCR to report a text line.
         unclip_ratio: Expansion ratio applied to detected polygon outlines.
     """
 
+    # TODO: thresh not exposed here
     def __init__(
         self,
         strategy: TextLineClusterer,
-        box_thresh: float = 0.6,
+        box_thresh: float = 0.3,
         unclip_ratio: float = 1.2,
     ):
         self.strategy = strategy
@@ -38,7 +40,8 @@ class TextBlockDetector(BaseLayoutDetector):
         """Instantiate and load TextLineDetector inside the worker subprocess."""
         log.info("loading with strategy=%s", type(self.strategy).__name__)
         self.line_detector = TextLineDetector(
-            box_thresh=self.box_thresh, unclip_ratio=self.unclip_ratio
+            box_thresh=self.box_thresh,
+            unclip_ratio=self.unclip_ratio,
         )
         self.line_detector.load()
 
@@ -54,7 +57,7 @@ class TextBlockDetector(BaseLayoutDetector):
         lines = self.line_detector.detect(frame)
         if not lines:
             return []
-        return sorted(self.strategy.group(lines), key=lambda b: b.bbox[1])
+        return sorted(self.strategy.cluster(lines), key=lambda b: b.bbox[1])
 
     def shutdown(self) -> None:
         """Propagate shutdown to the TextLineDetector (no-op for sync detector)."""
