@@ -83,14 +83,22 @@ def _intersects(a: np.ndarray, b: np.ndarray) -> bool:
 
 
 class SingleLinkageClusterer(BaseTextLineClusterer):
-    """Agglomerative clustering with obstacle veto and distance cap.
+    """Agglomerative clustering with obstacle veto, distance cap, and hysteresis.
 
     Merges the closest cluster pair whose union bbox does not newly enclose
     any third cluster and whose nearest-point distance is within max_gap_px.
     Repeats until no valid merge remains.
+
+    Hysteresis: pairs whose bboxes both overlapped a single block in the
+    previous call are granted an extended merge threshold of
+    ``max_gap_px + hysteresis_px``. This prevents multi-pixel detection
+    noise from oscillating co-block lines between merged and split states
+    across frames.
     """
 
-    def __init__(self, max_gap_px: float = 20.0) -> None:
+    def __init__(
+        self, max_gap_px: float = 20.0, hysteresis_px: float = 10.0
+    ) -> None:
         """Configure the clusterer.
 
         Args:
@@ -98,19 +106,46 @@ class SingleLinkageClusterer(BaseTextLineClusterer):
                 clusters for a merge to be attempted. Pairs beyond this
                 threshold are never pushed onto the heap, acting as a hard
                 stopping criterion.
+            hysteresis_px: Extra distance allowance granted to cluster pairs
+                that were co-block in the previous call. Prevents multi-pixel
+                detection noise from splitting stable groups.
         """
         self._max_gap_px = max_gap_px
+        self._hysteresis_px = hysteresis_px
+        self._prev_blocks: list[np.ndarray] = []
+
+    def _merge_threshold(self, a: np.ndarray, b: np.ndarray) -> float:
+        """Return the effective merge distance threshold for two bboxes.
+
+        Grants hysteresis_px of extra distance when both bboxes overlap a
+        common block from the previous call, indicating they were co-block
+        and should resist splitting due to detection noise.
+
+        Args:
+            a: Bbox (x1, y1, x2, y2) of the first candidate.
+            b: Bbox (x1, y1, x2, y2) of the second candidate.
+
+        Returns:
+            max_gap_px + hysteresis_px if co-block last frame, else max_gap_px.
+        """
+        if self._hysteresis_px > 0.0 and any(
+            _intersects(prev, a) and _intersects(prev, b)
+            for prev in self._prev_blocks
+        ):
+            return self._max_gap_px + self._hysteresis_px
+        return self._max_gap_px
 
     def cluster(self, lines: list[TextLine]) -> list[Block]:
         """Cluster text lines into blocks via obstacle-vetoed agglomeration.
 
         Args:
-            lines: Text lines from Stage 5 detection.
+            lines: Text lines from Stage 6 detection.
 
         Returns:
             List of Blocks, each enclosing one or more spatially coherent lines.
         """
         if not lines:
+            self._prev_blocks = []
             return []
 
         clusters: dict[int, _Cluster] = {
@@ -126,8 +161,10 @@ class SingleLinkageClusterer(BaseTextLineClusterer):
         ids = list(active)
         for i in range(len(ids)):
             for j in range(i + 1, len(ids)):
-                d = _distance(clusters[ids[i]].bbox, clusters[ids[j]].bbox)
-                if d <= self._max_gap_px:
+                a_bbox = clusters[ids[i]].bbox
+                b_bbox = clusters[ids[j]].bbox
+                d = _distance(a_bbox, b_bbox)
+                if d <= self._merge_threshold(a_bbox, b_bbox):
                     heapq.heappush(heap, (d, ids[i], ids[j]))
 
         while heap:
@@ -164,12 +201,14 @@ class SingleLinkageClusterer(BaseTextLineClusterer):
             for c in active:
                 if c == next_id:
                     continue
-                d = _distance(m_bbox, clusters[c].bbox)
-                if d <= self._max_gap_px:
+                c_bbox = clusters[c].bbox
+                d = _distance(m_bbox, c_bbox)
+                if d <= self._merge_threshold(m_bbox, c_bbox):
                     heapq.heappush(heap, (d, next_id, c))
 
             next_id += 1
 
+        self._prev_blocks = [clusters[cid].bbox for cid in active]
         return [
             Block(
                 bbox=self.compute_bbox(clusters[cid].lines),
