@@ -18,7 +18,7 @@ class BaseTextLineClusterer(ABC):
         """Cluster detected text lines into spatially coherent blocks.
 
         Args:
-            lines: Text lines produced by Stage 5 (PaddleOCR detection).
+            lines: Text lines produced by Stage 6 (PaddleOCR detection).
 
         Returns:
             List of Blocks, each covering one or more adjacent lines.

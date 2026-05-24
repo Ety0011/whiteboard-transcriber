@@ -1,4 +1,4 @@
-"""Stage 8 — Session Ledger.
+"""Stage 10 — Ledger Synthesis.
 
 Append-only in-memory record of every Semantic Entity seen during a session.
 Mutations (update, mark_erased) automatically write live.md and

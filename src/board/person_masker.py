@@ -1,4 +1,4 @@
-"""Stage 2 — Person Masker (MediaPipe, sync).
+"""Stage 3 — Person Segmentation (MediaPipe, sync).
 
 Runs MediaPipe selfie segmentation synchronously every frame to produce a
 person/shadow mask in the raw camera frame's coordinate space. Always returns

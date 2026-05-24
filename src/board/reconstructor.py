@@ -1,4 +1,4 @@
-"""Stage 4 — Specular-Free Board Reconstruction.
+"""Stage 5 — Surface Reconstruction.
 
 Maintains a clean composite of the whiteboard surface using a distance-weighted
 Exponential Moving Average (EMA).
@@ -44,7 +44,7 @@ class BoardReconstructor:
         """Update the board model and return the clean composite.
 
         Args:
-            frame: BGR uint8 rectified frame from Stage 3.
+            frame: BGR uint8 rectified frame from Stage 4.
             mask:  Binary body mask, uint8 H×W (1=occluder, 0=board).
 
         Returns:

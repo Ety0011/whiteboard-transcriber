@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 class BlockDetector(BaseLayoutDetector):
     """Compose TextLineDetector with a pluggable BaseTextLineClusterer.
 
-    Bridges Stage 5 text-line detection and Stage 6 grouping into the
+    Bridges Stage 6 text-line detection and Stage 7 block grouping into the
     BaseLayoutDetector list[Block] contract expected by LayoutWorker.
 
     Args:
@@ -36,7 +36,7 @@ class BlockDetector(BaseLayoutDetector):
         """Detect text lines then group them into blocks, sorted top-to-bottom.
 
         Args:
-            frame: BGR uint8 clean board composite from Stage 4.
+            frame: BGR uint8 clean board composite from Stage 5.
 
         Returns:
             List of Blocks sorted ascending by bbox y1.

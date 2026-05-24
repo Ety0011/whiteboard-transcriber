@@ -1,4 +1,4 @@
-"""Stage 5 — non-blocking layout detector running in a dedicated subprocess.
+"""Stage 6 — Text Line Detection (non-blocking subprocess).
 
 LayoutWorker wraps any BaseLayoutDetector behind a single input/output queue
 pair.  detect() is non-blocking: it submits the frame and immediately returns

@@ -11,10 +11,10 @@ Usage::
 
 Keyboard controls:
     q  — quit
-    w  — toggle Stage 1/2 corner overlay
-    p  — toggle Stage 1/2 body-mask overlay
-    t  — toggle Stage 5 block overlay
-    r  — toggle Stage 6 entity overlay
+    w  — toggle Stage 4 corner overlay
+    p  — toggle Stage 3 body-mask overlay
+    t  — toggle Stage 7 block overlay
+    r  — toggle Stage 8 entity overlay
 """
 
 from __future__ import annotations
@@ -61,7 +61,6 @@ log = logging.getLogger(__name__)
 # TODO: add revisions label "pill" in video
 # TODO: make all stages async
 # TODO: remove annoyint mediapipe warning E0000
-# TODO: update doc to reflect actual 10 stages pipeline
 def main() -> None:
     suppress_noise()
     parser = argparse.ArgumentParser(description="Whiteboard transcription pipeline")
@@ -74,14 +73,14 @@ def main() -> None:
     parser.add_argument(
         "--detector",
         choices=["unionfind", "hdbscan", "aabbtree", "singlelinkage"],
-        default="unionfind",
-        help="Stage 5 layout detection backend",
+        default="singlelinkage",
+        help="Stage 6 layout detection backend",
     )
     parser.add_argument(
         "--transcriber",
         choices=["mock", "got", "paddlevl"],
         default="paddlevl",
-        help="Stage 7 OCR backend",
+        help="Stage 9 OCR backend",
     )
     parser.add_argument(
         "--display-width",
@@ -166,21 +165,23 @@ def main() -> None:
             fps = 0.9 * fps + 0.1 / max(now - _last_t, 1e-6)
             _last_t = now
 
-            # Stage 1 — board mask (SAM, async, ~10s cadence)
+            # Stage 2 — board segmentation (SAM, async, ~10s cadence)
             board_mask = board_masker.segment(frame)
-            # Stage 2 — person mask (MediaPipe, sync, per-frame)
+            # Stage 3 — person segmentation (MediaPipe, sync, per-frame)
             person_mask = person_masker.segment(frame)
-            # Stage 3+4 — rectify every frame using cached homography
+            # Stage 4 — perspective correction (cached homography)
             rect_frame, rect_mask = rectifier.rectify(frame, board_mask, person_mask)
+            # Stage 5 — surface reconstruction
             composite = reconstructor.update(rect_frame, rect_mask)
 
-            # Stage 5 — layout detection (async, non-blocking)
+            # Stage 6 — text line detection (async, non-blocking)
+            # Stage 7 — block grouping
             blocks = layout_worker.detect(composite)
 
-            # Stage 6 — entity lifecycle (cross-frame persistence)
+            # Stage 8 — entity registry (cross-frame persistence)
             entity_update = registry.tick(blocks, composite.shape[:2])
 
-            # Stage 7 — submit newly dispatched entities to VLM (non-blocking)
+            # Stage 9 — OCR transcription (non-blocking)
             for entity in entity_update.newly_inferring:
                 x1, y1, x2, y2 = entity.bbox
                 crop = composite[y1:y2, x1:x2]
@@ -197,7 +198,7 @@ def main() -> None:
                     registry.mark_active(entity, result.text)
                     ledger.update(entity.id, entity.bbox, result.text)
 
-            # Stage 8 — erasure events
+            # Stage 10 — ledger synthesis
             for entity in entity_update.newly_erased:
                 pending_ocr.pop(entity.id, None)
                 ledger.mark_erased(entity.id)

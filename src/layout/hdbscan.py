@@ -62,7 +62,7 @@ class HDBSCANClusterer(BaseTextLineClusterer):
         represents real content.
 
         Args:
-            lines: Detected text lines from Stage 5.
+            lines: Detected text lines from Stage 6.
 
         Returns:
             List of Blocks, each grouping one or more lines.

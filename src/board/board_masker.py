@@ -1,4 +1,4 @@
-"""Stage 1 — Board Masker (SAM 3.1, async).
+"""Stage 2 — Board Segmentation (SAM 3.1, async).
 
 Runs SAM 3.1 in a background process to segment the whiteboard region.
 Returns a raw uint8 board mask each time SAM fires (~10s cadence);

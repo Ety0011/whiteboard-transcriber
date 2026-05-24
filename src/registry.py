@@ -116,7 +116,7 @@ def _match_score(
 class Registry:
     """Persistent entity registry for the whiteboard pipeline.
 
-    Matches blocks from Stage 5/6 to existing entities, applies EMA bbox
+    Matches blocks from Stage 7 to existing entities, applies EMA bbox
     smoothing, advances the state machine, and exposes newly inferring or
     erased entities each frame.
 
@@ -167,7 +167,7 @@ class Registry:
         """Run one lifecycle cycle: match blocks, advance state machine.
 
         Args:
-            blocks:      Layout blocks from Stage 5 (LayoutWorker).
+            blocks:      Layout blocks from Stage 7 (LayoutWorker).
             frame_shape: (height, width) of the rectified board composite.
 
         Returns:

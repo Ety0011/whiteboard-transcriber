@@ -84,7 +84,6 @@ class TextLineDetector:
         self,
         box_thresh: float = 0.6,
         unclip_ratio: float = 1.2,
-        thresh: float = 0.3,
     ) -> None:
         """Configure the detector.
 
@@ -100,7 +99,6 @@ class TextLineDetector:
         """
         self._box_thresh = box_thresh
         self._unclip_ratio = unclip_ratio
-        self._thresh = thresh
         self._detector = None
 
     def load(self) -> None:
@@ -118,7 +116,6 @@ class TextLineDetector:
                 model_name="PP-OCRv5_server_det",
                 box_thresh=self._box_thresh,
                 unclip_ratio=self._unclip_ratio,
-                thresh=self._thresh,
             )
             self._detector = TextDetection(**kwargs)
         logger.info("PP-OCRv5_server_det ready")
@@ -127,7 +124,7 @@ class TextLineDetector:
         """Run text-line detection on *composite* and return detected lines.
 
         Args:
-            composite: BGR uint8 clean board composite from Stage 4.
+            composite: BGR uint8 clean board composite from Stage 5.
 
         Returns:
             List of TextLine objects, or empty list on detection failure.

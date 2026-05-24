@@ -44,7 +44,7 @@ class UnionFindClusterer(BaseTextLineClusterer):
         """Cluster *lines* into Blocks using Union-Find over expanded-bbox intersection.
 
         Args:
-            lines: Detected text lines from Stage 5.
+            lines: Detected text lines from Stage 6.
 
         Returns:
             List of Blocks, each grouping spatially adjacent lines.

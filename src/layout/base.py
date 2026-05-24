@@ -33,7 +33,7 @@ class BaseLayoutDetector(ABC):
         """Run inference and return detected layout blocks.
 
         Args:
-            frame: BGR uint8 clean board composite from Stage 4.
+            frame: BGR uint8 clean board composite from Stage 5.
 
         Returns:
             List of Blocks, each carrying bbox, confidence, and constituent lines.

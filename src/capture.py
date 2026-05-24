@@ -1,4 +1,4 @@
-"""Camera capture thread (Stage 0).
+"""Stage 1 — Video Feed.
 
 Reads frames from a camera or file in a background thread. Callers interact
 only through the ``Capture`` object — the internal queue is an implementation

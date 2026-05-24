@@ -174,7 +174,7 @@ class AABBTreeClusterer(BaseTextLineClusterer):
              candidates between id_a and all remaining blocks.
 
         Args:
-            lines: Detected text lines from Stage 5.
+            lines: Detected text lines from Stage 6.
 
         Returns:
             List of Blocks, each grouping one or more spatially adjacent lines.

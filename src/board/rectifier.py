@@ -1,4 +1,4 @@
-"""Stage 3 — Perspective Rectification.
+"""Stage 4 — Perspective Correction.
 
 Warps the raw camera frame and person mask to a canonical 1920×1080 view.
 Accepts the latest board mask from BoardMasker; derives corners from it,

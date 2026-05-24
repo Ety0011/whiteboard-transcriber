@@ -9,7 +9,7 @@
 1. [Environment Setup](#1-environment-setup)
 2. [Running the Pipeline](#2-running-the-pipeline)
 3. [Architecture Overview](#3-architecture-overview)
-4. [8-Stage Pipeline](#4-8-stage-pipeline)
+4. [10-Stage Pipeline](#4-10-stage-pipeline)
 5. [Entity State Machine](#5-entity-state-machine)
 6. [Subprocess Design](#6-subprocess-design)
 7. [Project Structure](#7-project-structure)
@@ -89,8 +89,8 @@ python src/main.py --display-width 1280
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `source` | positional | webcam | Video/image file path |
-| `--detector` | `unionfind\|hdbscan\|aabbtree\|singlelinkage` | `unionfind` | Stage 5/6 layout grouping strategy |
-| `--transcriber` | `mock\|got\|paddlevl` | `paddlevl` | Stage 7 OCR backend |
+| `--detector` | `unionfind\|hdbscan\|aabbtree\|singlelinkage` | `unionfind` | Stage 7 block grouping strategy |
+| `--transcriber` | `mock\|got\|paddlevl` | `paddlevl` | Stage 9 OCR backend |
 | `--output-dir` | path | `output/` | Directory for `live.md` and `lecture_history.md` |
 | `--display-width` | int | `960` | Preview window width in pixels |
 | `--debug` | flag | off | Set root log level to DEBUG across all processes |
@@ -122,7 +122,7 @@ The pipeline is built around three principles:
 
 **Append-only.** The ledger never deletes. Erasure is recorded as a timestamp, not a deletion. Every OCR correction is a new version appended to the entity's history.
 
-**Coordinate-locked.** All geometry from Stage 3 onward is expressed exclusively in the canonical **1920×1080 rectified space**. Raw camera-space coordinates are never propagated downstream of the rectifier.
+**Coordinate-locked.** All geometry from Stage 4 onward is expressed exclusively in the canonical **1920×1080 rectified space**. Raw camera-space coordinates are never propagated downstream of the rectifier.
 
 ### Data Flow Summary
 
@@ -130,52 +130,53 @@ The pipeline is built around three principles:
 Camera / File
     │
     ▼
-[Stage 0: capture.py]           Frame queue (maxsize=1, always latest)
+[Stage 1: capture.py]           Frame queue (maxsize=1, always latest)
     │
     ▼
-[Stage 1: BoardMasker]          Async SAM 3.1 → binary board mask
-[Stage 2: PersonMasker]         Sync MediaPipe → binary person mask
+[Stage 2: BoardMasker]          Async SAM 3.1 → binary board mask
+[Stage 3: PersonMasker]         Sync MediaPipe → binary person mask
     │
     ▼
-[Stage 3: Rectifier]            Homography → 1920×1080 rectified frame + mask
+[Stage 4: Rectifier]            Homography → 1920×1080 rectified frame + mask
     │
     ▼
-[Stage 4: BoardReconstructor]   Distance-weighted EMA → clean board composite
+[Stage 5: BoardReconstructor]   Distance-weighted EMA → clean board composite
     │
-    ├──▶ [Stage 5/6: Discovery] Async PaddleOCR + grouper → list[Block]
-    │
-    ▼
-[Registry]                      Block → SemanticEntity lifecycle (state machine)
-    │
-    ├──▶ [Stage 7: TranscriptionWorker] Async VLM → OCR text per entity
+    ├──▶ [Stage 6: TextLineDetector]  Async PaddleOCR → list[TextLine]
+    ├──▶ [Stage 7: BlockGrouping]     Clusterer → list[Block]
     │
     ▼
-[Stage 8: Ledger]               Append-only record → live.md + lecture_history.md
+[Stage 8: Registry]             Block → SemanticEntity lifecycle (state machine)
+    │
+    ├──▶ [Stage 9: TranscriptionWorker] Async VLM → OCR text per entity
+    │
+    ▼
+[Stage 10: Ledger]              Append-only record → live.md + lecture_history.md
 ```
 
 ---
 
-## 4. 8-Stage Pipeline
+## 4. 10-Stage Pipeline
 
-### Stage 0 — Frame Capture (`capture.py`)
+### Stage 1 — Video Feed (`capture.py`)
 
 Reads from webcam or file in a background thread. Uses a `Queue(maxsize=1)` — stale frames are dropped automatically, so the main loop always processes the latest frame.
 
-### Stage 1 — Board Masking (`board/board_masker.py`)
+### Stage 2 — Board Segmentation (`board/board_masker.py`)
 
 SAM 3.1 runs in a dedicated subprocess with a ~5s cadence. Takes a raw camera frame, returns a binary H×W uint8 mask (1=board, 0=background). Outputs `None` between cycles — the rectifier uses its cached homography when `None` is received. Does **not** perform corner extraction or homography computation.
 
-### Stage 2 — Person Masking (`board/person_masker.py`)
+### Stage 3 — Person Segmentation (`board/person_masker.py`)
 
-MediaPipe selfie segmenter runs synchronously every frame (~5ms). Returns a binary H×W uint8 mask (1=person). The person mask ensures that pixels under or near the body are never updated in Stage 4, preserving board content under occlusion.
+MediaPipe selfie segmenter runs synchronously every frame (~5ms). Returns a binary H×W uint8 mask (1=person). The person mask ensures that pixels under or near the body are never updated in Stage 5, preserving board content under occlusion.
 
-### Stage 3 — Rectification (`board/rectifier.py`)
+### Stage 4 — Perspective Correction (`board/rectifier.py`)
 
-Owns all geometric computation. When a new board mask arrives from Stage 1, it extracts four corners via convex-hull approximation + `approxPolyDP`, orders them TL/TR/BR/BL, and computes a perspective homography to a canonical 1920×1080 rectangle. The homography is cached and reused every frame. Both the raw frame and person mask are warped to the rectified space.
+Owns all geometric computation. When a new board mask arrives from Stage 2, it extracts four corners via convex-hull approximation + `approxPolyDP`, orders them TL/TR/BR/BL, and computes a perspective homography to a canonical 1920×1080 rectangle. The homography is cached and reused every frame. Both the raw frame and person mask are warped to the rectified space.
 
 **Homography update trigger:** ≥2 corners shift >50px *or* the new quad is larger than cached (area ratio ≥0.98).
 
-### Stage 4 — Board Reconstruction (`board/reconstructor.py`)
+### Stage 5 — Surface Reconstruction (`board/reconstructor.py`)
 
 Maintains a clean board composite using distance-weighted EMA:
 
@@ -186,13 +187,13 @@ composite = (1 - lr) × composite + lr × frame
 
 Pixels near or under the person mask have `lr≈0` and are frozen at their last known value. When no person is detected, a uniform EMA (`lr = max_lr`) is applied directly, skipping the expensive `distanceTransform`.
 
-### Stage 5/6 — Layout Detection (`layout/worker.py`, `layout/`)
+### Stage 6 — Text Line Detection (`layout/text_detector.py`, `layout/worker.py`)
 
-`LayoutWorker` manages the `layout-detector` subprocess. Inside the worker:
-1. `TextLineDetector` runs PaddleOCR `PP-OCRv5_server_det` synchronously, returning a list of `TextLine` objects (bbox + confidence).
-2. A `BaseTextLineClusterer` strategy clusters lines into `Block` objects.
+`LayoutWorker` manages the `layout-detector` subprocess. Inside the worker, `TextLineDetector` runs PaddleOCR `PP-OCRv5_server_det` synchronously, returning a list of `TextLine` objects (bbox + confidence).
 
-Four grouping strategies are available:
+### Stage 7 — Block Grouping (`layout/`)
+
+A `BaseTextLineClusterer` strategy clusters the detected `TextLine` objects into `Block` objects. Four strategies are available:
 
 | Strategy | Class | Behaviour |
 |----------|-------|-----------|
@@ -201,7 +202,11 @@ Four grouping strategies are available:
 | `aabbtree` | `AABBTreeClusterer` | Greedy agglomerative merge via min-heap + AABB engulfment veto |
 | `singlelinkage` | `SingleLinkageClusterer` | Obstacle-vetoed agglomerative merge; nearest-point distance cap |
 
-### Stage 7 — OCR Transcription (`ocr/worker.py`, `ocr/`)
+### Stage 8 — Entity Registry (`registry.py`)
+
+`Registry` matches `Block` objects from Stage 7 to persistent `SemanticEntity` objects across frames using IoU + centroid scoring. Bounding boxes are EMA-smoothed. The state machine advances each entity through STABILIZING → INFERRING → ACTIVE → ERASED. Entities stable for 10s are dispatched to Stage 9.
+
+### Stage 9 — OCR Transcription (`ocr/worker.py`, `ocr/`)
 
 `TranscriptionWorker` manages the `transcription-worker` subprocess. The worker accepts `(entity_id, crop)` pairs from an input queue (`maxsize=10`) and writes `TranscriptionResult` objects to an output queue (`maxsize=30`). Three backends:
 
@@ -211,7 +216,7 @@ Four grouping strategies are available:
 | `got` | `GotTranscriber` | `stepfun-ai/GOT-OCR-2.0-hf` via HuggingFace, float16 on MPS. CLAHE preprocessing applied. |
 | `mock` | `MockTranscriber` | Returns `[mock OCR]`. No model loaded. Use for testing. |
 
-### Stage 8 — Ledger Synthesis (`ledger.py`)
+### Stage 10 — Ledger Synthesis (`ledger.py`)
 
 `Ledger` maintains an append-only in-memory record of every entity. On every OCR result or erasure event, it atomically overwrites both output files (write to `.tmp`, then `rename`). The history file includes a generated TOC and collapsible `<details>` revision blocks for versioned entities.
 
@@ -281,28 +286,28 @@ whiteboard-transcriber/
 ├── tests/                      # Pytest test suite
 └── src/
     ├── main.py                 # Entry point — pipeline orchestrator + UI
-    ├── capture.py              # Stage 0: frame ingestion thread
+    ├── capture.py              # Stage 1: frame ingestion thread
     ├── logging_config.py       # Third-party noise suppression
-    ├── registry.py             # Entity state machine + SemanticEntity
-    ├── ledger.py               # Stage 8: append-only ledger + file synthesis
+    ├── registry.py             # Stage 8: entity state machine + SemanticEntity
+    ├── ledger.py               # Stage 10: append-only ledger + file synthesis
     ├── renderer.py             # OpenCV overlay rendering (display only)
-    ├── board/                  # Stages 1–4: visual surface pipeline
-    │   ├── board_masker.py     # Stage 1: SAM 3.1 async subprocess
-    │   ├── person_masker.py    # Stage 2: MediaPipe sync per-frame
-    │   ├── rectifier.py        # Stage 3: homography + warp to 1920×1080
-    │   └── reconstructor.py    # Stage 4: distance-weighted EMA composite
-    ├── layout/                 # Stages 5–6: text detection + grouping
+    ├── board/                  # Stages 2–5: visual surface pipeline
+    │   ├── board_masker.py     # Stage 2: SAM 3.1 async subprocess
+    │   ├── person_masker.py    # Stage 3: MediaPipe sync per-frame
+    │   ├── rectifier.py        # Stage 4: homography + warp to 1920×1080
+    │   └── reconstructor.py    # Stage 5: distance-weighted EMA composite
+    ├── layout/                 # Stages 6–7: text detection + grouping
     │   ├── base.py             # BaseLayoutDetector ABC
     │   ├── block.py            # Block dataclass
     │   ├── clusterer.py        # BaseTextLineClusterer ABC
-    │   ├── text_detector.py    # TextLine dataclass + PaddleOCR detection
+    │   ├── text_detector.py    # Stage 6: TextLine dataclass + PaddleOCR detection
     │   ├── block_detector.py   # Composes TextLineDetector + clusterer strategy
-    │   ├── worker.py           # LayoutWorker subprocess manager
-    │   ├── union_find.py       # Grouping: asymmetric dilation + Union-Find
-    │   ├── hdbscan.py          # Grouping: anisotropic HDBSCAN
-    │   ├── aabb_tree.py        # Grouping: greedy agglomerative + AABB veto
-    │   └── single_linkage.py   # Grouping: obstacle-vetoed agglomeration
-    └── ocr/                    # Stage 7: VLM transcription
+    │   ├── worker.py           # Stage 6: LayoutWorker subprocess manager
+    │   ├── union_find.py       # Stage 7: asymmetric dilation + Union-Find
+    │   ├── hdbscan.py          # Stage 7: anisotropic HDBSCAN
+    │   ├── aabb_tree.py        # Stage 7: greedy agglomerative + AABB veto
+    │   └── single_linkage.py   # Stage 7: obstacle-vetoed agglomeration
+    └── ocr/                    # Stage 9: VLM transcription
         ├── base.py             # BaseTranscriber ABC + TranscriptionResult
         ├── worker.py           # TranscriptionWorker subprocess manager
         ├── got.py              # GotTranscriber (GOT-OCR 2.0, HuggingFace)
@@ -405,7 +410,7 @@ Use the drop-old queue pattern for single-result producers (board masker, layout
 
 ### Coordinate Space
 
-All bounding boxes, centroids, and homography points from Stage 3 onward are expressed exclusively in the **1920×1080 rectified coordinate space**. Raw camera-space coordinates must never be passed to Stage 4 or beyond. The rectifier is the single source of truth for all geometry.
+All bounding boxes, centroids, and homography points from Stage 4 onward are expressed exclusively in the **1920×1080 rectified coordinate space**. Raw camera-space coordinates must never be passed to Stage 5 or beyond. The rectifier is the single source of truth for all geometry.
 
 ### Non-Blocking Main Loop
 
