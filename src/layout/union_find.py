@@ -1,23 +1,23 @@
-"""Union-Find text-block grouper with asymmetric spatial dilation.
+"""Union-Find text-block clusterer with asymmetric spatial dilation.
 
 Lines are sorted top-to-bottom and compared pairwise.  Expansion radii are
-derived from the median line height so the grouper adapts to font size.
+derived from the median line height so the clusterer adapts to font size.
 A width-ratio guard prevents wide header/title lines from absorbing narrow
 body lines in adjacent columns.
 """
 
 import numpy as np
 
-from .block import Block, TextLineGrouper
+from .block import Block, TextLineClusterer
 from .text_detector import TextLine
 
 
-class UnionFindGrouper(TextLineGrouper):
-    """Union-Find grouper with asymmetric vertical/horizontal dilation.
+class UnionFindClusterer(TextLineClusterer):
+    """Union-Find clusterer with asymmetric vertical/horizontal dilation.
 
     Clusters text lines into blocks by unioning any pair whose expanded
     bounding boxes intersect.  Expansion is anchored to the median line
-    height so the grouper scales with font size.
+    height so the clusterer scales with font size.
 
     Args:
         v_expand_ratio: Vertical dilation as a multiple of median line height.
@@ -146,7 +146,7 @@ class UnionFindGrouper(TextLineGrouper):
 class UnionFind:
     """Path-compressed disjoint-set forest for O(α(n)) union and find operations.
 
-    Used by UnionFindGrouper to cluster text lines into blocks without
+    Used by UnionFindClusterer to cluster text lines into blocks without
     maintaining explicit per-cluster membership lists during traversal.
     """
 

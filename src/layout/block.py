@@ -24,7 +24,7 @@ class Block:
     lines: list[TextLine] = field(default_factory=list)
 
 
-class TextLineGrouper(ABC):
+class TextLineClusterer(ABC):
     """Abstract interface for strategies that cluster TextLines into Blocks."""
 
     @abstractmethod

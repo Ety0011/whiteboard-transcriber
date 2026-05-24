@@ -1,19 +1,19 @@
-"""HDBSCAN-based text-block grouper with scale-invariant anisotropic distance.
+"""HDBSCAN-based text-block clusterer with scale-invariant anisotropic distance.
 
 Distances between line centroids are normalised by local line height so the
-grouper adapts to font size.  Horizontal distances are relaxed relative to
+clusterer adapts to font size.  Horizontal distances are relaxed relative to
 vertical distances, allowing lines in the same column to cluster even when
 they share limited x-range.
 """
 
 import numpy as np
 
-from .block import Block, TextLineGrouper
+from .block import Block, TextLineClusterer
 from .text_detector import TextLine
 
 
-class HDBSCANGrouper(TextLineGrouper):
-    """Density-based text-block grouper using HDBSCAN with a custom distance metric.
+class HDBSCANClusterer(TextLineClusterer):
+    """Density-based text-block clusterer using HDBSCAN with a custom distance metric.
 
     Args:
         min_cluster_size: Minimum number of lines to form a cluster.  Lines

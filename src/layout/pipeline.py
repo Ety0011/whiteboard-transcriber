@@ -1,18 +1,18 @@
-"""Composite layout detector: PP-OCRv5_server_det + any TextLineGrouper strategy."""
+"""Composite layout detector: PP-OCRv5_server_det + any TextLineClusterer strategy."""
 
 import logging
 
 import numpy as np
 
 from .base import BaseLayoutDetector
-from .block import Block, TextLineGrouper
+from .block import Block, TextLineClusterer
 from .text_detector import TextLineDetector
 
 log = logging.getLogger(__name__)
 
 
 class TextBlockDetector(BaseLayoutDetector):
-    """Compose TextLineDetector with a pluggable TextLineGrouper.
+    """Compose TextLineDetector with a pluggable TextLineClusterer.
 
     Bridges Stage 5 text-line detection and Stage 6 grouping into the
     BaseLayoutDetector list[Block] contract expected by Discovery.
@@ -25,7 +25,7 @@ class TextBlockDetector(BaseLayoutDetector):
 
     def __init__(
         self,
-        strategy: TextLineGrouper,
+        strategy: TextLineClusterer,
         box_thresh: float = 0.6,
         unclip_ratio: float = 1.2,
     ):

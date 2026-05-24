@@ -1,4 +1,4 @@
-"""Greedy agglomerative text-block grouper backed by an AABB spatial tree.
+"""Greedy agglomerative text-block clusterer backed by an AABB spatial tree.
 
 Pairs of singleton blocks are evaluated in ascending cost order (cheapest merge
 first).  A merge is vetoed if the proposed bounding box would engulf an unrelated
@@ -10,7 +10,7 @@ import heapq
 
 import numpy as np
 
-from .block import Block, TextLineGrouper
+from .block import Block, TextLineClusterer
 from .text_detector import TextLine
 
 
@@ -33,8 +33,8 @@ class AABBNode:
         return self.block is not None
 
 
-class AABBTreeGrouper(TextLineGrouper):
-    """Greedy agglomerative line grouper using anisotropic cost and AABB engulfment veto.
+class AABBTreeClusterer(TextLineClusterer):
+    """Greedy agglomerative line clusterer using anisotropic cost and AABB engulfment veto.
 
     Merges are processed cheapest-first via a min-heap.  The anisotropic cost
     penalises horizontal gaps more heavily than vertical gaps, preventing lines
