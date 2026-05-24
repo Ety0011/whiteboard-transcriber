@@ -16,7 +16,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .block import Block, TextLineClusterer
+from .block import Block
+from .clusterer import TextLineClusterer
 from .text_detector import TextLine
 
 
@@ -100,7 +101,7 @@ class SingleLinkageClusterer(TextLineClusterer):
         """
         self._max_gap_px = max_gap_px
 
-    def group(self, lines: list[TextLine]) -> list[Block]:
+    def cluster(self, lines: list[TextLine]) -> list[Block]:
         """Cluster text lines into blocks via obstacle-vetoed agglomeration.
 
         Args:

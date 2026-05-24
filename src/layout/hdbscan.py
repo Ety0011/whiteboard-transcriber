@@ -8,7 +8,8 @@ they share limited x-range.
 
 import numpy as np
 
-from .block import Block, TextLineClusterer
+from .block import Block
+from .clusterer import TextLineClusterer
 from .text_detector import TextLine
 
 
@@ -53,7 +54,7 @@ class HDBSCANClusterer(TextLineClusterer):
         norm_dy = dy / scale
         return np.sqrt(norm_dx**2 + norm_dy**2)
 
-    def group(self, lines: list[TextLine]) -> list[Block]:
+    def cluster(self, lines: list[TextLine]) -> list[Block]:
         """Cluster *lines* into Blocks using HDBSCAN on the custom distance matrix.
 
         Lines assigned label -1 (HDBSCAN noise) are returned as singleton

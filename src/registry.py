@@ -167,7 +167,7 @@ class Registry:
         """Run one lifecycle cycle: match blocks, advance state machine.
 
         Args:
-            blocks:      Layout blocks from Stage 5 (Discovery).
+            blocks:      Layout blocks from Stage 5 (LayoutWorker).
             frame_shape: (height, width) of the rectified board composite.
 
         Returns:

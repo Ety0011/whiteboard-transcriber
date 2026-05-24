@@ -36,12 +36,12 @@ from board.rectifier import Rectifier
 from capture import Capture
 from layout import (
     AABBTreeClusterer,
+    BlockDetector,
     HDBSCANClusterer,
     SingleLinkageClusterer,
-    TextBlockDetector,
     UnionFindClusterer,
 )
-from layout.discovery import Discovery
+from layout.worker import LayoutWorker
 from ledger import Ledger
 from logging_config import suppress_noise
 from ocr import (
@@ -116,10 +116,10 @@ def main() -> None:
     reconstructor = BoardReconstructor()
 
     detector_factories = {
-        "unionfind": partial(TextBlockDetector, strategy=UnionFindClusterer()),
-        "hdbscan": partial(TextBlockDetector, strategy=HDBSCANClusterer()),
-        "aabbtree": partial(TextBlockDetector, strategy=AABBTreeClusterer()),
-        "singlelinkage": partial(TextBlockDetector, strategy=SingleLinkageClusterer()),
+        "unionfind": partial(BlockDetector, strategy=UnionFindClusterer()),
+        "hdbscan": partial(BlockDetector, strategy=HDBSCANClusterer()),
+        "aabbtree": partial(BlockDetector, strategy=AABBTreeClusterer()),
+        "singlelinkage": partial(BlockDetector, strategy=SingleLinkageClusterer()),
     }
 
     transcriber_factories = {
@@ -128,7 +128,7 @@ def main() -> None:
         "paddlevl": PaddleVLTranscriber,
     }
 
-    discovery = Discovery(factory=detector_factories[args.detector])
+    layout_worker = LayoutWorker(factory=detector_factories[args.detector])
     registry = Registry()
     transcriber = Transcriber(factory=transcriber_factories[args.transcriber])
     ledger = Ledger(output_dir=args.output_dir)
@@ -175,7 +175,7 @@ def main() -> None:
             composite = reconstructor.update(rect_frame, rect_mask)
 
             # Stage 5 — layout detection (async, non-blocking)
-            blocks = discovery.detect(composite)
+            blocks = layout_worker.detect(composite)
 
             # Stage 6 — entity lifecycle (cross-frame persistence)
             entity_update = registry.tick(blocks, composite.shape[:2])
@@ -207,7 +207,7 @@ def main() -> None:
                 composite,
                 blocks,
                 entity_update.entities,
-                discovery.is_busy,
+                layout_worker.is_busy,
             )
             raw = renderer.render_raw(
                 frame,
@@ -231,7 +231,7 @@ def main() -> None:
     finally:
         cap.stop()
         board_masker.shutdown()
-        discovery.shutdown()
+        layout_worker.shutdown()
         transcriber.shutdown()
         cv2.destroyAllWindows()
 

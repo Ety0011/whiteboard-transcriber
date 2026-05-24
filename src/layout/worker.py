@@ -1,6 +1,6 @@
 """Stage 5 — non-blocking layout detector running in a dedicated subprocess.
 
-Discovery wraps any BaseLayoutDetector behind a single input/output queue
+LayoutWorker wraps any BaseLayoutDetector behind a single input/output queue
 pair.  detect() is non-blocking: it submits the frame and immediately returns
 the most recently completed result.  The worker process handles model loading,
 inference, and shutdown independently of the main loop.
@@ -58,7 +58,7 @@ def _worker_main(
             pass
 
 
-class Discovery:
+class LayoutWorker:
     """Non-blocking layout detector running in a dedicated subprocess.
 
     Call detect(frame) every pipeline tick — it submits the frame to the

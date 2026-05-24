@@ -1,4 +1,4 @@
-"""Abstract base for layout detectors that run inside Discovery's worker subprocess.
+"""Abstract base for layout detectors that run inside LayoutWorker's worker subprocess.
 
 The load/detect split enforces the subprocess contract: __init__ must be
 lightweight and picklable (no model weights), while load() runs inside the
@@ -18,7 +18,7 @@ class BaseLayoutDetector(ABC):
     """Abstract interface to decouple model architectures from pipeline execution.
 
     __init__ must stay lightweight (store config only, no model loading).
-    Discovery pickles the factory and ships it to a subprocess; model weights
+    LayoutWorker pickles the factory and ships it to a subprocess; model weights
     are not picklable. load() is called by the worker AFTER unpickling, so
     models are created inside the subprocess where they will actually run.
     """

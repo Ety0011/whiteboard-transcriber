@@ -8,7 +8,8 @@ body lines in adjacent columns.
 
 import numpy as np
 
-from .block import Block, TextLineClusterer
+from .block import Block
+from .clusterer import TextLineClusterer
 from .text_detector import TextLine
 
 
@@ -39,7 +40,7 @@ class UnionFindClusterer(TextLineClusterer):
         self.v_expand_ratio = v_expand_ratio
         self.h_expand_ratio = h_expand_ratio
 
-    def group(self, lines: list[TextLine]) -> list[Block]:
+    def cluster(self, lines: list[TextLine]) -> list[Block]:
         """Cluster *lines* into Blocks using Union-Find over expanded-bbox intersection.
 
         Args:

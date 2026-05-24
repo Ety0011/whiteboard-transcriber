@@ -135,7 +135,7 @@ class Renderer:
         entities: list[SemanticEntity],
         is_busy: bool,
     ) -> np.ndarray:
-        """Draw block + entity overlays and Discovery busy dot. Returns the frame."""
+        """Draw block + entity overlays and LayoutWorker busy dot. Returns the frame."""
         board = composite.copy()
         if self.show_blocks:
             board = _draw_blocks(board, blocks)

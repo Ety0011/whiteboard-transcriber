@@ -10,7 +10,8 @@ import heapq
 
 import numpy as np
 
-from .block import Block, TextLineClusterer
+from .block import Block
+from .clusterer import TextLineClusterer
 from .text_detector import TextLine
 
 
@@ -160,7 +161,7 @@ class AABBTreeClusterer(TextLineClusterer):
             root.left, proposed_box, block_a, block_b
         ) or self._check_engulfment(root.right, proposed_box, block_a, block_b)
 
-    def group(self, lines: list[TextLine]) -> list[Block]:
+    def cluster(self, lines: list[TextLine]) -> list[Block]:
         """Group detected text lines into blocks via greedy agglomerative merging.
 
         Algorithm:

@@ -1,6 +1,6 @@
 """Transcriber — subprocess manager for any BaseTranscriber backend.
 
-Mirrors Discovery: factory is pickled and shipped to the worker process;
+Mirrors LayoutWorker: factory is pickled and shipped to the worker process;
 model loading happens inside the subprocess after unpickling. Main process
 submits crops via submit() and drains results via get_results() — both
 non-blocking.
