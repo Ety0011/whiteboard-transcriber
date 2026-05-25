@@ -146,12 +146,21 @@ class Registry:
         self._registry: dict[int, SemanticEntity] = {}
         self._next_id: int = 0
 
-    def mark_active(self, entity: SemanticEntity, text: str) -> None:
-        """Record VLM result and transition INFERRING → ACTIVE."""
+    def mark_active(self, entity: SemanticEntity, text: str) -> bool:
+        """Record VLM result and transition INFERRING → ACTIVE.
+
+        Returns:
+            True if the transition occurred. False if the entity drifted to
+            another state (e.g. STABILIZING after a drift reset) before the
+            OCR result arrived — caller should discard the result.
+        """
+        if entity.state != EntityState.INFERRING:
+            return False
         entity.ocr_text = text
         entity.state = EntityState.ACTIVE
         entity.last_modified = time.monotonic()
         log.debug("Entity %d → ACTIVE: %r", entity.id, text[:30])
+        return True
 
     def reset_to_stabilizing(self, entity: SemanticEntity) -> None:
         """Reset INFERRING entity back to STABILIZING (e.g. degenerate crop)."""

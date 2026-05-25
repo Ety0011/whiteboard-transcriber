@@ -50,17 +50,15 @@ from ocr import (
     PaddleVLTranscriber,
 )
 from ocr.worker import TranscriptionWorker
-from registry import EntityState, Registry, SemanticEntity
+from registry import Registry, SemanticEntity
 from renderer import Renderer
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
 
 
-# TODO: fix aabb clusterer not working as intended
 # TODO: add revisions label "pill" in video
 # TODO: make all stages async
-# TODO: remove annoyint mediapipe warning E0000
 def main() -> None:
     suppress_noise()
     parser = argparse.ArgumentParser(description="Whiteboard transcription pipeline")
@@ -167,7 +165,7 @@ def main() -> None:
 
             # Stage 2 — board segmentation (SAM, async, ~10s cadence)
             board_mask = board_masker.segment(frame)
-            # Stage 3 — person segmentation (MediaPipe, sync, per-frame)
+            # Stage 3 — person segmentation (MediaPipe, self-throttled)
             person_mask = person_masker.segment(frame)
             # Stage 4 — perspective correction (cached homography)
             rect_frame, rect_mask = rectifier.rectify(frame, board_mask, person_mask)
@@ -185,7 +183,7 @@ def main() -> None:
             for entity in entity_update.newly_inferring:
                 x1, y1, x2, y2 = entity.bbox
                 crop = composite[y1:y2, x1:x2]
-                if crop.size > 0:
+                if min(crop.shape[:2]) > 0:
                     pending_ocr[entity.id] = entity
                     transcriber.submit(entity.id, crop)
                 else:
@@ -194,8 +192,7 @@ def main() -> None:
             # Poll VLM results — update ledger and synthesise output files
             for result in transcriber.get_results():
                 entity = pending_ocr.pop(result.entity_id, None)
-                if entity is not None and entity.state == EntityState.INFERRING:
-                    registry.mark_active(entity, result.text)
+                if entity is not None and registry.mark_active(entity, result.text):
                     ledger.update(entity.id, entity.bbox, result.text)
 
             # Stage 10 — ledger synthesis
