@@ -187,9 +187,7 @@ class AABBTreeClusterer(BaseTextLineClusterer):
         priority_queue: list = []
 
         for line in lines:
-            block_map[next_id] = Block(
-                bbox=line.bbox.copy(), confidence=line.confidence, lines=[line]
-            )
+            block_map[next_id] = self._make_block([line])
             next_id += 1
 
         active_ids = list(block_map.keys())

@@ -209,11 +209,4 @@ class SingleLinkageClusterer(BaseTextLineClusterer):
             next_id += 1
 
         self._prev_blocks = [clusters[cid].bbox for cid in active]
-        return [
-            Block(
-                bbox=self.compute_bbox(clusters[cid].lines),
-                confidence=max(l.confidence for l in clusters[cid].lines),
-                lines=clusters[cid].lines,
-            )
-            for cid in active
-        ]
+        return [self._make_block(clusters[cid].lines) for cid in active]

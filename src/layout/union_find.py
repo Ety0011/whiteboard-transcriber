@@ -96,15 +96,7 @@ class UnionFindClusterer(BaseTextLineClusterer):
             root = uf.find(i)
             sets.setdefault(root, []).append(lines[i])
 
-        blocks = []
-        for constituent_lines in sets.values():
-            bbox = self.compute_bbox(constituent_lines)
-            max_conf = max(line.confidence for line in constituent_lines)
-            blocks.append(
-                Block(bbox=bbox, confidence=max_conf, lines=constituent_lines)
-            )
-
-        return blocks
+        return [self._make_block(constituent_lines) for constituent_lines in sets.values()]
 
     def _should_merge(
         self, a: TextLine, b: TextLine, v_expand: float, h_expand: float

@@ -24,6 +24,14 @@ class BaseTextLineClusterer(ABC):
             List of Blocks, each covering one or more adjacent lines.
         """
 
+    def _make_block(self, lines: list[TextLine]) -> Block:
+        """Construct a Block from *lines* — tight bbox and max confidence."""
+        return Block(
+            bbox=self.compute_bbox(lines),
+            confidence=max(l.confidence for l in lines),
+            lines=lines,
+        )
+
     @staticmethod
     def compute_bbox(lines: list[TextLine]) -> np.ndarray:
         """Return the tight axis-aligned bbox enclosing all *lines*.

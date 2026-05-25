@@ -70,9 +70,7 @@ class HDBSCANClusterer(BaseTextLineClusterer):
         if not lines:
             return []
         if len(lines) == 1:
-            return [
-                Block(bbox=lines[0].bbox, confidence=lines[0].confidence, lines=lines)
-            ]
+            return [self._make_block(lines)]
 
         from hdbscan import HDBSCAN
 
@@ -103,12 +101,4 @@ class HDBSCANClusterer(BaseTextLineClusterer):
                     groups_dict[label] = []
                 groups_dict[label].append(lines[idx])
 
-        blocks = []
-        for constituent_lines in groups_dict.values():
-            bbox = self.compute_bbox(constituent_lines)
-            max_conf = max(line.confidence for line in constituent_lines)
-            blocks.append(
-                Block(bbox=bbox, confidence=max_conf, lines=constituent_lines)
-            )
-
-        return blocks
+        return [self._make_block(constituent_lines) for constituent_lines in groups_dict.values()]
