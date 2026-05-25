@@ -16,10 +16,12 @@ import logging
 import cv2
 import numpy as np
 
+from stage import InlineStage
+
 logger = logging.getLogger(__name__)
 
 
-class BoardReconstructor:
+class BoardReconstructor(InlineStage):
     """Stateful board-reconstruction stage backed by distance-weighted EMA."""
 
     def __init__(
@@ -28,6 +30,7 @@ class BoardReconstructor:
         falloff_distance: float = 200.0,
         power: float = 2.0,
     ) -> None:
+        super().__init__()
         self._max_lr = max_lr
         self._falloff_distance = falloff_distance
         self._power = power

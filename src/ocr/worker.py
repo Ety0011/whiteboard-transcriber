@@ -1,9 +1,8 @@
-"""TranscriptionWorker — subprocess manager for any BaseTranscriber backend.
+"""TranscriptionWorker — non-blocking WorkerStage subprocess for any BaseTranscriber.
 
-Mirrors LayoutWorker: factory is pickled and shipped to the worker process;
-model loading happens inside the subprocess after unpickling. Main process
-submits crops via submit() and drains results via get_results() — both
-non-blocking.
+Factory is pickled and shipped to the worker process; model loading happens
+inside the subprocess after unpickling. Main process submits crops via submit()
+and drains results via get_results() — both non-blocking.
 
 Queue design:
   in_q  (maxsize=10): (entity_id, crop) — accepts multiple newly-stable
@@ -14,98 +13,77 @@ Queue design:
 from __future__ import annotations
 
 import logging
-import multiprocessing as mp
 from typing import Callable
 
 import numpy as np
+
+from stage import WorkerStage
 
 from .base import BaseTranscriber, TranscriptionResult
 
 log = logging.getLogger(__name__)
 
 
-def _worker_main(
-    factory: Callable[[], BaseTranscriber],
-    in_q: mp.Queue,
-    out_q: mp.Queue,
-) -> None:
-    """Transcription inference loop — runs in a dedicated child process."""
-    import logging as _log
-    import os
-
-    from logging_config import suppress_worker_noise
-
-    _level = logging.DEBUG if os.getenv("LOG_LEVEL") == "DEBUG" else logging.INFO
-    _log.basicConfig(level=_level, format="%(levelname)s %(name)s: %(message)s")
-    suppress_worker_noise()
-    _log = _log.getLogger(__name__)
-
-    transcriber = factory()
-    transcriber.load()
-    _log.info("%s ready", type(transcriber).__name__)
-
-    while True:
-        item = in_q.get()  # block until work arrives
-        if item is None:  # shutdown sentinel
-            break
-
-        entity_id, crop = item
-        text = ""
-        try:
-            text = transcriber.transcribe(crop)
-            _log.debug("entity %d → %d chars: %r", entity_id, len(text), text[:60])
-        except Exception:
-            _log.exception("inference failed for entity %d", entity_id)
-
-        try:
-            out_q.put_nowait(TranscriptionResult(entity_id=entity_id, text=text))
-        except Exception:
-            _log.warning("output queue full — entity %d dropped", entity_id)
-
-
-class TranscriptionWorker:
+class TranscriptionWorker(WorkerStage):
     """Non-blocking transcription worker running in a dedicated subprocess.
 
     submit() enqueues a crop. get_results() drains completed transcriptions.
     Both are non-blocking; the subprocess handles inference independently.
+
+    Args:
+        factory: Zero-argument callable that constructs the BaseTranscriber
+            inside the subprocess after unpickling.
     """
 
+    _process_name = "transcription-worker"
+    _in_queue_size = 10
+    _out_queue_size = 30
+    _drop_old = False
+    _daemon = True
+    _shutdown_timeout = 10.0
+
     def __init__(self, factory: Callable[[], BaseTranscriber]) -> None:
-        self._in_q: mp.Queue = mp.Queue(maxsize=10)
-        self._out_q: mp.Queue = mp.Queue(maxsize=30)
-        self._worker = mp.Process(
-            target=_worker_main,
-            args=(factory, self._in_q, self._out_q),
-            daemon=True,
-            name="transcription-worker",
-        )
-        self._worker.start()
-        log.info("TranscriptionWorker started (pid=%d)", self._worker.pid)
+        self._factory = factory
+        self._transcriber: BaseTranscriber | None = None  # loaded in load()
+        super().__init__()
+
+    def load(self) -> None:
+        """Instantiate and load the transcriber inside the subprocess."""
+        self._transcriber = self._factory()
+        self._transcriber.load()
+        log.info("%s ready", type(self._transcriber).__name__)
+
+    def _process_item(self, item: tuple[int, np.ndarray]) -> TranscriptionResult:
+        assert self._transcriber is not None
+        entity_id, crop = item
+        text = ""
+        try:
+            text = self._transcriber.transcribe(crop)
+            log.debug("entity %d → %d chars: %r", entity_id, len(text), text[:60])
+        except Exception:
+            log.exception("inference failed for entity %d", entity_id)
+        return TranscriptionResult(entity_id=entity_id, text=text)
+
+    def _put_result(self, result: TranscriptionResult) -> None:  # type: ignore[override]
+        try:
+            self._out_q.put_nowait(result)
+        except Exception:
+            log.warning("output queue full — entity %d dropped", result.entity_id)
+
+    def _on_input_full(self, item: tuple[int, np.ndarray]) -> None:
+        entity_id, _ = item
+        log.warning("input queue full — entity %d dropped", entity_id)
 
     def submit(self, entity_id: int, crop: np.ndarray) -> None:
         """Enqueue *crop* for transcription. Non-blocking; logs if queue full."""
-        try:
-            self._in_q.put_nowait((entity_id, crop))
-        except Exception:
-            log.warning("input queue full — entity %d dropped", entity_id)
+        self._submit((entity_id, crop))
 
     def get_results(self) -> list[TranscriptionResult]:
         """Drain all completed transcriptions available right now. Non-blocking."""
-        results = []
+        results: list[TranscriptionResult] = []
         while True:
-            try:
-                results.append(self._out_q.get_nowait())
-            except Exception:
+            result = self._poll()
+            if result is None:
                 break
+            results.append(result)
         return results
-
-    def shutdown(self) -> None:
-        """Signal the worker to stop and wait for clean exit."""
-        try:
-            self._in_q.put_nowait(None)
-        except Exception:
-            pass
-        self._worker.join(timeout=10)
-        if self._worker.is_alive():
-            self._worker.terminate()
-        log.info("worker stopped")

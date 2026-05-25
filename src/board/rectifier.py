@@ -16,6 +16,8 @@ import logging
 import cv2
 import numpy as np
 
+from stage import InlineStage
+
 logger = logging.getLogger(__name__)
 
 
@@ -83,7 +85,7 @@ def _are_corners_shifted(
 # ---------------------------------------------------------------------------
 
 
-class Rectifier:
+class Rectifier(InlineStage):
     """Stateful perspective-rectification stage.
 
     Each time a new board mask arrives, corners are extracted and the
@@ -96,6 +98,7 @@ class Rectifier:
     """
 
     def __init__(self, output_size: tuple[int, int] = (1920, 1080)) -> None:
+        super().__init__()
         self._output_size = output_size
         self._homography: np.ndarray | None = None
         self._cached_corners: np.ndarray | None = None  # (4, 2) float32, TL/TR/BR/BL

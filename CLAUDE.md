@@ -287,13 +287,14 @@ whiteboard-transcriber/
 └── src/
     ├── main.py                 # Entry point — pipeline orchestrator + UI
     ├── capture.py              # Stage 1: frame ingestion thread
+    ├── stage.py                # InlineStage + WorkerStage ABCs (stage taxonomy)
     ├── logging_config.py       # Third-party noise suppression
     ├── registry.py             # Stage 8: entity state machine + SemanticEntity
     ├── ledger.py               # Stage 10: append-only ledger + file synthesis
     ├── renderer.py             # OpenCV overlay rendering (display only)
     ├── board/                  # Stages 2–5: visual surface pipeline
     │   ├── board_masker.py     # Stage 2: SAM 3.1 async subprocess
-    │   ├── person_masker.py    # Stage 3: MediaPipe sync per-frame
+    │   ├── person_masker.py    # Stage 3: MediaPipe sync, self-throttled (InlineStage)
     │   ├── rectifier.py        # Stage 4: homography + warp to 1920×1080
     │   └── reconstructor.py    # Stage 5: distance-weighted EMA composite
     ├── layout/                 # Stages 6–7: text detection + grouping
