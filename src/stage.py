@@ -1,0 +1,204 @@
+"""Base classes for the two pipeline stage patterns.
+
+Two execution patterns are used throughout the pipeline:
+
+- InlineStage: runs synchronously in the main loop. Subclasses use _due() to
+  self-throttle — returning a cached result when the interval has not elapsed.
+  Suitable for fast transforms (<5ms) where subprocess IPC overhead would cost
+  more than the operation itself.
+
+- WorkerStage: runs in a dedicated subprocess. The main loop calls non-blocking
+  each tick and receives the most recent cached result. Suitable for heavy model
+  inference (>50ms) where true parallelism justifies the subprocess cost.
+  Owns all multiprocessing boilerplate — subclasses only implement load() and
+  _process_item().
+"""
+
+from __future__ import annotations
+
+import logging
+import multiprocessing as mp
+import time
+from abc import ABC, abstractmethod
+from typing import Any
+
+
+def _run_worker(stage: WorkerStage) -> None:
+    """Subprocess entry point — unpickled from parent, sets up logging, runs loop.
+
+    This must be a module-level function to be picklable under the spawn start
+    method used on macOS.
+    """
+    import os
+
+    from logging_config import suppress_worker_noise
+
+    _level = logging.DEBUG if os.getenv("LOG_LEVEL") == "DEBUG" else logging.INFO
+    logging.basicConfig(level=_level, format="%(levelname)s %(name)s: %(message)s")
+    suppress_worker_noise()
+    stage.load()
+    stage._run_loop()
+
+
+class InlineStage(ABC):
+    """Stage that runs synchronously in the main loop, self-throttled.
+
+    Args:
+        interval_s: Minimum seconds between runs. 0.0 means always run (no throttle).
+    """
+
+    def __init__(self, interval_s: float = 0.0) -> None:
+        self._interval_s = interval_s
+        self._last_t: float = 0.0
+
+    def _due(self) -> bool:
+        """Return True if interval_s seconds have elapsed since last run."""
+        if self._interval_s <= 0.0:
+            return True
+        now = time.monotonic()
+        if now - self._last_t >= self._interval_s:
+            self._last_t = now
+            return True
+        return False
+
+    def shutdown(self) -> None:
+        """Optional cleanup hook called when the pipeline stops."""
+
+
+class WorkerStage(ABC):
+    """Stage running in a dedicated subprocess.
+
+    All multiprocessing boilerplate lives here. Subclasses only need to:
+      1. Set class-level config attributes (optional overrides below).
+      2. Implement load() to load model weights inside the subprocess.
+      3. Implement _process_item() to process one input item.
+      4. Expose a public API method (e.g. detect(), segment()) that calls
+         _submit() and _poll() as appropriate.
+
+    Class-level config (override in subclass):
+        _process_name (str):       subprocess name shown in ps
+        _in_queue_size (int):      maxsize for the input queue
+        _out_queue_size (int):     maxsize for the output queue
+        _drop_old (bool):          drain output before put (latest-result pattern)
+        _shutdown_timeout (float): join timeout in seconds before terminate()
+    """
+
+    _process_name: str = "worker"
+    _in_queue_size: int = 1
+    _out_queue_size: int = 1
+    _drop_old: bool = True
+    _shutdown_timeout: float = 5.0
+    _daemon: bool = False
+
+    def __init__(self) -> None:
+        self._in_q: mp.Queue = mp.Queue(maxsize=self._in_queue_size)
+        self._out_q: mp.Queue = mp.Queue(maxsize=self._out_queue_size)
+        self._is_busy: bool = False
+        self._last_submit: float = 0.0
+        self._log = logging.getLogger(type(self).__name__)
+        self._proc = mp.Process(
+            target=_run_worker,
+            args=(self,),
+            daemon=self._daemon,
+            name=self._process_name,
+        )
+        self._proc.start()
+        self._log.info("worker started (pid=%d)", self._proc.pid)
+
+    def load(self) -> None:
+        """Load model weights inside the subprocess before the run loop starts."""
+
+    @abstractmethod
+    def _process_item(self, item: Any) -> Any:
+        """Process one input item. Runs exclusively inside the worker subprocess."""
+        ...
+
+    def _on_shutdown(self) -> None:
+        """Called inside subprocess when sentinel received. Override if needed."""
+
+    def _run_loop(self) -> None:
+        """Main worker loop — blocks on input queue, processes items until sentinel."""
+        log = logging.getLogger(type(self).__name__)
+        while True:
+            item = self._in_q.get()
+            if item is None:
+                self._on_shutdown()
+                break
+            try:
+                result = self._process_item(item)
+            except Exception:
+                log.exception("process failed")
+                continue
+            if self._drop_old:
+                try:
+                    self._out_q.get_nowait()
+                except Exception:
+                    pass
+            self._put_result(result)
+
+    def _put_result(self, result: Any) -> None:
+        """Put result on output queue. Override to add custom full-queue handling."""
+        try:
+            self._out_q.put_nowait(result)
+        except Exception:
+            pass
+
+    def _on_input_full(self, _item: Any) -> None:
+        """Called by _submit when the input queue is full. Override to log."""
+
+    def _submit(self, item: Any) -> None:
+        """Submit an item to the worker queue — non-blocking, sets is_busy."""
+        try:
+            self._in_q.put_nowait(item)
+            self._is_busy = True
+        except Exception:
+            self._on_input_full(item)
+
+    def _submit_if_due(self, item: Any, interval_s: float) -> bool:
+        """Submit *item* if *interval_s* has elapsed since last submission.
+
+        Returns:
+            True if submitted; False if the interval has not yet elapsed.
+        """
+        now = time.monotonic()
+        if now - self._last_submit >= interval_s:
+            self._submit(item)
+            self._last_submit = now
+            return True
+        return False
+
+    def _poll(self) -> Any | None:
+        """Poll for the latest result — non-blocking, clears is_busy on success."""
+        try:
+            result = self._out_q.get_nowait()
+            self._is_busy = False
+            return result
+        except Exception:
+            return None
+
+    @property
+    def is_busy(self) -> bool:
+        """True while the subprocess has unprocessed work in flight."""
+        return self._is_busy
+
+    def shutdown(self) -> None:
+        """Send shutdown sentinel, join subprocess, terminate if timeout exceeded."""
+        try:
+            self._in_q.put_nowait(None)
+        except Exception:
+            pass
+        self._proc.join(timeout=self._shutdown_timeout)
+        if self._proc.is_alive():
+            self._proc.terminate()
+        self._log.info("worker stopped")
+
+    def __getstate__(self) -> dict:
+        """Exclude _proc and _log from subprocess pickling.
+
+        _proc is the Process object itself — not meaningful inside the child.
+        _log holds a Logger which re-creates itself via getLogger() in _run_loop.
+        """
+        state = self.__dict__.copy()
+        state.pop("_proc", None)
+        state.pop("_log", None)
+        return state

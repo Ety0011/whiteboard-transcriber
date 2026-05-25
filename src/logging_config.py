@@ -54,9 +54,14 @@ def suppress_noise() -> None:
     """
     import logging
 
-    # C++ glog (MediaPipe / gRPC): 0=INFO 1=WARN 2=ERROR 3=FATAL
-    os.environ.setdefault("GLOG_minloglevel", "3")
-    os.environ.setdefault("GLOG_logtostderr", "0")
+    # C++ glog / absl (MediaPipe): 0=INFO 1=WARN 2=ERROR 3=FATAL
+    # Direct assignment — setdefault would be defeated by an inherited env var.
+    # stderrthreshold=4: nothing reaches stderr even if minloglevel is ignored
+    # (MediaPipe's clearcut uploader background thread fires ERROR retries that
+    # survive minloglevel=3 alone on newer absl builds).
+    os.environ["GLOG_minloglevel"] = "3"
+    os.environ["GLOG_logtostderr"] = "0"
+    os.environ["GLOG_stderrthreshold"] = "4"
     # TFLite delegate messages
     os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
     # HuggingFace Hub tqdm download bars
