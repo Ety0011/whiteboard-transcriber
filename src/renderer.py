@@ -209,8 +209,8 @@ class Renderer:
         h, w = combined.shape[:2]
         target_h = int(h * self._display_width / w)
         bgr = cv2.resize(combined, (self._display_width, target_h))
-        # BGR→RGB, (H,W,3)→(W,H,3) for pygame surfarray
-        return bgr[:, :, ::-1].swapaxes(0, 1)
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        return rgb.swapaxes(0, 1)  # (H,W,3) → (W,H,3) for pygame surfarray
 
     def handle_key(self, key: int) -> bool:
         """Handle overlay toggle keys [w/p/t/r]. Returns True if key was consumed."""
