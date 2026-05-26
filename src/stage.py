@@ -61,6 +61,11 @@ class InlineStage(ABC):
             return True
         return False
 
+    @property
+    def _log(self) -> logging.Logger:
+        """Logger keyed to the concrete subclass name."""
+        return logging.getLogger(type(self).__name__)
+
     def shutdown(self) -> None:
         """Optional cleanup hook called when the pipeline stops."""
 
@@ -95,7 +100,6 @@ class WorkerStage(ABC):
         self._out_q: mp.Queue = mp.Queue(maxsize=self._out_queue_size)
         self._is_busy: bool = False
         self._last_submit: float = 0.0
-        self._log = logging.getLogger(type(self).__name__)
         self._proc = mp.Process(
             target=_run_worker,
             args=(self,),
@@ -118,7 +122,6 @@ class WorkerStage(ABC):
 
     def _run_loop(self) -> None:
         """Main worker loop — blocks on input queue, processes items until sentinel."""
-        log = logging.getLogger(type(self).__name__)
         while True:
             item = self._in_q.get()
             if item is None:
@@ -127,7 +130,7 @@ class WorkerStage(ABC):
             try:
                 result = self._process_item(item)
             except Exception:
-                log.exception("process failed")
+                self._log.exception("process failed")
                 continue
             if self._drop_old:
                 try:
@@ -177,6 +180,12 @@ class WorkerStage(ABC):
             return None
 
     @property
+    def _log(self) -> logging.Logger:
+        """Logger keyed to the concrete subclass name. Computed on demand so it
+        works identically in the main process and inside the worker subprocess."""
+        return logging.getLogger(type(self).__name__)
+
+    @property
     def is_busy(self) -> bool:
         """True while the subprocess has unprocessed work in flight."""
         return self._is_busy
@@ -193,12 +202,7 @@ class WorkerStage(ABC):
         self._log.info("worker stopped")
 
     def __getstate__(self) -> dict:
-        """Exclude _proc and _log from subprocess pickling.
-
-        _proc is the Process object itself — not meaningful inside the child.
-        _log holds a Logger which re-creates itself via getLogger() in _run_loop.
-        """
+        """Exclude _proc from subprocess pickling — not meaningful inside the child."""
         state = self.__dict__.copy()
         state.pop("_proc", None)
-        state.pop("_log", None)
         return state

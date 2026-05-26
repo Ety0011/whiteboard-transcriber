@@ -11,15 +11,10 @@ Person/shadow removal:
 
 from __future__ import annotations
 
-import logging
-
 import cv2
 import numpy as np
 
 from stage import InlineStage
-
-logger = logging.getLogger(__name__)
-
 
 class BoardReconstructor(InlineStage):
     """Stateful board-reconstruction stage backed by distance-weighted EMA."""
@@ -36,7 +31,7 @@ class BoardReconstructor(InlineStage):
         self._power = power
         self._composite: np.ndarray | None = None  # float32 BGR
 
-        logger.debug(
+        self._log.debug(
             "BoardReconstructor initialised (max_lr=%.4f, falloff=%.1f, p=%.1f)",
             max_lr,
             falloff_distance,

@@ -8,15 +8,12 @@ Corner extraction and homography computation are the rectifier's responsibility.
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from stage import WorkerStage
-
-logger = logging.getLogger(__name__)
 
 _MODEL_PATH = Path(__file__).parent.parent.parent / "models" / "sam3.1_multiplex.pt"
 
@@ -63,10 +60,9 @@ class BoardMasker(WorkerStage):
                     verbose=False,
                 )
             )
-        logging.getLogger(type(self).__name__).info("SAM worker ready")
+        self._log.info("SAM worker ready")
 
     def _process_item(self, frame: np.ndarray) -> np.ndarray:
-        log = logging.getLogger(type(self).__name__)
         board_mask: np.ndarray | None = None
         try:
             board_res = self._sam(frame, text=["whiteboard"])
@@ -76,7 +72,7 @@ class BoardMasker(WorkerStage):
                     areas = masks.sum(axis=(1, 2))
                     board_mask = (masks[areas.argmax()] > 0.5).astype(np.uint8)
         except Exception:
-            log.exception("SAM board segmentation failed")
+            self._log.exception("SAM board segmentation failed")
 
         if board_mask is None:
             h, w = frame.shape[:2]

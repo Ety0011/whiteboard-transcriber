@@ -12,7 +12,6 @@ Queue design:
 
 from __future__ import annotations
 
-import logging
 from typing import Callable
 
 import numpy as np
@@ -20,8 +19,6 @@ import numpy as np
 from stage import WorkerStage
 
 from .base import BaseTranscriber, TranscriptionResult
-
-log = logging.getLogger(__name__)
 
 
 class TranscriptionWorker(WorkerStage):
@@ -51,7 +48,7 @@ class TranscriptionWorker(WorkerStage):
         """Instantiate and load the transcriber inside the subprocess."""
         self._transcriber = self._factory()
         self._transcriber.load()
-        log.info("%s ready", type(self._transcriber).__name__)
+        self._log.info("%s ready", type(self._transcriber).__name__)
 
     def _process_item(self, item: tuple[int, np.ndarray]) -> TranscriptionResult:
         assert self._transcriber is not None
@@ -59,20 +56,20 @@ class TranscriptionWorker(WorkerStage):
         text = ""
         try:
             text = self._transcriber.transcribe(crop)
-            log.debug("entity %d → %d chars: %r", entity_id, len(text), text[:60])
+            self._log.debug("entity %d → %d chars: %r", entity_id, len(text), text[:60])
         except Exception:
-            log.exception("inference failed for entity %d", entity_id)
+            self._log.exception("inference failed for entity %d", entity_id)
         return TranscriptionResult(entity_id=entity_id, text=text)
 
     def _put_result(self, result: TranscriptionResult) -> None:  # type: ignore[override]
         try:
             self._out_q.put_nowait(result)
         except Exception:
-            log.warning("output queue full — entity %d dropped", result.entity_id)
+            self._log.warning("output queue full — entity %d dropped", result.entity_id)
 
     def _on_input_full(self, item: tuple[int, np.ndarray]) -> None:
         entity_id, _ = item
-        log.warning("input queue full — entity %d dropped", entity_id)
+        self._log.warning("input queue full — entity %d dropped", entity_id)
 
     def submit(self, entity_id: int, crop: np.ndarray) -> None:
         """Enqueue *crop* for transcription. Non-blocking; logs if queue full."""

@@ -11,14 +11,10 @@ produce masks only.
 
 from __future__ import annotations
 
-import logging
-
 import cv2
 import numpy as np
 
 from stage import InlineStage
-
-logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -163,9 +159,9 @@ class Rectifier(InlineStage):
             self._homography = self._compute_homography(sorted_c)
             self._cached_corners = sorted_c
             if is_first:
-                logger.info("Homography established")
+                self._log.info("Homography established")
             else:
-                logger.debug("Homography recomputed — board corners shifted")
+                self._log.debug("Homography recomputed — board corners shifted")
 
     def _compute_homography(self, corners: np.ndarray) -> np.ndarray:
         """Compute perspective transform from *corners* to the output rectangle."""

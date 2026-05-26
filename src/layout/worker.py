@@ -7,7 +7,6 @@ immediately returns the most recently completed result.
 
 from __future__ import annotations
 
-import logging
 from typing import Callable
 
 import numpy as np
@@ -16,9 +15,6 @@ from stage import WorkerStage
 
 from .base import BaseLayoutDetector
 from .block import Block
-
-log = logging.getLogger(__name__)
-
 
 class LayoutWorker(WorkerStage):
     """Non-blocking layout detector running in a dedicated subprocess.
@@ -50,12 +46,12 @@ class LayoutWorker(WorkerStage):
         """Instantiate and load the detector inside the subprocess."""
         self._detector = self._factory()
         self._detector.load()
-        log.info("%s ready", type(self._detector).__name__)
+        self._log.info("%s ready", type(self._detector).__name__)
 
     def _process_item(self, frame: np.ndarray) -> list[Block]:
         assert self._detector is not None
         blocks = self._detector.detect(frame)
-        log.debug("%d blocks detected", len(blocks))
+        self._log.debug("%d blocks detected", len(blocks))
         return blocks
 
     def _on_shutdown(self) -> None:

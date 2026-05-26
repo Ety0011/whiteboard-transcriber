@@ -6,7 +6,6 @@ to limit CPU cost — returns the cached mask between runs.
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 import cv2
@@ -14,8 +13,6 @@ import numpy as np
 
 from logging_config import devnull_fds
 from stage import InlineStage
-
-logger = logging.getLogger(__name__)
 
 _MP_MODEL_PATH = (
     Path(__file__).parent.parent.parent / "models" / "selfie_segmenter.tflite"
@@ -67,7 +64,7 @@ class PersonMasker(InlineStage):
             ksize = 2 * dilation_px + 1
             self._kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
 
-        logger.info(
+        self._log.info(
             "ready (threshold=%.2f, dilation=%dpx, interval=%.2fs)",
             threshold,
             dilation_px,
