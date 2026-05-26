@@ -68,7 +68,6 @@ _TRANSCRIBER_FACTORIES = {
 
 # TODO: add revisions label "pill" in video
 # TODO: make all stages async
-# TODO: wait for all stages to be ready before starting
 def main() -> None:
     suppress_noise()
     args = _parse_args()
@@ -89,6 +88,11 @@ def main() -> None:
     transcriber = TranscriptionWorker(factory=_TRANSCRIBER_FACTORIES[args.transcriber])
     ledger = Ledger(output_dir=args.output_dir)
     renderer = Renderer(display_width=args.display_width)
+
+    for worker in (board_masker, layout_worker, transcriber):
+        worker.wait_ready()
+        log.info("%s ready", type(worker).__name__)
+    log.info("All workers ready.")
 
     pygame.init()
     screen = pygame.display.set_mode(

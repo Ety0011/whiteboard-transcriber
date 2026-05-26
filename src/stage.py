@@ -37,6 +37,7 @@ def _run_worker(stage: WorkerStage) -> None:
     logging.basicConfig(level=_level, format="%(levelname)s %(name)s: %(message)s")
     suppress_worker_noise()
     stage.load()
+    stage._ready.set()
     stage._run_loop()
 
 
@@ -104,6 +105,7 @@ class WorkerStage(ABC):
         self._model: Any = None
         self._in_q: mp.Queue = mp.Queue(maxsize=self._in_queue_size)
         self._out_q: mp.Queue = mp.Queue(maxsize=self._out_queue_size)
+        self._ready: mp.Event = mp.Event()
         self._is_busy: bool = False
         self._last_submit: float = 0.0
         self._proc = mp.Process(
@@ -208,6 +210,17 @@ class WorkerStage(ABC):
         """Logger keyed to the concrete subclass name. Computed on demand so it
         works identically in the main process and inside the worker subprocess."""
         return logging.getLogger(type(self).__name__)
+
+    def wait_ready(self, timeout: float | None = None) -> bool:
+        """Block until the subprocess has finished loading its model.
+
+        Args:
+            timeout: Maximum seconds to wait. None means wait indefinitely.
+
+        Returns:
+            True if ready, False if timeout expired before load completed.
+        """
+        return self._ready.wait(timeout=timeout)
 
     @property
     def is_busy(self) -> bool:
