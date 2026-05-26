@@ -27,8 +27,6 @@ import time
 from functools import partial
 from pathlib import Path
 
-import pygame
-
 from board.board_masker import BoardMasker
 from board.person_masker import PersonMasker
 from board.reconstructor import BoardReconstructor
@@ -69,7 +67,9 @@ _TRANSCRIBER_FACTORIES = {
 # TODO: add revisions label "pill" in video
 # TODO: make all stages async
 def main() -> None:
-    suppress_noise()
+    suppress_noise()  # sets env vars inherited by all worker subprocesses
+    import pygame  # after suppress_noise — env vars in place before pygame loads
+
     args = _parse_args()
 
     if args.debug:

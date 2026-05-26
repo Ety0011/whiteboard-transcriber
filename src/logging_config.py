@@ -68,6 +68,11 @@ def suppress_noise() -> None:
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     # Ultralytics startup banner (read at import time)
     os.environ["YOLO_VERBOSE"] = "false"
+    # pygame: suppress "Hello from the pygame community" banner
+    os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
+    # pygame pkgdata.py uses pkg_resources which is deprecated in setuptools>=81.
+    # Set via env var so worker subprocesses inherit it before any Python imports run.
+    os.environ.setdefault("PYTHONWARNINGS", "ignore::UserWarning:pygame.pkgdata")
 
     warnings.filterwarnings("ignore", category=FutureWarning)
     warnings.filterwarnings("ignore", category=UserWarning)

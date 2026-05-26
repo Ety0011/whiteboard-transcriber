@@ -1,3 +1,7 @@
+setuptools<81
+pygame>=2.6.0
+ultralytics>=8.0.0
+mlx-vlm>=0.1.0
 opencv-python>=4.9.0
 opencv-contrib-python>=4.9.0
 mediapipe>=0.10.0
