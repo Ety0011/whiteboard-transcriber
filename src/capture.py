@@ -36,6 +36,9 @@ _IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", "
 class Capture:
     """Thread-backed video/image source with pause/resume support.
 
+    Metadata (fps, frame_size) is read synchronously from the source header
+    in ``__init__`` so callers can inspect it before the stream starts.
+
     The internal frame queue holds at most one entry — stale frames are
     dropped automatically so callers always receive the latest frame.
     """
@@ -43,10 +46,18 @@ class Capture:
     def __init__(self, source: str | int | None = None) -> None:
         self._source: int | str = 0 if source is None else source
         self._queue: queue.Queue[np.ndarray | None] = queue.Queue(maxsize=1)
-        self._running = threading.Event()
-        self._running.set()
+        self._paused = threading.Event()
+        self._paused.set()  # not paused initially
         self._active = False
         self._thread: threading.Thread | None = None
+
+        self.fps: float | None = None
+        """Source fps from file header. ``None`` for live cameras (unreliable)."""
+
+        self.frame_size: tuple[int, int] | None = None
+        """``(width, height)`` from source metadata. ``None`` if unknown."""
+
+        self._probe_metadata()
 
     # ------------------------------------------------------------------
     # Public API
@@ -71,16 +82,16 @@ class Capture:
 
     def pause(self) -> None:
         """Freeze the capture thread before its next frame read."""
-        self._running.clear()
+        self._paused.clear()
 
     def resume(self) -> None:
         """Unfreeze the capture thread."""
-        self._running.set()
+        self._paused.set()
 
     def stop(self) -> None:
         """Signal the capture thread to exit and unblock any pending read()."""
         self._active = False
-        self._running.set()  # unblock if currently paused
+        self._paused.set()  # unblock if paused
         try:
             self._queue.put_nowait(None)
         except queue.Full:
@@ -93,8 +104,28 @@ class Capture:
         self.stop()
 
     # ------------------------------------------------------------------
-    # Thread loops (private)
+    # Private
     # ------------------------------------------------------------------
+
+    def _probe_metadata(self) -> None:
+        """Read fps and frame dimensions from the source header.
+
+        Opens and immediately releases a VideoCapture — no frames decoded.
+        Camera fps is not populated because driver-reported values are unreliable.
+        """
+        if _is_image(self._source):
+            return
+        cap = cv2.VideoCapture(self._source)
+        if not cap.isOpened():
+            return
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        raw_fps = cap.get(cv2.CAP_PROP_FPS)
+        cap.release()
+        if w > 0 and h > 0:
+            self.frame_size = (w, h)
+        if raw_fps > 0 and isinstance(self._source, str):
+            self.fps = raw_fps
 
     def _image_loop(self) -> None:
         """Republish a still image at ~30 fps so the processing loop keeps ticking."""
@@ -105,10 +136,10 @@ class Capture:
             return
         log.info("Image %dx%d: %s", frame.shape[1], frame.shape[0], self._source)
         while self._active:
-            self._running.wait()
+            self._paused.wait()
             if not self._active:
                 break
-            _publish(self._queue, frame)
+            _drop_put(self._queue, frame)
             time.sleep(1 / 30)
 
     def _video_loop(self) -> None:
@@ -118,21 +149,18 @@ class Capture:
             log.error("Cannot open source: %r", self._source)
             self._queue.put(None)
             return
-
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         log.info(
-            "Opened %dx%d @ %.0f fps: %r",
+            "Opened %dx%d @ %s: %r",
             cap.get(cv2.CAP_PROP_FRAME_WIDTH),
             cap.get(cv2.CAP_PROP_FRAME_HEIGHT),
-            fps,
+            f"{self.fps:.0f} fps" if self.fps else "live",
             self._source,
         )
-        # Throttle only for files; live cameras pace themselves via cap.read().
-        frame_time = (1.0 / fps) if isinstance(self._source, str) else 0.0
-
+        # Files pace to source fps; cameras block naturally in cap.read().
+        frame_interval = (1.0 / self.fps) if self.fps is not None else 0.0
         try:
             while self._active:
-                self._running.wait()
+                self._paused.wait()
                 if not self._active:
                     break
                 t = time.monotonic()
@@ -140,9 +168,9 @@ class Capture:
                 if not ok:
                     log.info("End of stream: %r", self._source)
                     break
-                _publish(self._queue, frame)
-                if frame_time:
-                    time.sleep(max(0.0, frame_time - (time.monotonic() - t)))
+                _drop_put(self._queue, frame)
+                if frame_interval:
+                    time.sleep(max(0.0, frame_interval - (time.monotonic() - t)))
         finally:
             cap.release()
             try:
@@ -152,7 +180,7 @@ class Capture:
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Helpers
 # ---------------------------------------------------------------------------
 
 
@@ -160,8 +188,8 @@ def _is_image(source: int | str) -> bool:
     return isinstance(source, str) and Path(source).suffix.lower() in _IMAGE_SUFFIXES
 
 
-def _publish(q: queue.Queue, frame: np.ndarray) -> None:
-    """Drop the stale frame (if any) and put the latest one."""
+def _drop_put(q: queue.Queue, frame: np.ndarray) -> None:
+    """Evict the stale frame (if any) and publish the latest one."""
     try:
         q.get_nowait()
     except queue.Empty:
