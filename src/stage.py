@@ -181,7 +181,8 @@ class WorkerStage(ABC):
             self._is_busy = True
         except Exception:
             if not self._is_busy:
-                self._log.warning("input queue full — item dropped")
+                # self._log.warning("input queue full — item dropped")
+                pass
 
     def _submit_if_due(self, item: Any, interval_s: float) -> bool:
         """Submit *item* if *interval_s* has elapsed since last submission.

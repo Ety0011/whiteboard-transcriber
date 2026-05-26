@@ -65,8 +65,7 @@ _TRANSCRIBER_FACTORIES = {
 }
 
 
-# TODO: add revisions label "pill" in video
-# TODO: make all stages async
+# TODO: make all stages async, InlineStage was a fail
 def main() -> None:
     suppress_noise()  # sets env vars inherited by all worker subprocesses
     import pygame  # after suppress_noise — env vars in place before pygame loads
@@ -189,7 +188,7 @@ def main() -> None:
 
             # --- display -----------------------------------------------------
             display_frame = renderer.render(
-                composite, blocks, tracker.notes, layout_worker.is_busy,
+                composite, blocks, tracker.all_notes, layout_worker.is_busy,
                 frame, person_mask, rectifier.cached_corners, board_masker.is_busy,
                 fps,
             )

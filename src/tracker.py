@@ -148,6 +148,11 @@ class NoteTracker:
         """All currently visible (non-ERASED) notes."""
         return [n for n in self._notes.values() if n.state != NoteState.ERASED]
 
+    @property
+    def all_notes(self) -> list[Note]:
+        """All notes including ERASED tombstones (retained for tombstone_retention seconds)."""
+        return list(self._notes.values())
+
     def _commit_ocr_result(self, note_id: int, text: str) -> Note | None:
         """Transition INFERRING → ACTIVE with the completed OCR text.
 
