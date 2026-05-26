@@ -95,9 +95,9 @@ def main() -> None:
     log.info("All workers ready.")
 
     pygame.init()
-    screen = pygame.display.set_mode(
-        _display_size(cap, args.display_width), pygame.RESIZABLE
-    )
+    init_size = _display_size(cap, args.display_width)
+    aspect_ratio = init_size[0] / init_size[1]
+    screen = pygame.display.set_mode(init_size, pygame.RESIZABLE)
     pygame.display.set_caption("Lecture Historian")
     clock = pygame.time.Clock()
     paused = False
@@ -112,6 +112,11 @@ def main() -> None:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     raise KeyboardInterrupt
+                elif event.type == pygame.VIDEORESIZE:
+                    new_h = round(event.w / aspect_ratio)
+                    screen = pygame.display.set_mode(
+                        (event.w, new_h), pygame.RESIZABLE
+                    )
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_q:
                         log.info("[q] Quit")
@@ -161,10 +166,11 @@ def main() -> None:
                 frame, person_mask, rectifier.cached_corners, board_masker.is_busy,
                 fps,
             )
-            # numpy → pygame pixel buffer
+            # numpy → pygame pixel buffer, scaled to current window size
             surface = pygame.surfarray.make_surface(display_frame)
-            screen.blit(surface, (0, 0))  # paint onto back buffer
-            pygame.display.flip()         # swap back→front (show)
+            scaled = pygame.transform.smoothscale(surface, screen.get_size())
+            screen.blit(scaled, (0, 0))
+            pygame.display.flip()  # swap back→front (show)
 
     except KeyboardInterrupt:
         pass
