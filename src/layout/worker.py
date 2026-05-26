@@ -16,6 +16,7 @@ from stage import WorkerStage
 from .base import BaseLayoutDetector
 from .block import Block
 
+
 class LayoutWorker(WorkerStage):
     """Non-blocking layout detector running in a dedicated subprocess.
 

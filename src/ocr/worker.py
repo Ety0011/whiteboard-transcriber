@@ -61,11 +61,8 @@ class TranscriptionWorker(WorkerStage):
             self._log.exception("inference failed for entity %d", entity_id)
         return TranscriptionResult(entity_id=entity_id, text=text)
 
-    def _put_result(self, result: TranscriptionResult) -> None:  # type: ignore[override]
-        try:
-            self._out_q.put_nowait(result)
-        except Exception:
-            self._log.warning("output queue full — entity %d dropped", result.entity_id)
+    def _on_output_full(self, result: TranscriptionResult) -> None:
+        self._log.warning("output queue full — entity %d dropped", result.entity_id)
 
     def _on_input_full(self, item: tuple[int, np.ndarray]) -> None:
         entity_id, _ = item

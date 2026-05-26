@@ -140,14 +140,17 @@ class WorkerStage(ABC):
             self._put_result(result)
 
     def _put_result(self, result: Any) -> None:
-        """Put result on output queue. Override to add custom full-queue handling."""
+        """Put result on output queue, calling _on_output_full if queue is full."""
         try:
             self._out_q.put_nowait(result)
         except Exception:
-            pass
+            self._on_output_full(result)
 
     def _on_input_full(self, _item: Any) -> None:
         """Called by _submit when the input queue is full. Override to log."""
+
+    def _on_output_full(self, _result: Any) -> None:
+        """Called by _put_result when the output queue is full. Override to log."""
 
     def _submit(self, item: Any) -> None:
         """Submit an item to the worker queue — non-blocking, sets is_busy."""
