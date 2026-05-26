@@ -9,15 +9,21 @@ Nothing is ever deleted — erasure is recorded, not enacted.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import cv2
 import numpy as np
 
 if TYPE_CHECKING:
     from tracker import Note
+
+log = logging.getLogger(__name__)
+
+_TIMELAPSE_W, _TIMELAPSE_H = 1280, 720
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -93,6 +99,7 @@ class Ledger:
         self._entries: dict[int, LedgerEntry] = {}
         self._session_start_mono: float = time.monotonic()
         self._session_start_wall: float = time.time()
+        self._snapshots: list[tuple[float, np.ndarray]] = []
 
     # ------------------------------------------------------------------
     # Mutations — each auto-synthesizes output files
@@ -128,17 +135,86 @@ class Ledger:
             entry.erased_at = time.monotonic()
             self._synthesize()
 
-    def sync(self, erased: list[Note], newly_active: list[Note]) -> None:
-        """Apply one pipeline cycle's erasures and OCR activations.
+    def sync(
+        self,
+        erased: list[Note],
+        newly_active: list[Note],
+        newly_inferring: list[Note],
+        composite: np.ndarray,
+    ) -> None:
+        """Apply one pipeline cycle's erasures, OCR activations, and timelapse snapshot.
 
         Args:
-            erased:       Notes that left the board this frame.
-            newly_active: Notes that just completed OCR transcription.
+            erased:          Notes that left the board this frame.
+            newly_active:    Notes that just completed OCR transcription.
+            newly_inferring: Notes dispatched to OCR this frame; triggers a snapshot.
+            composite:       Full-resolution BGR board composite from Stage 5.
         """
         for note in erased:
             self.mark_erased(note.id)
         for note in newly_active:
             self.update(note.id, note.bbox, note.ocr_text or "")
+        if newly_inferring:
+            self.record_snapshot(composite, time.monotonic())
+
+    # ------------------------------------------------------------------
+    # Timelapse
+    # ------------------------------------------------------------------
+
+    def record_snapshot(self, composite: np.ndarray, timestamp: float) -> None:
+        """Store a downscaled board snapshot at a stabilization event.
+
+        Args:
+            composite: Full-resolution BGR board composite from Stage 5.
+            timestamp: time.monotonic() at the moment of capture.
+        """
+        thumb = cv2.resize(
+            composite,
+            (_TIMELAPSE_W, _TIMELAPSE_H),
+            interpolation=cv2.INTER_AREA,
+        )
+        self._snapshots.append((timestamp, thumb))
+
+    def synthesize_timelapse(
+        self,
+        fps: int = 24,
+        seconds_per_frame: float = 1.0,
+    ) -> Path | None:
+        """Write a timelapse MP4 to the output directory.
+
+        Each snapshot is held for *seconds_per_frame* seconds at *fps* frames
+        per second. Returns None if no snapshots were recorded.
+
+        Args:
+            fps: Output video frame rate.
+            seconds_per_frame: How long each snapshot is visible in the output.
+
+        Returns:
+            Path to the written file, or None if there were no snapshots.
+        """
+        if not self._snapshots:
+            return None
+
+        out_path = self._output_dir / "timelapse.mp4"
+        frames_per_snapshot = max(1, round(fps * seconds_per_frame))
+        fourcc = cv2.VideoWriter_fourcc(*"avc1")
+        writer = cv2.VideoWriter(
+            str(out_path), fourcc, fps, (_TIMELAPSE_W, _TIMELAPSE_H)
+        )
+        try:
+            for _, thumb in self._snapshots:
+                for _ in range(frames_per_snapshot):
+                    writer.write(thumb)
+        finally:
+            writer.release()
+
+        log.info(
+            "Timelapse written: %s (%d frames, %d events)",
+            out_path,
+            len(self._snapshots) * frames_per_snapshot,
+            len(self._snapshots),
+        )
+        return out_path
 
     # ------------------------------------------------------------------
     # Queries

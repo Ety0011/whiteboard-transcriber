@@ -151,7 +151,9 @@ def main() -> None:
                 blocks, composite, transcriber.collect()       # Stage 9
             )
             transcriber.submit(newly_inferring)
-            ledger.sync(newly_erased, newly_active)            # Stage 10
+            ledger.sync(  # Stage 10
+                newly_erased, newly_active, newly_inferring, composite
+            )
 
             # --- display -----------------------------------------------------
             display_frame = renderer.render(
@@ -183,6 +185,7 @@ def main() -> None:
         n_erased,
         args.output_dir,
     )
+    ledger.synthesize_timelapse()
 
 
 def _display_size(cap: Capture, display_width: int) -> tuple[int, int]:
