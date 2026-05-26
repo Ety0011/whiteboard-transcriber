@@ -156,9 +156,7 @@ def main() -> None:
                 blocks, composite, transcriber.collect()       # Stage 9
             )
             transcriber.submit(newly_inferring)
-            ledger.sync(  # Stage 10
-                newly_erased, newly_active, newly_inferring, composite
-            )
+            ledger.sync(newly_erased, newly_active, composite)  # Stage 10
 
             # --- display -----------------------------------------------------
             display_frame = renderer.render(

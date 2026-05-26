@@ -139,22 +139,20 @@ class Ledger:
         self,
         erased: list[Note],
         newly_active: list[Note],
-        newly_inferring: list[Note],
         composite: np.ndarray,
     ) -> None:
         """Apply one pipeline cycle's erasures, OCR activations, and timelapse snapshot.
 
         Args:
-            erased:          Notes that left the board this frame.
-            newly_active:    Notes that just completed OCR transcription.
-            newly_inferring: Notes dispatched to OCR this frame; triggers a snapshot.
-            composite:       Full-resolution BGR board composite from Stage 5.
+            erased:       Notes that left the board this frame.
+            newly_active: Notes that just completed OCR transcription.
+            composite:    Full-resolution BGR board composite from Stage 5.
         """
         for note in erased:
             self.mark_erased(note.id)
         for note in newly_active:
             self.update(note.id, note.bbox, note.ocr_text or "")
-        if newly_inferring:
+        if newly_active:
             self.record_snapshot(composite, time.monotonic())
 
     # ------------------------------------------------------------------
