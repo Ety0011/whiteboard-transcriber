@@ -10,11 +10,12 @@ Usage::
     python src/main.py --debug                               # verbose logging
 
 Keyboard controls:
-    q  — quit
-    w  — toggle Stage 4 corner overlay
-    p  — toggle Stage 3 body-mask overlay
-    t  — toggle Stage 7 block overlay
-    r  — toggle Stage 8 note overlay
+    q      — quit
+    space  — pause / resume
+    w      — toggle Stage 4 corner overlay
+    p      — toggle Stage 3 body-mask overlay
+    t      — toggle Stage 7 block overlay
+    r      — toggle Stage 8 note overlay
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ import time
 from functools import partial
 from pathlib import Path
 
-import cv2
+import pygame
 
 from board.board_masker import BoardMasker
 from board.person_masker import PersonMasker
@@ -43,11 +44,7 @@ from layout import (
 from layout.worker import LayoutWorker
 from ledger import Ledger
 from logging_config import suppress_noise
-from ocr import (
-    GotTranscriber,
-    MockTranscriber,
-    PaddleVLTranscriber,
-)
+from ocr import GotTranscriber, MockTranscriber, PaddleVLTranscriber
 from ocr.worker import TranscriptionWorker
 from registry import NoteTracker
 from renderer import Renderer
@@ -55,12 +52,150 @@ from renderer import Renderer
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
 
+_DETECTOR_FACTORIES = {
+    "unionfind": partial(BlockDetector, strategy=UnionFindClusterer()),
+    "hdbscan": partial(BlockDetector, strategy=HDBSCANClusterer()),
+    "aabbtree": partial(BlockDetector, strategy=AABBTreeClusterer()),
+    "singlelinkage": partial(BlockDetector, strategy=SingleLinkageClusterer()),
+}
+
+_TRANSCRIBER_FACTORIES = {
+    "mock": MockTranscriber,
+    "got": GotTranscriber,
+    "paddlevl": PaddleVLTranscriber,
+}
+
 
 # TODO: add revisions label "pill" in video
 # TODO: make all stages async
 # TODO: wait for all stages to be ready before starting
 def main() -> None:
     suppress_noise()
+    args = _parse_args()
+
+    if args.debug:
+        os.environ["LOG_LEVEL"] = "DEBUG"
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    cap = Capture(args.source).start()
+
+    log.info("Loading models …")
+    board_masker = BoardMasker()
+    person_masker = PersonMasker()
+    rectifier = Rectifier()
+    reconstructor = BoardReconstructor()
+    layout_worker = LayoutWorker(factory=_DETECTOR_FACTORIES[args.detector])
+    tracker = NoteTracker()
+    transcriber = TranscriptionWorker(factory=_TRANSCRIBER_FACTORIES[args.transcriber])
+    ledger = Ledger(output_dir=args.output_dir)
+    renderer = Renderer(display_width=args.display_width)
+
+    pygame.init()
+    screen = pygame.display.set_mode(
+        _display_size(cap, args.display_width), pygame.RESIZABLE
+    )
+    pygame.display.set_caption("Lecture Historian")
+    clock = pygame.time.Clock()
+    paused = False
+    fps = 0.0
+    last_t = time.monotonic()
+
+    log.info("Ready. Detector: %s | Press q or Ctrl-C to stop.", args.detector)
+
+    try:
+        while True:
+            # --- events ------------------------------------------------------
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    raise KeyboardInterrupt
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_q:
+                        log.info("[q] Quit")
+                        raise KeyboardInterrupt
+                    elif event.key == pygame.K_SPACE:
+                        paused = not paused
+                        cap.pause() if paused else cap.resume()
+                        log.info("[space] %s", "Paused" if paused else "Resumed")
+                    else:
+                        renderer.handle_key(event.key)
+
+            if paused:
+                clock.tick(30)
+                continue
+
+            # --- frame -------------------------------------------------------
+            frame = cap.read()
+            if frame is None:
+                log.info("End of stream.")
+                break
+
+            now = time.monotonic()
+            fps = 0.9 * fps + 0.1 / max(now - last_t, 1e-6)
+            last_t = now
+
+            # --- pipeline ----------------------------------------------------
+            board_mask = board_masker.segment(frame)           # Stage 2
+            person_mask = person_masker.segment(frame)         # Stage 3
+            rect_frame, rect_mask = rectifier.rectify(         # Stage 4
+                frame, board_mask, person_mask
+            )
+            composite = reconstructor.reconstruct(             # Stage 5
+                rect_frame, rect_mask
+            )
+            blocks = layout_worker.detect(composite)           # Stage 6 + 7
+            newly_inferring, newly_erased, newly_active = tracker.update(  # Stage 8
+                blocks, composite, transcriber.collect()       # Stage 9
+            )
+            transcriber.submit(newly_inferring)
+            ledger.sync(newly_erased, newly_active)            # Stage 10
+
+            # --- display -----------------------------------------------------
+            display_frame = renderer.render(
+                composite, blocks, tracker.notes, layout_worker.is_busy,
+                frame, person_mask, rectifier.cached_corners, board_masker.is_busy,
+                fps,
+            )
+            # numpy → pygame pixel buffer
+            surface = pygame.surfarray.make_surface(display_frame)
+            screen.blit(surface, (0, 0))  # paint onto back buffer
+            pygame.display.flip()         # swap back→front (show)
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        cap.stop()
+        board_masker.shutdown()
+        layout_worker.shutdown()
+        transcriber.shutdown()
+        pygame.quit()
+
+    all_entries = ledger.get_all()
+    n_total = len(all_entries)
+    n_erased = sum(1 for e in all_entries if e.erased_at is not None)
+    log.info(
+        "Session complete — %d notes tracked (%d active, %d erased). Output: %s",
+        n_total,
+        n_total - n_erased,
+        n_erased,
+        args.output_dir,
+    )
+
+
+def _display_size(cap: Capture, display_width: int) -> tuple[int, int]:
+    """Compute the pygame window size from source metadata and display width.
+
+    The renderer stacks the raw frame (rescaled to board width) above the
+    1920×1080 board composite, then scales the combined image to display_width.
+    """
+    board_w, board_h = 1920, 1080
+    raw_w, raw_h = cap.frame_size or (board_w, board_h)
+    scaled_raw_h = int(raw_h * board_w / raw_w)
+    display_h = int((scaled_raw_h + board_h) * display_width / board_w)
+    return (display_width, display_h)
+
+
+def _parse_args() -> argparse.Namespace:
+    """Parse and return CLI arguments."""
     parser = argparse.ArgumentParser(description="Whiteboard transcription pipeline")
     parser.add_argument(
         "source",
@@ -70,21 +205,21 @@ def main() -> None:
     )
     parser.add_argument(
         "--detector",
-        choices=["unionfind", "hdbscan", "aabbtree", "singlelinkage"],
+        choices=list(_DETECTOR_FACTORIES),
         default="singlelinkage",
-        help="Stage 6 layout detection backend",
+        help="Stage 7 block grouping strategy (default: singlelinkage)",
     )
     parser.add_argument(
         "--transcriber",
-        choices=["mock", "got", "paddlevl"],
+        choices=list(_TRANSCRIBER_FACTORIES),
         default="paddlevl",
-        help="Stage 9 OCR backend",
+        help="Stage 9 OCR backend (default: paddlevl)",
     )
     parser.add_argument(
         "--display-width",
         type=int,
-        default=960,  # half of 1920x1080
-        help="Display window width in pixels (default: 1280)",
+        default=960,
+        help="Display window width in pixels (default: 960)",
     )
     parser.add_argument(
         "--output-dir",
@@ -98,118 +233,7 @@ def main() -> None:
         action="store_true",
         help="Set log level to DEBUG (propagates to all worker subprocesses)",
     )
-    args = parser.parse_args()
-
-    if args.debug:
-        os.environ["LOG_LEVEL"] = "DEBUG"
-        logging.getLogger().setLevel(logging.DEBUG)
-
-    cap = Capture(args.source).start()
-
-    log.info("Loading models …")
-    board_masker = BoardMasker()
-    person_masker = PersonMasker()
-    rectifier = Rectifier()
-    reconstructor = BoardReconstructor()
-
-    detector_factories = {
-        "unionfind": partial(BlockDetector, strategy=UnionFindClusterer()),
-        "hdbscan": partial(BlockDetector, strategy=HDBSCANClusterer()),
-        "aabbtree": partial(BlockDetector, strategy=AABBTreeClusterer()),
-        "singlelinkage": partial(BlockDetector, strategy=SingleLinkageClusterer()),
-    }
-
-    transcriber_factories = {
-        "mock": MockTranscriber,
-        "got": GotTranscriber,
-        "paddlevl": PaddleVLTranscriber,
-    }
-
-    layout_worker = LayoutWorker(factory=detector_factories[args.detector])
-    tracker = NoteTracker()
-    transcriber = TranscriptionWorker(factory=transcriber_factories[args.transcriber])
-    ledger = Ledger(output_dir=args.output_dir)
-    renderer = Renderer(display_width=args.display_width)
-    paused = False
-    fps = 0.0
-    _last_t = time.monotonic()
-    log.info("Ready. Model: %s | Press q or Ctrl-C to stop.", args.detector)
-
-    try:
-        while True:
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
-                log.info("[q] Quit")
-                break
-            elif key == ord(" "):
-                paused = not paused
-                if paused:
-                    cap.pause()
-                else:
-                    cap.resume()
-                log.info("[space] %s", "Paused" if paused else "Resumed")
-            else:
-                renderer.handle_key(key)
-
-            if paused:
-                continue
-
-            frame = cap.read()
-            if frame is None:
-                log.info("End of stream.")
-                break
-            now = time.monotonic()
-            fps = 0.9 * fps + 0.1 / max(now - _last_t, 1e-6)
-            _last_t = now
-
-            # Stage 2 — board segmentation (SAM, async, ~10s cadence)
-            board_mask = board_masker.segment(frame)
-            # Stage 3 — person segmentation (MediaPipe, self-throttled)
-            person_mask = person_masker.segment(frame)
-            # Stage 4 — perspective correction (cached homography)
-            rect_frame, rect_mask = rectifier.rectify(frame, board_mask, person_mask)
-            # Stage 5 — surface reconstruction
-            composite = reconstructor.reconstruct(rect_frame, rect_mask)
-
-            # Stage 6 — text line detection (async, non-blocking)
-            # Stage 7 — block grouping
-            blocks = layout_worker.detect(composite)
-
-            # Stage 8 — entity tracker (cross-frame persistence)
-            # Stage 9 — OCR transcription (non-blocking)
-            newly_inferring, newly_erased, newly_active = tracker.update(
-                blocks, composite, transcriber.collect()
-            )
-            transcriber.submit(newly_inferring)
-            # Stage 10 — ledger synthesis
-            ledger.sync(newly_erased, newly_active)
-
-            # Render
-            renderer.show(
-                composite, blocks, tracker.notes, layout_worker.is_busy,
-                frame, person_mask, rectifier.cached_corners, board_masker.is_busy,
-                fps,
-            )
-
-    except KeyboardInterrupt:
-        pass
-    finally:
-        cap.stop()
-        board_masker.shutdown()
-        layout_worker.shutdown()
-        transcriber.shutdown()
-        cv2.destroyAllWindows()
-
-    all_entries = ledger.get_all()
-    n_total = len(all_entries)
-    n_erased = sum(1 for e in all_entries if e.erased_at is not None)
-    log.info(
-        "Session complete — %d notes tracked (%d active, %d erased). Output: %s",
-        n_total,
-        n_total - n_erased,
-        n_erased,
-        args.output_dir,
-    )
+    return parser.parse_args()
 
 
 if __name__ == "__main__":

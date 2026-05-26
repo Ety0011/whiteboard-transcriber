@@ -187,7 +187,7 @@ class Renderer:
         )
         return raw
 
-    def show(
+    def render(
         self,
         composite: np.ndarray,
         blocks: list[Block],
@@ -198,8 +198,8 @@ class Renderer:
         cached_corners: np.ndarray | None,
         board_busy: bool,
         fps: float,
-    ) -> None:
-        """Render board + raw panels, stack them, scale to display width, and show."""
+    ) -> np.ndarray:
+        """Render board + raw panels, stack them, scale to display width. Returns RGB (W,H,3) for pygame."""
         board = self.render_board(composite, blocks, notes, layout_busy)
         raw = self.render_raw(frame, person_mask, cached_corners, board_busy, fps)
         if raw.shape[1] != board.shape[1]:
@@ -208,8 +208,9 @@ class Renderer:
         combined = np.vstack([raw, board])
         h, w = combined.shape[:2]
         target_h = int(h * self._display_width / w)
-        combined = cv2.resize(combined, (self._display_width, target_h))
-        cv2.imshow("Lecture Historian", combined)
+        bgr = cv2.resize(combined, (self._display_width, target_h))
+        # BGR→RGB, (H,W,3)→(W,H,3) for pygame surfarray
+        return bgr[:, :, ::-1].swapaxes(0, 1)
 
     def handle_key(self, key: int) -> bool:
         """Handle overlay toggle keys [w/p/t/r]. Returns True if key was consumed."""
