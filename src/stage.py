@@ -20,7 +20,7 @@ import logging
 import multiprocessing as mp
 import time
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Callable
 
 
 def _run_worker(stage: WorkerStage) -> None:
@@ -108,6 +108,21 @@ class WorkerStage(ABC):
         )
         self._proc.start()
         self._log.info("worker started (pid=%d)", self._proc.pid)
+
+    def _load_from_factory(self, factory: Callable[[], Any]) -> Any:
+        """Instantiate and load a model from *factory*; log readiness. Runs in subprocess.
+
+        Args:
+            factory: Zero-argument callable returning an object with a load()
+                method.
+
+        Returns:
+            The loaded model instance.
+        """
+        model = factory()
+        model.load()
+        self._log.info("%s ready", type(model).__name__)
+        return model
 
     def load(self) -> None:
         """Load model weights inside the subprocess before the run loop starts."""

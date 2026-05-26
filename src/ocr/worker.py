@@ -46,9 +46,7 @@ class TranscriptionWorker(WorkerStage):
 
     def load(self) -> None:
         """Instantiate and load the transcriber inside the subprocess."""
-        self._transcriber = self._factory()
-        self._transcriber.load()
-        self._log.info("%s ready", type(self._transcriber).__name__)
+        self._transcriber = self._load_from_factory(self._factory)
 
     def _process_item(self, item: tuple[int, np.ndarray]) -> TranscriptionResult:
         assert self._transcriber is not None
@@ -60,6 +58,10 @@ class TranscriptionWorker(WorkerStage):
         except Exception:
             self._log.exception("inference failed for entity %d", entity_id)
         return TranscriptionResult(entity_id=entity_id, text=text)
+
+    def _on_shutdown(self) -> None:
+        if self._transcriber is not None:
+            self._transcriber.shutdown()
 
     def _on_output_full(self, result: TranscriptionResult) -> None:
         self._log.warning("output queue full — entity %d dropped", result.entity_id)

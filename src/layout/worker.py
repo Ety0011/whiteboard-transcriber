@@ -45,9 +45,7 @@ class LayoutWorker(WorkerStage):
 
     def load(self) -> None:
         """Instantiate and load the detector inside the subprocess."""
-        self._detector = self._factory()
-        self._detector.load()
-        self._log.info("%s ready", type(self._detector).__name__)
+        self._detector = self._load_from_factory(self._factory)
 
     def _process_item(self, frame: np.ndarray) -> list[Block]:
         assert self._detector is not None

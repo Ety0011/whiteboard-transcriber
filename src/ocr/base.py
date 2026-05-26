@@ -40,3 +40,6 @@ class BaseTranscriber(ABC):
     @abstractmethod
     def transcribe(self, crop: np.ndarray) -> str:
         """Run OCR on a BGR uint8 crop and return the recognised text."""
+
+    def shutdown(self) -> None:
+        """Release any resources held by the transcriber. No-op by default."""
