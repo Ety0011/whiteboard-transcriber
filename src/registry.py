@@ -1,7 +1,7 @@
-"""Entity Registry — cross-frame persistence and lifecycle management.
+"""NoteTracker — cross-frame persistence and lifecycle management.
 
-Maintains a persistent registry of SemanticEntity objects across frames. Each
-frame, grouped anchors are matched to existing entities using IoU + centroid
+Maintains a persistent registry of Note objects across frames. Each
+frame, layout blocks are matched to existing notes using IoU + centroid
 scoring, bounding boxes are EMA-smoothed, and the state machine is advanced.
 
 Lifecycle: STABILIZING → INFERRING → ACTIVE
@@ -20,6 +20,7 @@ import time
 import numpy as np
 
 from layout import Block
+from ocr.base import TranscriptionResult
 
 log = logging.getLogger(__name__)
 
@@ -28,18 +29,18 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-class EntityState(enum.Enum):
-    """Lifecycle states for a tracked semantic entity."""
+class NoteState(enum.Enum):
+    """Lifecycle states for a board note."""
 
     STABILIZING = "STABILIZING"  # ink writing/editing in progress or settling
-    INFERRING = "INFERRING"  # crop submitted to GOT-OCR 2.0, awaiting result
-    ACTIVE = "ACTIVE"  # OCR complete; entity visible on board
-    ERASED = "ERASED"  # anchors gone from clean board; entity archived
+    INFERRING = "INFERRING"  # crop submitted to VLM, awaiting result
+    ACTIVE = "ACTIVE"  # OCR complete; note visible on board
+    ERASED = "ERASED"  # anchors gone from clean board; note archived
 
 
 @dataclasses.dataclass
-class SemanticEntity:
-    """A persistent entity tracked across frames.
+class Note:
+    """A piece of writing on the board, tracked persistently across frames.
 
     Bounding box is kept EMA-smoothed to reduce jitter. All timestamps are
     from time.monotonic().
@@ -48,21 +49,15 @@ class SemanticEntity:
     id: int
     bbox: np.ndarray  # shape (4,) int32: x1, y1, x2, y2 — EMA-smoothed
     confidence: float
-    state: EntityState
+    state: NoteState
     first_seen: float
     last_modified: float
     last_seen: float
     ocr_text: str | None
     last_stable_center: np.ndarray | None = None  # shape (2,) float64 cx,cy
+    crop: np.ndarray | None = None  # board region snapshot taken at INFERRING dispatch
 
 
-@dataclasses.dataclass
-class EntityUpdate:
-    """Output of one Registry processing cycle."""
-
-    entities: list[SemanticEntity]  # all non-ERASED entities
-    newly_inferring: list[SemanticEntity]  # transitioned to INFERRING this frame
-    newly_erased: list[SemanticEntity]  # transitioned to ERASED this frame
 
 
 # ---------------------------------------------------------------------------
@@ -102,31 +97,32 @@ def _match_score(
     reg_bbox: np.ndarray,
     frame_diagonal: float,
 ) -> float:
-    """Combined detection-to-entity match score: 0.7*IoU + 0.3*centroid_similarity."""
+    """Combined detection-to-note match score: 0.7*IoU + 0.3*centroid_similarity."""
     return 0.7 * _iou(det_bbox, reg_bbox) + 0.3 * _centroid_similarity(
         det_bbox, reg_bbox, frame_diagonal
     )
 
 
 # ---------------------------------------------------------------------------
-# Registry
+# NoteTracker
 # ---------------------------------------------------------------------------
 
 
-class Registry:
-    """Persistent entity registry for the whiteboard pipeline.
+class NoteTracker:
+    """Tracks board notes across frames.
 
-    Matches blocks from Stage 7 to existing entities, applies EMA bbox
+    Matches blocks from Stage 7 to existing notes, applies EMA bbox
     smoothing, advances the state machine, and exposes newly inferring or
-    erased entities each frame.
+    erased notes each frame.
 
     Args:
         stable_time_threshold: Seconds without significant change required
             before STABILIZING → INFERRING (VLM dispatch).
-        tombstone_retention: Seconds to retain ERASED entries before deletion.
-        match_threshold: Minimum combined score to match a block to an entity.
-        drift_threshold_px: Centroid drift (px) on ACTIVE/INFERRING entity
+        tombstone_retention: Seconds to retain ERASED notes before deletion.
+        match_threshold: Minimum combined score to match a block to a note.
+        drift_threshold_px: Centroid drift (px) on ACTIVE/INFERRING note
             that triggers reset to STABILIZING.
+        erase_grace_period: Seconds a note must be absent before erasure.
     """
 
     def __init__(
@@ -143,188 +139,202 @@ class Registry:
         self._drift_threshold_px = drift_threshold_px
         self._erase_grace_period = erase_grace_period
 
-        self._registry: dict[int, SemanticEntity] = {}
+        self._notes: dict[int, Note] = {}
         self._next_id: int = 0
+        self._pending_ocr: dict[int, Note] = {}
 
-    def mark_active(self, entity: SemanticEntity, text: str) -> bool:
-        """Record VLM result and transition INFERRING → ACTIVE.
+    @property
+    def notes(self) -> list[Note]:
+        """All currently visible (non-ERASED) notes."""
+        return [n for n in self._notes.values() if n.state != NoteState.ERASED]
 
-        Returns:
-            True if the transition occurred. False if the entity drifted to
-            another state (e.g. STABILIZING after a drift reset) before the
-            OCR result arrived — caller should discard the result.
-        """
-        if entity.state != EntityState.INFERRING:
-            return False
-        entity.ocr_text = text
-        entity.state = EntityState.ACTIVE
-        entity.last_modified = time.monotonic()
-        log.debug("Entity %d → ACTIVE: %r", entity.id, text[:30])
-        return True
-
-    def reset_to_stabilizing(self, entity: SemanticEntity) -> None:
-        """Reset INFERRING entity back to STABILIZING (e.g. degenerate crop)."""
-        entity.state = EntityState.STABILIZING
-        entity.last_modified = time.monotonic()
-        log.debug("Entity %d reset → STABILIZING (empty crop)", entity.id)
-
-    def tick(
-        self,
-        blocks: list[Block],
-        frame_shape: tuple[int, int],
-    ) -> EntityUpdate:
-        """Run one lifecycle cycle: match blocks, advance state machine.
+    def _commit_ocr_result(self, note_id: int, text: str) -> Note | None:
+        """Transition INFERRING → ACTIVE with the completed OCR text.
 
         Args:
-            blocks:      Layout blocks from Stage 7 (LayoutWorker).
-            frame_shape: (height, width) of the rectified board composite.
+            note_id: ID of the note whose OCR completed.
+            text:    Recognised text from the VLM.
 
         Returns:
-            EntityUpdate with all non-ERASED entities and transition lists.
+            The activated note, or None if it drifted before the result arrived.
+        """
+        note = self._pending_ocr.pop(note_id, None)
+        if note is None or note.state != NoteState.INFERRING:
+            return None
+        note.ocr_text = text
+        note.state = NoteState.ACTIVE
+        note.last_modified = time.monotonic()
+        log.debug("Note %d → ACTIVE: %r", note.id, text[:30])
+        return note
+
+    def update(
+        self,
+        blocks: list[Block],
+        composite: np.ndarray,
+        transcriptions: list[TranscriptionResult],
+    ) -> tuple[list[Note], list[Note], list[Note]]:
+        """Match blocks to notes and advance the state machine.
+
+        Args:
+            blocks:         Layout blocks from Stage 7 (LayoutWorker).
+            composite:      Clean board composite from Stage 5; used to snapshot
+                            note crops at INFERRING dispatch.
+            transcriptions: Completed OCR results from the transcription worker.
+
+        Returns:
+            (newly_inferring, newly_erased, newly_active) — notes that transitioned
+            this frame. Spatial matching runs before OCR activation so drift-reset
+            notes correctly reject stale results.
         """
         now = time.monotonic()
-        h, w = frame_shape
+        h, w = composite.shape[:2]
         frame_diagonal = math.sqrt(h * h + w * w)
 
-        active_entities = [
-            e for e in self._registry.values() if e.state != EntityState.ERASED
-        ]
+        active_notes = [n for n in self._notes.values() if n.state != NoteState.ERASED]
 
-        assignments, matched_block_ids, matched_entity_ids = self._get_assignments(
-            blocks, active_entities, frame_diagonal
+        assignments, matched_block_ids, matched_note_ids = self._get_assignments(
+            blocks, active_notes, frame_diagonal
         )
 
-        newly_inferring: list[SemanticEntity] = []
-        for blk_id, ent_id in assignments.items():
-            self._update_entity(
-                blocks[blk_id], self._registry[ent_id], now, newly_inferring
+        newly_inferring: list[Note] = []
+        for blk_id, note_id in assignments.items():
+            self._update_note(
+                blocks[blk_id], self._notes[note_id], now, newly_inferring, composite
             )
 
-        newly_erased: list[SemanticEntity] = []
-        self._erase_unmatched(active_entities, matched_entity_ids, now, newly_erased)
-        self._create_new_entities(blocks, matched_block_ids, now)
+        newly_erased: list[Note] = []
+        self._erase_unmatched(active_notes, matched_note_ids, now, newly_erased)
+        self._create_new_notes(blocks, matched_block_ids, now)
         self._prune_tombstones(now)
 
-        return EntityUpdate(
-            entities=[
-                e for e in self._registry.values() if e.state != EntityState.ERASED
-            ],
-            newly_inferring=newly_inferring,
-            newly_erased=newly_erased,
-        )
+        for note in newly_erased:
+            self._pending_ocr.pop(note.id, None)
+        for note in newly_inferring:
+            self._pending_ocr[note.id] = note
+
+        newly_active = [
+            n for r in transcriptions
+            if (n := self._commit_ocr_result(r.note_id, r.text)) is not None
+        ]
+        return newly_inferring, newly_erased, newly_active
 
     # -----------------------------------------------------------------------
     # Private helpers
     # -----------------------------------------------------------------------
 
-    def _get_assignments(self, blocks, active_entities, frame_diagonal):
-        """Match detected blocks to existing entities using a greedy one-to-one assignment.
+    def _get_assignments(
+        self,
+        blocks: list[Block],
+        active_notes: list[Note],
+        frame_diagonal: float,
+    ) -> tuple[dict[int, int], set[int], set[int]]:
+        """Match detected blocks to existing notes using greedy one-to-one assignment.
 
-        Scores all (block, entity) pairs above match_threshold, sorts by score
+        Scores all (block, note) pairs above match_threshold, sorts by score
         descending, then greedily assigns the highest-scoring pair first,
-        consuming each block and entity at most once.
-
-        Args:
-            blocks: Layout blocks from the current frame.
-            active_entities: All non-ERASED entities in the registry.
-            frame_diagonal: Normalisation constant for centroid similarity.
+        consuming each block and note at most once.
 
         Returns:
-            Tuple of (assignments, matched_block_ids, matched_entity_ids) where
-            assignments maps block index → entity id.
+            Tuple of (assignments, matched_block_ids, matched_note_ids) where
+            assignments maps block index → note id.
         """
         candidates = []
         for blk_id, block in enumerate(blocks):
-            for ent in active_entities:
-                score = _match_score(block.bbox, ent.bbox, frame_diagonal)
+            for note in active_notes:
+                score = _match_score(block.bbox, note.bbox, frame_diagonal)
                 if score > self._match_threshold:
-                    candidates.append((score, blk_id, ent.id))
+                    candidates.append((score, blk_id, note.id))
 
-        # Highest score first — greedy assignment gives each block its best entity.
+        # Highest score first — greedy assignment gives each block its best note.
         candidates.sort(key=lambda x: -x[0])
 
         matched_block_ids: set[int] = set()
-        matched_entity_ids: set[int] = set()
+        matched_note_ids: set[int] = set()
         assignments: dict[int, int] = {}
 
-        for _, blk_id, ent_id in candidates:
-            if blk_id not in matched_block_ids and ent_id not in matched_entity_ids:
-                assignments[blk_id] = ent_id
+        for _, blk_id, note_id in candidates:
+            if blk_id not in matched_block_ids and note_id not in matched_note_ids:
+                assignments[blk_id] = note_id
                 matched_block_ids.add(blk_id)
-                matched_entity_ids.add(ent_id)
-        return assignments, matched_block_ids, matched_entity_ids
+                matched_note_ids.add(note_id)
+        return assignments, matched_block_ids, matched_note_ids
 
-    def _update_entity(
+    def _update_note(
         self,
         block: Block,
-        ent: SemanticEntity,
+        note: Note,
         now: float,
-        newly_inferring: list[SemanticEntity],
+        newly_inferring: list[Note],
+        composite: np.ndarray,
     ) -> None:
-        """Advance state machine for a single matched entity."""
+        """Advance state machine for a single matched note."""
 
         # Detect movement — resets stabilization timer for all non-ERASED states.
         # Covers: professor still writing (STABILIZING), and post-commit edits
         # (INFERRING/ACTIVE). Without this, a block moving for 9s dispatches at s10.
-        if ent.last_stable_center is not None:
+        if note.last_stable_center is not None:
             cur_center = (block.bbox[:2] + block.bbox[2:]) / 2.0
-            drift = float(np.linalg.norm(cur_center - ent.last_stable_center))
+            drift = float(np.linalg.norm(cur_center - note.last_stable_center))
             if drift > self._drift_threshold_px:
-                ent.state = EntityState.STABILIZING
-                ent.ocr_text = None
-                ent.last_modified = now
-                ent.last_stable_center = cur_center  # anchor new baseline
+                note.state = NoteState.STABILIZING
+                note.ocr_text = None
+                note.crop = None
+                note.last_modified = now
+                note.last_stable_center = cur_center  # anchor new baseline
 
         # Physical update — EMA bbox smoothing
-        ent.bbox = (0.2 * block.bbox + 0.8 * ent.bbox).astype(np.int32)
-        ent.confidence, ent.last_seen = block.confidence, now
+        note.bbox = (0.2 * block.bbox + 0.8 * note.bbox).astype(np.int32)
+        note.confidence, note.last_seen = block.confidence, now
 
-        if ent.state == EntityState.STABILIZING:
-            if now - ent.last_modified >= self._stable_time_threshold:
-                self._dispatch_for_inference(ent, now, newly_inferring)
+        if note.state == NoteState.STABILIZING:
+            if now - note.last_modified >= self._stable_time_threshold:
+                self._dispatch_for_inference(note, now, newly_inferring, composite)
 
     def _dispatch_for_inference(
         self,
-        ent: SemanticEntity,
+        note: Note,
         now: float,
-        newly_inferring: list[SemanticEntity],
+        newly_inferring: list[Note],
+        composite: np.ndarray,
     ) -> None:
-        """Transition STABILIZING → INFERRING and anchor the stable center."""
-        ent.last_stable_center = (ent.bbox[:2] + ent.bbox[2:]) / 2.0
-        ent.state, ent.last_modified = EntityState.INFERRING, now
-        newly_inferring.append(ent)
-        log.debug("Entity %d → INFERRING", ent.id)
+        """Transition STABILIZING → INFERRING, snapshot crop, anchor stable center."""
+        note.last_stable_center = (note.bbox[:2] + note.bbox[2:]) / 2.0
+        x1, y1, x2, y2 = note.bbox
+        note.crop = composite[y1:y2, x1:x2].copy()
+        note.state, note.last_modified = NoteState.INFERRING, now
+        newly_inferring.append(note)
+        log.debug("Note %d → INFERRING", note.id)
 
     def _erase_unmatched(
         self,
-        active_entities: list[SemanticEntity],
-        matched_ent_ids: set[int],
+        active_notes: list[Note],
+        matched_note_ids: set[int],
         now: float,
-        newly_erased: list[SemanticEntity],
+        newly_erased: list[Note],
     ) -> None:
-        """Erase entities absent for longer than erase_grace_period seconds."""
-        for ent in active_entities:
-            if ent.id not in matched_ent_ids:
-                if now - ent.last_seen >= self._erase_grace_period:
-                    ent.state, ent.last_modified = EntityState.ERASED, now
-                    newly_erased.append(ent)
-                    log.debug("Entity %d → ERASED", ent.id)
+        """Erase notes absent for longer than erase_grace_period seconds."""
+        for note in active_notes:
+            if note.id not in matched_note_ids:
+                if now - note.last_seen >= self._erase_grace_period:
+                    note.state, note.last_modified = NoteState.ERASED, now
+                    newly_erased.append(note)
+                    log.debug("Note %d → ERASED", note.id)
 
-    def _create_new_entities(
+    def _create_new_notes(
         self, blocks: list[Block], matched_indices: set[int], now: float
     ) -> None:
-        """Create STABILIZING entities for blocks that had no matching entity."""
+        """Create STABILIZING notes for blocks that had no matching note."""
         for blk_id, block in enumerate(blocks):
             if blk_id not in matched_indices:
                 new_id = self._next_id
                 self._next_id += 1
                 cx = (block.bbox[0] + block.bbox[2]) / 2.0
                 cy = (block.bbox[1] + block.bbox[3]) / 2.0
-                self._registry[new_id] = SemanticEntity(
+                self._notes[new_id] = Note(
                     id=new_id,
                     bbox=block.bbox.copy(),
                     confidence=block.confidence,
-                    state=EntityState.STABILIZING,
+                    state=NoteState.STABILIZING,
                     first_seen=now,
                     last_seen=now,
                     last_modified=now,
@@ -332,13 +342,13 @@ class Registry:
                     last_stable_center=np.array([cx, cy], dtype=np.float64),
                 )
 
-    def _prune_tombstones(self, now):
-        """Remove ERASED entities that have exceeded the tombstone retention window."""
+    def _prune_tombstones(self, now: float) -> None:
+        """Remove ERASED notes that have exceeded the tombstone retention window."""
         to_remove = [
-            ent_id
-            for ent_id, ent in self._registry.items()
-            if ent.state == EntityState.ERASED
-            and now - ent.last_modified > self._tombstone_retention
+            note_id
+            for note_id, note in self._notes.items()
+            if note.state == NoteState.ERASED
+            and now - note.last_modified > self._tombstone_retention
         ]
-        for ent_id in to_remove:
-            del self._registry[ent_id]
+        for note_id in to_remove:
+            del self._notes[note_id]
