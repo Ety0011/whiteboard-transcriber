@@ -47,7 +47,7 @@ class InlineStage(ABC):
         interval_s: Minimum seconds between runs. 0.0 means always run (no throttle).
     """
 
-    def __init__(self, interval_s: float = 0.0) -> None:
+    def __init__(self, interval_s: float = 1.0) -> None:
         self._interval_s = interval_s
         self._last_t: float = 0.0
 
@@ -178,7 +178,8 @@ class WorkerStage(ABC):
             self._in_q.put_nowait(item)
             self._is_busy = True
         except Exception:
-            self._log.warning("input queue full — item dropped")
+            if not self._is_busy:
+                self._log.warning("input queue full — item dropped")
 
     def _submit_if_due(self, item: Any, interval_s: float) -> bool:
         """Submit *item* if *interval_s* has elapsed since last submission.
