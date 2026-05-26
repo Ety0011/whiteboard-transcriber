@@ -41,34 +41,18 @@ class TranscriptionWorker(WorkerStage):
 
     def __init__(self, factory: Callable[[], BaseTranscriber]) -> None:
         self._factory = factory
-        self._transcriber: BaseTranscriber | None = None  # loaded in load()
         super().__init__()
 
-    def load(self) -> None:
-        """Instantiate and load the transcriber inside the subprocess."""
-        self._transcriber = self._load_from_factory(self._factory)
-
     def _process_item(self, item: tuple[int, np.ndarray]) -> TranscriptionResult:
-        assert self._transcriber is not None
+        assert self._model is not None
         entity_id, crop = item
         text = ""
         try:
-            text = self._transcriber.transcribe(crop)
+            text = self._model.transcribe(crop)
             self._log.debug("entity %d → %d chars: %r", entity_id, len(text), text[:60])
         except Exception:
             self._log.exception("inference failed for entity %d", entity_id)
         return TranscriptionResult(entity_id=entity_id, text=text)
-
-    def _on_shutdown(self) -> None:
-        if self._transcriber is not None:
-            self._transcriber.shutdown()
-
-    def _on_output_full(self, result: TranscriptionResult) -> None:
-        self._log.warning("output queue full — entity %d dropped", result.entity_id)
-
-    def _on_input_full(self, item: tuple[int, np.ndarray]) -> None:
-        entity_id, _ = item
-        self._log.warning("input queue full — entity %d dropped", entity_id)
 
     def submit(self, entity_id: int, crop: np.ndarray) -> None:
         """Enqueue *crop* for transcription. Non-blocking; logs if queue full."""

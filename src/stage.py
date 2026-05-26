@@ -75,10 +75,15 @@ class WorkerStage(ABC):
 
     All multiprocessing boilerplate lives here. Subclasses only need to:
       1. Set class-level config attributes (optional overrides below).
-      2. Implement load() to load model weights inside the subprocess.
-      3. Implement _process_item() to process one input item.
-      4. Expose a public API method (e.g. detect(), segment()) that calls
+      2. Implement _process_item() to process one input item.
+      3. Expose a public API method (e.g. detect(), segment()) that calls
          _submit() and _poll() as appropriate.
+
+    Factory pattern (optional — covers most workers):
+      Set self._factory to a zero-argument callable in __init__. The default
+      load() will call it, load the model, and store the result in self._model.
+      The default _on_shutdown() will call self._model.shutdown() if set.
+      Override load() only when custom loading logic is required.
 
     Class-level config (override in subclass):
         _process_name (str):       subprocess name shown in ps
@@ -96,6 +101,7 @@ class WorkerStage(ABC):
     _daemon: bool = False
 
     def __init__(self) -> None:
+        self._model: Any = None
         self._in_q: mp.Queue = mp.Queue(maxsize=self._in_queue_size)
         self._out_q: mp.Queue = mp.Queue(maxsize=self._out_queue_size)
         self._is_busy: bool = False
@@ -125,7 +131,10 @@ class WorkerStage(ABC):
         return model
 
     def load(self) -> None:
-        """Load model weights inside the subprocess before the run loop starts."""
+        """Load model inside the subprocess. Uses factory pattern if _factory is set."""
+        factory = getattr(self, "_factory", None)
+        if factory is not None:
+            self._model = self._load_from_factory(factory)
 
     @abstractmethod
     def _process_item(self, item: Any) -> Any:
@@ -133,7 +142,9 @@ class WorkerStage(ABC):
         ...
 
     def _on_shutdown(self) -> None:
-        """Called inside subprocess when sentinel received. Override if needed."""
+        """Shut down loaded model if present. Override for custom teardown."""
+        if self._model is not None:
+            self._model.shutdown()
 
     def _run_loop(self) -> None:
         """Main worker loop — blocks on input queue, processes items until sentinel."""
@@ -155,17 +166,11 @@ class WorkerStage(ABC):
             self._put_result(result)
 
     def _put_result(self, result: Any) -> None:
-        """Put result on output queue, calling _on_output_full if queue is full."""
+        """Put result on output queue, warns if full."""
         try:
             self._out_q.put_nowait(result)
         except Exception:
-            self._on_output_full(result)
-
-    def _on_input_full(self, _item: Any) -> None:
-        """Called by _submit when the input queue is full. Override to log."""
-
-    def _on_output_full(self, _result: Any) -> None:
-        """Called by _put_result when the output queue is full. Override to log."""
+            self._log.warning("output queue full — result dropped")
 
     def _submit(self, item: Any) -> None:
         """Submit an item to the worker queue — non-blocking, sets is_busy."""
@@ -173,7 +178,7 @@ class WorkerStage(ABC):
             self._in_q.put_nowait(item)
             self._is_busy = True
         except Exception:
-            self._on_input_full(item)
+            self._log.warning("input queue full — item dropped")
 
     def _submit_if_due(self, item: Any, interval_s: float) -> bool:
         """Submit *item* if *interval_s* has elapsed since last submission.

@@ -40,22 +40,13 @@ class LayoutWorker(WorkerStage):
         self._factory = factory
         self._submit_interval_s = submit_interval_s
         self._cached: list[Block] = []
-        self._detector: BaseLayoutDetector | None = None  # loaded in load()
         super().__init__()
 
-    def load(self) -> None:
-        """Instantiate and load the detector inside the subprocess."""
-        self._detector = self._load_from_factory(self._factory)
-
     def _process_item(self, frame: np.ndarray) -> list[Block]:
-        assert self._detector is not None
-        blocks = self._detector.detect(frame)
+        assert self._model is not None
+        blocks = self._model.detect(frame)
         self._log.debug("%d blocks detected", len(blocks))
         return blocks
-
-    def _on_shutdown(self) -> None:
-        if self._detector is not None:
-            self._detector.shutdown()
 
     def detect(self, frame: np.ndarray) -> list[Block]:
         """Submit frame (throttled) and return latest cached blocks — non-blocking."""
