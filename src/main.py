@@ -44,8 +44,8 @@ from ledger import Ledger
 from logging_config import suppress_noise
 from ocr import GotTranscriber, MockTranscriber, PaddleVLTranscriber
 from ocr.worker import TranscriptionWorker
-from registry import NoteTracker
 from renderer import Renderer
+from tracker import NoteTracker
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)

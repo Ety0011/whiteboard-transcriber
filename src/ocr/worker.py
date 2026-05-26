@@ -16,8 +16,8 @@ from typing import Callable
 
 import numpy as np
 
-from registry import Note
 from stage import WorkerStage
+from tracker import Note
 
 from .base import BaseTranscriber, TranscriptionResult
 

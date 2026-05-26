@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 
 from layout import Block
-from registry import NoteState, Note
+from tracker import Note, NoteState
 
 log = logging.getLogger(__name__)
 

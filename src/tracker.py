@@ -53,7 +53,7 @@ class Note:
     first_seen: float
     last_modified: float
     last_seen: float
-    ocr_text: str | None
+    ocr_text: str = ""
     last_stable_center: np.ndarray | None = None  # shape (2,) float64 cx,cy
     crop: np.ndarray | None = None  # board region snapshot taken at INFERRING dispatch
 
@@ -277,7 +277,7 @@ class NoteTracker:
             drift = float(np.linalg.norm(cur_center - note.last_stable_center))
             if drift > self._drift_threshold_px:
                 note.state = NoteState.STABILIZING
-                note.ocr_text = None
+                note.ocr_text = ""
                 note.crop = None
                 note.last_modified = now
                 note.last_stable_center = cur_center  # anchor new baseline
@@ -338,7 +338,7 @@ class NoteTracker:
                     first_seen=now,
                     last_seen=now,
                     last_modified=now,
-                    ocr_text=None,
+                    ocr_text="",
                     last_stable_center=np.array([cx, cy], dtype=np.float64),
                 )
 
