@@ -89,7 +89,7 @@ python src/main.py --display-width 1280
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `source` | positional | webcam | Video/image file path |
-| `--detector` | `unionfind\|hdbscan\|aabbtree\|singlelinkage` | `unionfind` | Stage 7 block grouping strategy |
+| `--detector` | `unionfind\|hdbscan\|aabbtree\|singlelinkage` | `singlelinkage` | Stage 7 block grouping strategy |
 | `--transcriber` | `mock\|got\|paddlevl` | `paddlevl` | Stage 9 OCR backend |
 | `--output-dir` | path | `output/` | Directory for `live.md` and `lecture_history.md` |
 | `--display-width` | int | `960` | Preview window width in pixels |
@@ -146,10 +146,10 @@ Camera / File
     ├──▶ [Stage 7: BlockGrouping]     Clusterer → list[Block]
     │
     ▼
-[Stage 8: Registry]             Block → SemanticEntity lifecycle (state machine)
+[Stage 8: NoteTracker]          Block → Note lifecycle (state machine)
     │
-    ├──▶ [Stage 9: TranscriptionWorker] Async VLM → OCR text per entity
-    │
+    ├──▶ [Stage 9: TranscriptionWorker]  Async VLM — submit()/collect()
+    │    └── completed results fed back into Stage 8 each frame via update()
     ▼
 [Stage 10: Ledger]              Append-only record → live.md + lecture_history.md
 ```
@@ -202,13 +202,20 @@ A `BaseTextLineClusterer` strategy clusters the detected `TextLine` objects into
 | `aabbtree` | `AABBTreeClusterer` | Greedy agglomerative merge via min-heap + AABB engulfment veto |
 | `singlelinkage` | `SingleLinkageClusterer` | Obstacle-vetoed agglomerative merge; nearest-point distance cap |
 
-### Stage 8 — Entity Registry (`registry.py`)
+### Stage 8 — Note Tracker (`registry.py`)
 
-`Registry` matches `Block` objects from Stage 7 to persistent `SemanticEntity` objects across frames using IoU + centroid scoring. Bounding boxes are EMA-smoothed. The state machine advances each entity through STABILIZING → INFERRING → ACTIVE → ERASED. Entities stable for 10s are dispatched to Stage 9.
+`NoteTracker` matches `Block` objects from Stage 7 to persistent `Note` objects across frames using IoU + centroid scoring. Bounding boxes are EMA-smoothed. The state machine advances each note through STABILIZING → INFERRING → ACTIVE → ERASED. Notes stable for 10s are dispatched to Stage 9.
+
+`update(blocks, composite, transcriptions)` is the single per-frame entry point. It runs spatial matching first, then integrates any completed OCR results received via `transcriber.collect()`, and returns `(newly_inferring, newly_erased, newly_active)`.
 
 ### Stage 9 — OCR Transcription (`ocr/worker.py`, `ocr/`)
 
-`TranscriptionWorker` manages the `transcription-worker` subprocess. The worker accepts `(entity_id, crop)` pairs from an input queue (`maxsize=10`) and writes `TranscriptionResult` objects to an output queue (`maxsize=30`). Three backends:
+`TranscriptionWorker` manages the `transcription-worker` subprocess. The worker accepts `(note_id, crop)` pairs from an input queue (`maxsize=10`) and writes `TranscriptionResult` objects to an output queue (`maxsize=30`).
+
+- `submit(notes)` — enqueue newly-INFERRING notes for OCR (non-blocking).
+- `collect()` — drain all completed `TranscriptionResult` objects since the last call (non-blocking). Results are passed into `tracker.update()` the following frame.
+
+Three backends:
 
 | Backend | Class | Notes |
 |---------|-------|-------|
@@ -224,7 +231,7 @@ A `BaseTextLineClusterer` strategy clusters the detected `TextLine` objects into
 
 ## 5. Entity State Machine
 
-The `Registry` (`registry.py`) tracks every detected layout block as a `SemanticEntity` through a 4-state lifecycle.
+The `NoteTracker` (`registry.py`) tracks every detected layout block as a `Note` through a 4-state lifecycle.
 
 ```
          new block detected
@@ -254,7 +261,7 @@ The `Registry` (`registry.py`) tracks every detected layout block as a `Semantic
 
 - An entity transitions STABILIZING → INFERRING only after `stable_time_threshold` seconds with no centroid drift exceeding `drift_threshold_px` (default: 50px).
 - If drift is detected on an INFERRING or ACTIVE entity, it resets to STABILIZING. Any pending OCR result for that entity is discarded (state check on result receipt).
-- `EntityUpdate.entities` contains only non-ERASED entities. Newly-erased entities are reported separately in `EntityUpdate.newly_erased` and simultaneously removed from `pending_ocr` in the main loop.
+- `update()` returns `(newly_inferring, newly_erased, newly_active)`. Erased notes are simultaneously removed from `_pending_ocr` inside `update()` before OCR results are applied.
 - Entity identity is spatial: the same text written in a new location gets a new ID; a correction in-place preserves the existing ID and appends a version.
 
 ---
