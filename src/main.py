@@ -14,7 +14,7 @@ Keyboard controls:
     w  — toggle Stage 4 corner overlay
     p  — toggle Stage 3 body-mask overlay
     t  — toggle Stage 7 block overlay
-    r  — toggle Stage 8 entity overlay
+    r  — toggle Stage 8 note overlay
 """
 
 from __future__ import annotations
@@ -27,7 +27,6 @@ from functools import partial
 from pathlib import Path
 
 import cv2
-import numpy as np
 
 from board.board_masker import BoardMasker
 from board.person_masker import PersonMasker
@@ -50,7 +49,7 @@ from ocr import (
     PaddleVLTranscriber,
 )
 from ocr.worker import TranscriptionWorker
-from registry import Registry, SemanticEntity
+from registry import NoteTracker
 from renderer import Renderer
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -59,6 +58,7 @@ log = logging.getLogger(__name__)
 
 # TODO: add revisions label "pill" in video
 # TODO: make all stages async
+# TODO: wait for all stages to be ready before starting
 def main() -> None:
     suppress_noise()
     parser = argparse.ArgumentParser(description="Whiteboard transcription pipeline")
@@ -126,11 +126,10 @@ def main() -> None:
     }
 
     layout_worker = LayoutWorker(factory=detector_factories[args.detector])
-    registry = Registry()
+    tracker = NoteTracker()
     transcriber = TranscriptionWorker(factory=transcriber_factories[args.transcriber])
     ledger = Ledger(output_dir=args.output_dir)
-    renderer = Renderer()
-    pending_ocr: dict[int, SemanticEntity] = {}
+    renderer = Renderer(display_width=args.display_width)
     paused = False
     fps = 0.0
     _last_t = time.monotonic()
@@ -170,59 +169,27 @@ def main() -> None:
             # Stage 4 — perspective correction (cached homography)
             rect_frame, rect_mask = rectifier.rectify(frame, board_mask, person_mask)
             # Stage 5 — surface reconstruction
-            composite = reconstructor.update(rect_frame, rect_mask)
+            composite = reconstructor.reconstruct(rect_frame, rect_mask)
 
             # Stage 6 — text line detection (async, non-blocking)
             # Stage 7 — block grouping
             blocks = layout_worker.detect(composite)
 
-            # Stage 8 — entity registry (cross-frame persistence)
-            entity_update = registry.tick(blocks, composite.shape[:2])
-
+            # Stage 8 — entity tracker (cross-frame persistence)
             # Stage 9 — OCR transcription (non-blocking)
-            for entity in entity_update.newly_inferring:
-                x1, y1, x2, y2 = entity.bbox
-                crop = composite[y1:y2, x1:x2]
-                if min(crop.shape[:2]) > 0:
-                    pending_ocr[entity.id] = entity
-                    transcriber.submit(entity.id, crop)
-                else:
-                    registry.reset_to_stabilizing(entity)
-
-            # Poll VLM results — update ledger and synthesise output files
-            for result in transcriber.get_results():
-                entity = pending_ocr.pop(result.entity_id, None)
-                if entity is not None and registry.mark_active(entity, result.text):
-                    ledger.update(entity.id, entity.bbox, result.text)
-
-            # Stage 10 — ledger synthesis
-            for entity in entity_update.newly_erased:
-                pending_ocr.pop(entity.id, None)
-                ledger.mark_erased(entity.id)
-
-            # Render — stack raw (top) above composite (bottom) in one window
-            board = renderer.render_board(
-                composite,
-                blocks,
-                entity_update.entities,
-                layout_worker.is_busy,
+            newly_inferring, newly_erased, newly_active = tracker.update(
+                blocks, composite, transcriber.collect()
             )
-            raw = renderer.render_raw(
-                frame,
-                person_mask,
-                rectifier.cached_corners,
-                board_masker.is_busy,
+            transcriber.submit(newly_inferring)
+            # Stage 10 — ledger synthesis
+            ledger.sync(newly_erased, newly_active)
+
+            # Render
+            renderer.show(
+                composite, blocks, tracker.notes, layout_worker.is_busy,
+                frame, person_mask, rectifier.cached_corners, board_masker.is_busy,
                 fps,
             )
-            if raw.shape[1] != board.shape[1]:
-                scale = board.shape[1] / raw.shape[1]
-                raw = cv2.resize(raw, (board.shape[1], int(raw.shape[0] * scale)))
-            combined = np.vstack([raw, board])
-            h, w = combined.shape[:2]
-            target_w = args.display_width
-            target_h = int(h * target_w / w)
-            combined = cv2.resize(combined, (target_w, target_h))
-            cv2.imshow("Lecture Historian", combined)
 
     except KeyboardInterrupt:
         pass
@@ -237,7 +204,7 @@ def main() -> None:
     n_total = len(all_entries)
     n_erased = sum(1 for e in all_entries if e.erased_at is not None)
     log.info(
-        "Session complete — %d entities tracked (%d active, %d erased). Output: %s",
+        "Session complete — %d notes tracked (%d active, %d erased). Output: %s",
         n_total,
         n_total - n_erased,
         n_erased,
