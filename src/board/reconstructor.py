@@ -38,7 +38,7 @@ class BoardReconstructor(InlineStage):
             power,
         )
 
-    def update(self, frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    def reconstruct(self, frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
         """Update the board model and return the clean composite.
 
         Args:

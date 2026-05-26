@@ -1,6 +1,6 @@
 """Stage 10 — Ledger Synthesis.
 
-Append-only in-memory record of every Semantic Entity seen during a session.
+Append-only in-memory record of every Note seen during a session.
 Mutations (update, mark_erased) automatically write live.md and
 lecture_history.md to the configured output directory.
 
@@ -12,8 +12,12 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from registry import Note
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -22,7 +26,7 @@ import numpy as np
 
 @dataclass
 class TextVersion:
-    """One OCR result snapshot for a Semantic Entity.
+    """One OCR result snapshot for a Note.
 
     Attributes:
         text: The full OCR/LaTeX string returned by the VLM.
@@ -35,18 +39,18 @@ class TextVersion:
 
 @dataclass
 class LedgerEntry:
-    """Append-only record of a single Semantic Entity across its full lifetime.
+    """Append-only record of a single Note across its full lifetime.
 
     Attributes:
-        entity_id: Stable integer ID from the Registry.
+        note_id: Stable integer ID from the NoteTracker.
         bbox: Last known bbox, shape (4,) int32: x1, y1, x2, y2 in rectified space.
-        first_seen: time.monotonic() when the entity was first submitted to the VLM.
+        first_seen: time.monotonic() when the note was first submitted to the VLM.
         versions: Ordered list of OCR results; index 0 is the first, each subsequent
             entry is a VERSIONED correction.
-        erased_at: time.monotonic() when the entity left the board, or None if active.
+        erased_at: time.monotonic() when the note left the board, or None if active.
     """
 
-    entity_id: int
+    note_id: int
     bbox: np.ndarray
     first_seen: float
     versions: list[TextVersion] = field(default_factory=list)
@@ -94,35 +98,47 @@ class Ledger:
     # Mutations — each auto-synthesizes output files
     # ------------------------------------------------------------------
 
-    def update(self, entity_id: int, bbox: np.ndarray, text: str) -> None:
-        """Record a new or updated OCR result for *entity_id*.
+    def update(self, note_id: int, bbox: np.ndarray, text: str) -> None:
+        """Record a new or updated OCR result for *note_id*.
 
-        - New entity → creates entry with first version.
-        - Existing entity, different text → appends VERSIONED event.
-        - Existing entity, identical text → no-op (no file write).
+        - New note → creates entry with first version.
+        - Existing note, different text → appends VERSIONED event.
+        - Existing note, identical text → no-op (no file write).
         """
         now = time.monotonic()
-        if entity_id not in self._entries:
-            self._entries[entity_id] = LedgerEntry(
-                entity_id=entity_id,
+        if note_id not in self._entries:
+            self._entries[note_id] = LedgerEntry(
+                note_id=note_id,
                 bbox=bbox.copy(),
                 first_seen=now,
                 versions=[TextVersion(text=text, timestamp=now)],
             )
         else:
-            entry = self._entries[entity_id]
+            entry = self._entries[note_id]
             if entry.versions[-1].text == text:
                 return  # identical — skip write
             entry.versions.append(TextVersion(text=text, timestamp=now))
 
         self._synthesize()
 
-    def mark_erased(self, entity_id: int) -> None:
-        """Record that *entity_id* is no longer visible on the board."""
-        entry = self._entries.get(entity_id)
+    def mark_erased(self, note_id: int) -> None:
+        """Record that *note_id* is no longer visible on the board."""
+        entry = self._entries.get(note_id)
         if entry is not None and entry.erased_at is None:
             entry.erased_at = time.monotonic()
             self._synthesize()
+
+    def sync(self, erased: list[Note], newly_active: list[Note]) -> None:
+        """Apply one pipeline cycle's erasures and OCR activations.
+
+        Args:
+            erased:       Notes that left the board this frame.
+            newly_active: Notes that just completed OCR transcription.
+        """
+        for note in erased:
+            self.mark_erased(note.id)
+        for note in newly_active:
+            self.update(note.id, note.bbox, note.ocr_text or "")
 
     # ------------------------------------------------------------------
     # Queries
@@ -151,7 +167,7 @@ class Ledger:
     # ------------------------------------------------------------------
 
     def _render_live(self) -> str:
-        """Render live.md: current board content, one block per active entity."""
+        """Render live.md: current board content, one block per active note."""
         active = self.get_active()
         if not active:
             return "# Whiteboard\n\n*(board empty)*\n"
@@ -174,7 +190,7 @@ class Ledger:
         toc_lines = ["## Contents\n"]
         for entry in all_entries:
             ts = self._mono_to_wall_str(entry.first_seen)
-            anchor = f"ent{entry.entity_id}-{ts.replace(':', '')}"
+            anchor = f"note{entry.note_id}-{ts.replace(':', '')}"
             content_lines = [
                 line for line in entry.versions[-1].text.splitlines() if line.strip()
             ]
@@ -193,7 +209,7 @@ class Ledger:
     def _render_entry(self, entry: LedgerEntry) -> str:
         """Render one history section: heading, latest text, collapsible revisions."""
         ts = self._mono_to_wall_str(entry.first_seen)
-        anchor = f"ent{entry.entity_id}-{ts.replace(':', '')}"
+        anchor = f"note{entry.note_id}-{ts.replace(':', '')}"
         parts = [f"## {ts} {{#{anchor}}}", "", entry.versions[-1].text]
 
         if len(entry.versions) > 1:

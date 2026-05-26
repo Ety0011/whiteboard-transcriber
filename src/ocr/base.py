@@ -19,11 +19,11 @@ class TranscriptionResult:
     """OCR result returned by the transcription worker subprocess.
 
     Attributes:
-        entity_id: Registry ID of the entity whose crop was transcribed.
+        note_id: NoteTracker ID of the note whose crop was transcribed.
         text: Recognised text (and/or LaTeX) returned by the VLM backend.
     """
 
-    entity_id: int
+    note_id: int
     text: str
 
 

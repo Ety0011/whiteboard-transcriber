@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 
 from layout import Block
-from registry import EntityState, SemanticEntity
+from registry import NoteState, Note
 
 log = logging.getLogger(__name__)
 
@@ -21,11 +21,11 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-_STATE_COLORS: dict[EntityState, tuple[int, int, int]] = {
-    EntityState.STABILIZING: (0, 165, 255),
-    EntityState.INFERRING: (0, 200, 255),
-    EntityState.ACTIVE: (94, 197, 34),    # #22C55E
-    EntityState.ERASED: (38, 38, 220),    # #DC2626
+_STATE_COLORS: dict[NoteState, tuple[int, int, int]] = {
+    NoteState.STABILIZING: (0, 165, 255),
+    NoteState.INFERRING: (0, 200, 255),
+    NoteState.ACTIVE: (94, 197, 34),    # #22C55E
+    NoteState.ERASED: (38, 38, 220),    # #DC2626
 }
 
 _CORNER_LABELS = ["TL", "TR", "BR", "BL"]
@@ -86,10 +86,10 @@ def _draw_blocks(frame: np.ndarray, blocks: list[Block]) -> np.ndarray:
     return frame
 
 
-def _draw_entities(frame: np.ndarray, entities: list[SemanticEntity]) -> np.ndarray:
-    """Draw entity bboxes and state labels colour-coded by EntityState."""
+def _draw_notes(frame: np.ndarray, notes: list[Note]) -> np.ndarray:
+    """Draw note bboxes and state labels colour-coded by NoteState."""
     overlay = frame.copy()
-    for ent in entities:
+    for ent in notes:
         x1, y1, x2, y2 = ent.bbox
         color = _STATE_COLORS.get(ent.state, (255, 255, 255))
 
@@ -122,7 +122,8 @@ def _draw_entities(frame: np.ndarray, entities: list[SemanticEntity]) -> np.ndar
 class Renderer:
     """Owns overlay toggle state and renders both pipeline display windows."""
 
-    def __init__(self) -> None:
+    def __init__(self, display_width: int = 960) -> None:
+        self._display_width = display_width
         self.show_corners = True
         self.show_mask = True
         self.show_blocks = True
@@ -132,15 +133,15 @@ class Renderer:
         self,
         composite: np.ndarray,
         blocks: list[Block],
-        entities: list[SemanticEntity],
+        notes: list[Note],
         is_busy: bool,
     ) -> np.ndarray:
-        """Draw block + entity overlays and LayoutWorker busy dot. Returns the frame."""
+        """Draw block + note overlays and LayoutWorker busy dot. Returns the frame."""
         board = composite.copy()
         if self.show_blocks:
             board = _draw_blocks(board, blocks)
         if self.show_tracker:
-            board = _draw_entities(board, entities)
+            board = _draw_notes(board, notes)
         cv2.circle(
             board,
             (board.shape[1] - 30, 30),
@@ -185,6 +186,30 @@ class Renderer:
             cv2.LINE_AA,
         )
         return raw
+
+    def show(
+        self,
+        composite: np.ndarray,
+        blocks: list[Block],
+        notes: list[Note],
+        layout_busy: bool,
+        frame: np.ndarray,
+        person_mask: np.ndarray,
+        cached_corners: np.ndarray | None,
+        board_busy: bool,
+        fps: float,
+    ) -> None:
+        """Render board + raw panels, stack them, scale to display width, and show."""
+        board = self.render_board(composite, blocks, notes, layout_busy)
+        raw = self.render_raw(frame, person_mask, cached_corners, board_busy, fps)
+        if raw.shape[1] != board.shape[1]:
+            scale = board.shape[1] / raw.shape[1]
+            raw = cv2.resize(raw, (board.shape[1], int(raw.shape[0] * scale)))
+        combined = np.vstack([raw, board])
+        h, w = combined.shape[:2]
+        target_h = int(h * self._display_width / w)
+        combined = cv2.resize(combined, (self._display_width, target_h))
+        cv2.imshow("Lecture Historian", combined)
 
     def handle_key(self, key: int) -> bool:
         """Handle overlay toggle keys [w/p/t/r]. Returns True if key was consumed."""

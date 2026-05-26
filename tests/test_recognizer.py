@@ -13,7 +13,7 @@ import numpy as np
 
 from src.document import WhiteboardDoc
 from src.text_recognizer import TextRecognizer
-from src.anchor_service.entity_registry import SemanticEntity as Region, EntityState as RegionState, EntityUpdate as TrackerResult
+from src.anchor_service.entity_registry import Note as Region, NoteState as RegionState
 
 # ---------------------------------------------------------------------------
 # Helpers
