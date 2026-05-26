@@ -97,6 +97,39 @@ class Capture:
         except queue.Full:
             pass
 
+    # ------------------------------------------------------------------
+    # Drawing API (no-ops — implemented by CanvasCapture in demo mode)
+    # ------------------------------------------------------------------
+
+    def on_mouse_down(
+        self, display_pos: tuple[int, int], display_size: tuple[int, int]
+    ) -> None:
+        """No-op for video/camera sources."""
+
+    def on_mouse_move(
+        self, display_pos: tuple[int, int], display_size: tuple[int, int]
+    ) -> None:
+        """No-op for video/camera sources."""
+
+    def on_mouse_up(self) -> None:
+        """No-op for video/camera sources."""
+
+    def on_eraser_down(
+        self, display_pos: tuple[int, int], display_size: tuple[int, int]
+    ) -> None:
+        """No-op for video/camera sources."""
+
+    def on_eraser_move(
+        self, display_pos: tuple[int, int], display_size: tuple[int, int]
+    ) -> None:
+        """No-op for video/camera sources."""
+
+    def on_eraser_up(self) -> None:
+        """No-op for video/camera sources."""
+
+    def clear(self) -> None:
+        """No-op for video/camera sources."""
+
     def __enter__(self) -> Capture:
         return self.start()
 

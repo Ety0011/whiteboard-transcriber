@@ -95,3 +95,24 @@ class BoardMasker(WorkerStage):
             self._submit_if_due(frame, self._recompute_interval)
 
         return None
+
+
+class NullBoardMasker:
+    """Drop-in for BoardMasker that skips SAM entirely (demo mode).
+
+    Always returns None from segment() so the Rectifier stays in its resize
+    fallback, passing the canvas frame through unchanged.
+    """
+
+    is_busy: bool = False
+
+    def segment(self, frame: np.ndarray) -> None:
+        """Return None every call — Rectifier uses its resize fallback."""
+        return None
+
+    def wait_ready(self, timeout: float | None = None) -> bool:
+        """Immediately ready — no subprocess to wait for."""
+        return True
+
+    def shutdown(self) -> None:
+        """No-op — nothing to tear down."""

@@ -95,3 +95,18 @@ class PersonMasker(InlineStage):
         if self._kernel is not None:
             mask = cv2.dilate(mask, self._kernel, iterations=1)
         return mask
+
+
+class NullPersonMasker:
+    """Drop-in for PersonMasker that always returns an empty mask (demo mode).
+
+    With no person detected, BoardReconstructor skips distanceTransform and
+    the renderer shows no mask overlay.
+    """
+
+    def segment(self, frame: np.ndarray) -> np.ndarray:
+        """Return an all-zeros mask — no person present."""
+        return np.zeros(frame.shape[:2], dtype=np.uint8)
+
+    def shutdown(self) -> None:
+        """No-op."""

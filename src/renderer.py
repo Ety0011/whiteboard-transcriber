@@ -122,8 +122,9 @@ def _draw_notes(frame: np.ndarray, notes: list[Note]) -> np.ndarray:
 class Renderer:
     """Owns overlay toggle state and renders both pipeline display windows."""
 
-    def __init__(self, display_width: int = 960) -> None:
+    def __init__(self, display_width: int = 960, stack: bool = True) -> None:
         self._display_width = display_width
+        self._stack = stack
         self.show_corners = True
         self.show_mask = True
         self.show_blocks = True
@@ -199,13 +200,27 @@ class Renderer:
         board_busy: bool,
         fps: float,
     ) -> np.ndarray:
-        """Render board + raw panels, stack them, scale to display width. Returns RGB (W,H,3) for pygame."""
+        """Render and scale to display width. Returns RGB (W,H,3) for pygame.
+
+        When stack=False (demo mode) only the board panel is shown. When
+        stack=True the raw camera frame is stacked above the board composite.
+        """
         board = self.render_board(composite, blocks, notes, layout_busy)
-        raw = self.render_raw(frame, person_mask, cached_corners, board_busy, fps)
-        if raw.shape[1] != board.shape[1]:
-            scale = board.shape[1] / raw.shape[1]
-            raw = cv2.resize(raw, (board.shape[1], int(raw.shape[0] * scale)))
-        combined = np.vstack([raw, board])
+        if not self._stack:
+            fps_label = f"{fps:.1f} fps"
+            (tw, th), _ = cv2.getTextSize(fps_label, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 1)
+            cv2.rectangle(board, (6, 6), (14 + tw, 14 + th), (0, 0, 0), -1)
+            cv2.putText(
+                board, fps_label, (10, 10 + th),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 1, cv2.LINE_AA,
+            )
+            combined = board
+        else:
+            raw = self.render_raw(frame, person_mask, cached_corners, board_busy, fps)
+            if raw.shape[1] != board.shape[1]:
+                scale = board.shape[1] / raw.shape[1]
+                raw = cv2.resize(raw, (board.shape[1], int(raw.shape[0] * scale)))
+            combined = np.vstack([raw, board])
         h, w = combined.shape[:2]
         target_h = int(h * self._display_width / w)
         bgr = cv2.resize(combined, (self._display_width, target_h))

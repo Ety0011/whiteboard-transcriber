@@ -27,10 +27,11 @@ import time
 from functools import partial
 from pathlib import Path
 
-from board.board_masker import BoardMasker
-from board.person_masker import PersonMasker
-from board.reconstructor import BoardReconstructor
+from board.board_masker import BoardMasker, NullBoardMasker
+from board.person_masker import NullPersonMasker, PersonMasker
+from board.reconstructor import BoardReconstructor, NullBoardReconstructor
 from board.rectifier import Rectifier
+from canvas_capture import CanvasCapture
 from capture import Capture
 from layout import (
     AABBTreeClusterer,
@@ -76,18 +77,27 @@ def main() -> None:
         os.environ["LOG_LEVEL"] = "DEBUG"
         logging.getLogger().setLevel(logging.DEBUG)
 
-    cap = Capture(args.source).start()
+    if args.demo:
+        cap: Capture | CanvasCapture = CanvasCapture().start()
+        board_masker: BoardMasker | NullBoardMasker = NullBoardMasker()
+        person_masker: PersonMasker | NullPersonMasker = NullPersonMasker()
+        rectifier = Rectifier()
+        reconstructor: BoardReconstructor | NullBoardReconstructor = (
+            NullBoardReconstructor()
+        )
+    else:
+        cap = Capture(args.source).start()
+        board_masker = BoardMasker()
+        person_masker = PersonMasker()
+        rectifier = Rectifier()
+        reconstructor = BoardReconstructor()
 
     log.info("Loading models …")
-    board_masker = BoardMasker()
-    person_masker = PersonMasker()
-    rectifier = Rectifier()
-    reconstructor = BoardReconstructor()
     layout_worker = LayoutWorker(factory=_DETECTOR_FACTORIES[args.detector])
     tracker = NoteTracker()
     transcriber = TranscriptionWorker(factory=_TRANSCRIBER_FACTORIES[args.transcriber])
     ledger = Ledger(output_dir=args.output_dir)
-    renderer = Renderer(display_width=args.display_width)
+    renderer = Renderer(display_width=args.display_width, stack=not args.demo)
 
     for worker in (board_masker, layout_worker, transcriber):
         worker.wait_ready()
@@ -95,7 +105,7 @@ def main() -> None:
     log.info("All workers ready.")
 
     pygame.init()
-    init_size = _display_size(cap, args.display_width)
+    init_size = _display_size(cap, args.display_width, stack=not args.demo)
     aspect_ratio = init_size[0] / init_size[1]
     screen = pygame.display.set_mode(init_size, pygame.RESIZABLE)
     pygame.display.set_caption("Lecture Historian")
@@ -125,8 +135,27 @@ def main() -> None:
                         paused = not paused
                         cap.pause() if paused else cap.resume()
                         log.info("[space] %s", "Paused" if paused else "Resumed")
+                    elif event.key == ord("c"):
+                        cap.clear()
+                        log.info("[c] Canvas cleared")
                     else:
                         renderer.handle_key(event.key)
+                sz = screen.get_size()
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if event.button == 1:
+                        cap.on_mouse_down(event.pos, sz)
+                    elif event.button == 3:
+                        cap.on_eraser_down(event.pos, sz)
+                elif event.type == pygame.MOUSEMOTION:
+                    if event.buttons[0]:
+                        cap.on_mouse_move(event.pos, sz)
+                    elif event.buttons[2]:
+                        cap.on_eraser_move(event.pos, sz)
+                elif event.type == pygame.MOUSEBUTTONUP:
+                    if event.button == 1:
+                        cap.on_mouse_up()
+                    elif event.button == 3:
+                        cap.on_eraser_up()
 
             if paused:
                 clock.tick(30)
@@ -192,13 +221,17 @@ def main() -> None:
     ledger.synthesize_timelapse()
 
 
-def _display_size(cap: Capture, display_width: int) -> tuple[int, int]:
+def _display_size(
+    cap: Capture | CanvasCapture, display_width: int, stack: bool = True
+) -> tuple[int, int]:
     """Compute the pygame window size from source metadata and display width.
 
-    The renderer stacks the raw frame (rescaled to board width) above the
-    1920×1080 board composite, then scales the combined image to display_width.
+    When stack=False only the 1920×1080 board panel is shown. When stack=True
+    the raw frame is stacked above the composite.
     """
     board_w, board_h = 1920, 1080
+    if not stack:
+        return (display_width, display_width * board_h // board_w)
     raw_w, raw_h = cap.frame_size or (board_w, board_h)
     scaled_raw_h = int(raw_h * board_w / raw_w)
     display_h = int((scaled_raw_h + board_h) * display_width / board_w)
@@ -238,6 +271,11 @@ def _parse_args() -> argparse.Namespace:
         default=Path("output"),
         metavar="DIR",
         help="Directory for live.md and lecture_history.md (default: output/)",
+    )
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="Demo mode: mouse-drawable canvas, no camera/video required",
     )
     parser.add_argument(
         "--debug",

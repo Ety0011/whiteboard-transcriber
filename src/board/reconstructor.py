@@ -63,3 +63,14 @@ class BoardReconstructor(InlineStage):
             self._composite = (1.0 - lr) * self._composite + lr * frame_float
 
         return self._composite.astype(np.uint8)
+
+
+class NullBoardReconstructor:
+    """Drop-in for BoardReconstructor that passes the frame through unchanged.
+
+    The canvas is already clean, so EMA would ghost erased strokes.
+    """
+
+    def reconstruct(self, frame: np.ndarray, _mask: np.ndarray) -> np.ndarray:
+        """Return *frame* unchanged."""
+        return frame
