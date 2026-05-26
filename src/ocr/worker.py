@@ -1,11 +1,11 @@
 """TranscriptionWorker — non-blocking WorkerStage subprocess for any BaseTranscriber.
 
 Factory is pickled and shipped to the worker process; model loading happens
-inside the subprocess after unpickling. Main process submits crops via submit()
-and drains results via get_results() — both non-blocking.
+inside the subprocess after unpickling. Main process submits notes via transcribe()
+and drains completed TranscriptionResult objects each call — both paths non-blocking.
 
 Queue design:
-  in_q  (maxsize=10): (entity_id, crop) — accepts multiple newly-stable
+  in_q  (maxsize=10): (note_id, crop) — accepts multiple newly-stable
         regions per frame without dropping.
   out_q (maxsize=30): TranscriptionResult — drained each frame.
 """
@@ -16,6 +16,7 @@ from typing import Callable
 
 import numpy as np
 
+from registry import Note
 from stage import WorkerStage
 
 from .base import BaseTranscriber, TranscriptionResult
@@ -24,8 +25,8 @@ from .base import BaseTranscriber, TranscriptionResult
 class TranscriptionWorker(WorkerStage):
     """Non-blocking transcription worker running in a dedicated subprocess.
 
-    submit() enqueues a crop. get_results() drains completed transcriptions.
-    Both are non-blocking; the subprocess handles inference independently.
+    transcribe() submits notes for OCR and drains completed TranscriptionResult
+    objects. Callers apply results to the NoteTracker separately.
 
     Args:
         factory: Zero-argument callable that constructs the BaseTranscriber
@@ -45,22 +46,31 @@ class TranscriptionWorker(WorkerStage):
 
     def _process_item(self, item: tuple[int, np.ndarray]) -> TranscriptionResult:
         assert self._model is not None
-        entity_id, crop = item
+        note_id, crop = item
         text = ""
         try:
             text = self._model.transcribe(crop)
-            self._log.debug("entity %d → %d chars: %r", entity_id, len(text), text[:60])
+            self._log.debug("note %d → %d chars: %r", note_id, len(text), text[:60])
         except Exception:
-            self._log.exception("inference failed for entity %d", entity_id)
-        return TranscriptionResult(entity_id=entity_id, text=text)
+            self._log.exception("inference failed for note %d", note_id)
+        return TranscriptionResult(note_id=note_id, text=text)
 
-    def submit(self, entity_id: int, crop: np.ndarray) -> None:
-        """Enqueue *crop* for transcription. Non-blocking; logs if queue full."""
-        self._submit((entity_id, crop))
+    def submit(self, notes: list[Note]) -> None:
+        """Enqueue *notes* for OCR — non-blocking.
 
-    def get_results(self) -> list[TranscriptionResult]:
-        """Drain all completed transcriptions available right now. Non-blocking."""
-        results: list[TranscriptionResult] = []
+        Args:
+            notes: Newly-INFERRING notes whose crop fields are populated.
+        """
+        for note in notes:
+            self._submit((note.id, note.crop))
+
+    def collect(self) -> list[TranscriptionResult]:
+        """Drain all completed OCR results since the last call — non-blocking.
+
+        Returns:
+            All TranscriptionResult objects available in the output queue.
+        """
+        results = []
         while True:
             result = self._poll()
             if result is None:
