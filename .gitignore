@@ -177,6 +177,5 @@ pyrightconfig.json
 
 
 ### Project ###
-models/
 flake.lock
 .vscode/
