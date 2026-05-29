@@ -93,6 +93,7 @@ python src/main.py --display-width 1280
 | `--transcriber` | `mock\|got\|paddlevl` | `paddlevl` | Stage 9 OCR backend |
 | `--output-dir` | path | `output/` | Directory for `live.md` and `lecture_history.md` |
 | `--display-width` | int | `960` | Preview window width in pixels |
+| `--demo` | flag | off | Mouse-drawable canvas mode; skips camera, SAM, and EMA |
 | `--debug` | flag | off | Set root log level to DEBUG across all processes |
 
 ### Keyboard Controls (Live Window)
@@ -100,6 +101,8 @@ python src/main.py --display-width 1280
 | Key | Action |
 |-----|--------|
 | `q` | Quit |
+| `space` | Pause / resume |
+| `c` | Clear canvas (demo mode only) |
 | `w` | Toggle board corner overlay |
 | `p` | Toggle person mask overlay |
 | `t` | Toggle text-block overlay |
@@ -202,7 +205,7 @@ A `BaseTextLineClusterer` strategy clusters the detected `TextLine` objects into
 | `aabbtree` | `AABBTreeClusterer` | Greedy agglomerative merge via min-heap + AABB engulfment veto |
 | `singlelinkage` | `SingleLinkageClusterer` | Obstacle-vetoed agglomerative merge; nearest-point distance cap |
 
-### Stage 8 — Note Tracker (`registry.py`)
+### Stage 8 — Note Tracker (`tracker.py`)
 
 `NoteTracker` matches `Block` objects from Stage 7 to persistent `Note` objects across frames using IoU + centroid scoring. Bounding boxes are EMA-smoothed. The state machine advances each note through STABILIZING → INFERRING → ACTIVE → ERASED. Notes stable for 10s are dispatched to Stage 9.
 
@@ -231,7 +234,7 @@ Three backends:
 
 ## 5. Entity State Machine
 
-The `NoteTracker` (`registry.py`) tracks every detected layout block as a `Note` through a 4-state lifecycle.
+The `NoteTracker` (`tracker.py`) tracks every detected layout block as a `Note` through a 4-state lifecycle.
 
 ```
          new block detected
@@ -294,9 +297,10 @@ whiteboard-transcriber/
 └── src/
     ├── main.py                 # Entry point — pipeline orchestrator + UI
     ├── capture.py              # Stage 1: frame ingestion thread
+    ├── canvas_capture.py       # Stage 1 (demo): mouse-drawable 1920×1080 canvas
     ├── stage.py                # InlineStage + WorkerStage ABCs (stage taxonomy)
     ├── logging_config.py       # Third-party noise suppression
-    ├── registry.py             # Stage 8: entity state machine + SemanticEntity
+    ├── tracker.py              # Stage 8: NoteTracker, Note, NoteState state machine
     ├── ledger.py               # Stage 10: append-only ledger + file synthesis
     ├── renderer.py             # OpenCV overlay rendering (display only)
     ├── board/                  # Stages 2–5: visual surface pipeline
@@ -403,14 +407,14 @@ Use the drop-old queue pattern for single-result producers (board masker, layout
 1. Subclass `BaseTextLineClusterer` from `layout/clusterer.py`.
 2. Implement `cluster(lines: list[TextLine]) -> list[Block]`.
 3. Add the module to `layout/__init__.py` exports.
-4. Register in `main.py`'s `detector_factories` dict and add the choice to `--detector`.
+4. Register in `main.py`'s `_DETECTOR_FACTORIES` dict and add the choice to `--detector`.
 
 ### Adding a New Transcriber Backend
 
 1. Subclass `BaseTranscriber` from `ocr/base.py`.
 2. Implement `load()` and `transcribe(crop: np.ndarray) -> str`.
 3. Add the module to `ocr/__init__.py` exports.
-4. Register in `main.py`'s `transcriber_factories` dict and add the choice to `--transcriber`.
+4. Register in `main.py`'s `_TRANSCRIBER_FACTORIES` dict and add the choice to `--transcriber`.
 
 ---
 
