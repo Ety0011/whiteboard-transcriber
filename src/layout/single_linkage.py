@@ -17,7 +17,6 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .block import Block
-from .clusterer import BaseTextLineClusterer
 from .text_detector import TextLine
 
 
@@ -82,7 +81,7 @@ def _intersects(a: np.ndarray, b: np.ndarray) -> bool:
     return bool(a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1])
 
 
-class SingleLinkageClusterer(BaseTextLineClusterer):
+class SingleLinkageClusterer:
     """Agglomerative clustering with obstacle veto, distance cap, and hysteresis.
 
     Merges the closest cluster pair whose union bbox does not newly enclose
@@ -134,6 +133,28 @@ class SingleLinkageClusterer(BaseTextLineClusterer):
         ):
             return self._max_gap_px + self._hysteresis_px
         return self._max_gap_px
+
+    @staticmethod
+    def _compute_bbox(lines: list[TextLine]) -> np.ndarray:
+        """Return the tight axis-aligned bbox enclosing all *lines*."""
+        boxes = np.array([line.bbox for line in lines])
+        return np.array(
+            [
+                np.min(boxes[:, 0]),
+                np.min(boxes[:, 1]),
+                np.max(boxes[:, 2]),
+                np.max(boxes[:, 3]),
+            ],
+            dtype=np.int32,
+        )
+
+    def _make_block(self, lines: list[TextLine]) -> Block:
+        """Construct a Block from *lines* — tight bbox and max confidence."""
+        return Block(
+            bbox=self._compute_bbox(lines),
+            confidence=max(l.confidence for l in lines),
+            lines=lines,
+        )
 
     def cluster(self, lines: list[TextLine]) -> list[Block]:
         """Cluster text lines into blocks via obstacle-vetoed agglomeration.

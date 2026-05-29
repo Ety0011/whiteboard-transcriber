@@ -4,7 +4,6 @@ Usage::
 
     python src/main.py                                        # live webcam
     python src/main.py video.mp4                             # video file
-    python src/main.py --detector hdbscan video.mp4
     python src/main.py --transcriber got video.mp4
     python src/main.py --output-dir /tmp/lecture video.mp4
     python src/main.py --debug                               # verbose logging
@@ -24,7 +23,6 @@ import argparse
 import logging
 import os
 import time
-from functools import partial
 from pathlib import Path
 
 from board.board_masker import BoardMasker, NullBoardMasker
@@ -33,14 +31,7 @@ from board.reconstructor import BoardReconstructor, NullBoardReconstructor
 from board.rectifier import Rectifier
 from canvas_capture import CanvasCapture
 from capture import Capture
-from layout import (
-    AABBTreeClusterer,
-    BlockDetector,
-    HDBSCANClusterer,
-    SingleLinkageClusterer,
-    UnionFindClusterer,
-)
-from layout.worker import LayoutWorker
+from layout import LayoutWorker
 from ledger import Ledger
 from logging_config import suppress_noise
 from ocr import GotTranscriber, MockTranscriber, PaddleVLTranscriber
@@ -50,13 +41,6 @@ from tracker import NoteTracker
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
-
-_DETECTOR_FACTORIES = {
-    "unionfind": partial(BlockDetector, strategy=UnionFindClusterer()),
-    "hdbscan": partial(BlockDetector, strategy=HDBSCANClusterer()),
-    "aabbtree": partial(BlockDetector, strategy=AABBTreeClusterer()),
-    "singlelinkage": partial(BlockDetector, strategy=SingleLinkageClusterer()),
-}
 
 _TRANSCRIBER_FACTORIES = {
     "mock": MockTranscriber,
@@ -92,7 +76,7 @@ def main() -> None:
         reconstructor = BoardReconstructor()
 
     log.info("Loading models …")
-    layout_worker = LayoutWorker(factory=_DETECTOR_FACTORIES[args.detector])
+    layout_worker = LayoutWorker()
     tracker = NoteTracker()
     transcriber = TranscriptionWorker(factory=_TRANSCRIBER_FACTORIES[args.transcriber])
     ledger = Ledger(output_dir=args.output_dir)
@@ -113,7 +97,7 @@ def main() -> None:
     fps = 0.0
     last_t = time.monotonic()
 
-    log.info("Ready. Detector: %s | Press q or Ctrl-C to stop.", args.detector)
+    log.info("Ready. Press q or Ctrl-C to stop.")
 
     try:
         while True:
@@ -245,12 +229,6 @@ def _parse_args() -> argparse.Namespace:
         nargs="?",
         metavar="FILE",
         help="video or image file (omit to use the default webcam)",
-    )
-    parser.add_argument(
-        "--detector",
-        choices=list(_DETECTOR_FACTORIES),
-        default="singlelinkage",
-        help="Stage 7 block grouping strategy (default: singlelinkage)",
     )
     parser.add_argument(
         "--transcriber",

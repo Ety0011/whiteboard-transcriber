@@ -1,20 +1,19 @@
-"""Stage 6 — Text Line Detection (non-blocking WorkerStage subprocess).
+"""Stage 6+7 — Text Line Detection + Clustering (non-blocking WorkerStage subprocess).
 
-LayoutWorker wraps any BaseLayoutDetector behind a WorkerStage subprocess.
+LayoutWorker directly owns TextLineDetector and SingleLinkageClusterer.
 detect() is non-blocking: it submits the composite frame (throttled) and
 immediately returns the most recently completed result.
 """
 
 from __future__ import annotations
 
-from typing import Callable
-
 import numpy as np
 
 from stage import WorkerStage
 
-from .base import BaseLayoutDetector
 from .block import Block
+from .single_linkage import SingleLinkageClusterer
+from .text_detector import TextLineDetector
 
 
 class LayoutWorker(WorkerStage):
@@ -25,26 +24,33 @@ class LayoutWorker(WorkerStage):
     cached blocks immediately.
 
     Args:
-        factory: Zero-argument callable that constructs the BaseLayoutDetector
-            inside the subprocess after unpickling.
         submit_interval_s: Minimum seconds between frame submissions.
     """
 
     _process_name = "layout-detector"
 
-    def __init__(
-        self,
-        factory: Callable[[], BaseLayoutDetector],
-        submit_interval_s: float = 0.5,
-    ) -> None:
-        self._factory = factory
+    def __init__(self, submit_interval_s: float = 0.5) -> None:
         self._submit_interval_s = submit_interval_s
         self._cached: list[Block] = []
+        self._detector: TextLineDetector | None = None
+        self._clusterer: SingleLinkageClusterer | None = None
         super().__init__()
 
+    def load(self) -> None:
+        """Instantiate and load models inside the subprocess."""
+        self._detector = TextLineDetector()
+        self._detector.load()
+        self._clusterer = SingleLinkageClusterer()
+        self._log.info("TextLineDetector + SingleLinkageClusterer ready")
+
+    def _on_shutdown(self) -> None:
+        if self._detector is not None:
+            self._detector.shutdown()
+
     def _process_item(self, frame: np.ndarray) -> list[Block]:
-        assert self._model is not None
-        blocks = self._model.detect(frame)
+        assert self._detector is not None and self._clusterer is not None
+        lines = self._detector.detect(frame)
+        blocks = self._clusterer.cluster(lines)
         self._log.debug("%d blocks detected", len(blocks))
         return blocks
 
