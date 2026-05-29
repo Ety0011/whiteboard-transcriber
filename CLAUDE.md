@@ -13,9 +13,8 @@
 5. [Entity State Machine](#5-entity-state-machine)
 6. [Subprocess Design](#6-subprocess-design)
 7. [Project Structure](#7-project-structure)
-8. [Testing](#8-testing)
-9. [Development Rules](#9-development-rules)
-10. [Engineering Constraints](#10-engineering-constraints)
+8. [Development Rules](#8-development-rules)
+9. [Engineering Constraints](#9-engineering-constraints)
 
 ---
 
@@ -82,6 +81,9 @@ python src/main.py --debug recording.mp4
 
 # Adjust display window width
 python src/main.py --display-width 1280
+
+# Demo mode: mouse-drawable canvas, no camera required
+python src/main.py --demo
 ```
 
 ### CLI Reference
@@ -293,7 +295,6 @@ whiteboard-transcriber/
 ├── requirements.txt            # Python dependencies
 ├── models/                     # Local model weights (not committed)
 ├── output/                     # Generated output (not committed)
-├── tests/                      # Pytest test suite
 └── src/
     ├── main.py                 # Entry point — pipeline orchestrator + UI
     ├── capture.py              # Stage 1: frame ingestion thread
@@ -329,27 +330,7 @@ whiteboard-transcriber/
 
 ---
 
-## 8. Testing
-
-```bash
-# Run all tests
-pytest tests/
-
-# Run a specific test module
-pytest tests/test_rectifier.py
-
-# Run with verbose output
-pytest -v tests/
-
-# Run with debug logging
-pytest -s tests/
-```
-
-Use `--transcriber mock` during manual integration testing — it bypasses model loading and returns immediately, allowing full pipeline validation without GPU/memory overhead.
-
----
-
-## 9. Development Rules
+## 8. Development Rules
 
 ### Typing
 
@@ -357,10 +338,10 @@ All function signatures must have complete type annotations. No `Any` without a 
 
 ```python
 # Correct
-def tick(self, blocks: list[Block], frame_shape: tuple[int, int]) -> EntityUpdate: ...
+def cluster(self, lines: list[TextLine]) -> list[Block]: ...
 
 # Wrong
-def tick(self, blocks, frame_shape): ...
+def cluster(self, lines): ...
 ```
 
 ### Docstrings
@@ -418,7 +399,7 @@ Use the drop-old queue pattern for single-result producers (board masker, layout
 
 ---
 
-## 10. Engineering Constraints
+## 9. Engineering Constraints
 
 ### Coordinate Space
 
