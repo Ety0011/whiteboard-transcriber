@@ -11,9 +11,8 @@ import numpy as np
 
 from stage import WorkerStage
 
-from .block import Block
 from .single_linkage import SingleLinkageClusterer
-from .text_detector import TextLineDetector
+from .text_detector import Block, TextLineDetector
 
 
 class LayoutWorker(WorkerStage):

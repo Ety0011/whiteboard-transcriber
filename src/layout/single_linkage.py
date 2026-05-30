@@ -16,8 +16,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .block import Block
-from .text_detector import TextLine
+from .text_detector import Block, TextLine
 
 
 @dataclass
