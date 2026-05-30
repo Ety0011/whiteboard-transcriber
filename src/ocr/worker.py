@@ -17,7 +17,7 @@ import numpy as np
 from stage import WorkerStage
 from tracker import Note, TranscriptionResult
 
-from .paddle_vl import PaddleVLTranscriber
+from .transcriber import PaddleVLTranscriber
 
 
 class TranscriptionWorker(WorkerStage):

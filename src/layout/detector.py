@@ -1,17 +1,14 @@
-"""PaddleOCR text-line detector and layout data types.
+"""Stage 6 — Text Line Detection (PaddleOCR PP-OCRv5_server_det).
 
-TextLineDetector wraps PP-OCRv5_server_det and runs synchronously inside the
-layout-detector subprocess.
+TextLineDetector runs synchronously inside the layout-detector subprocess.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -27,21 +24,7 @@ class TextLine:
     bbox: np.ndarray
     confidence: float
 
-
-@dataclass
-class Block:
-    """A spatially coherent group of text lines forming one semantic unit.
-
-    Attributes:
-        bbox: Tight axis-aligned bounding box over all constituent lines,
-            shape (4,) int32: x1, y1, x2, y2 in rectified 1920×1080 space.
-        confidence: Maximum detection confidence among constituent lines.
-        lines: Individual TextLine anchors that make up this block.
-    """
-
-    bbox: np.ndarray
-    confidence: float
-    lines: list[TextLine] = field(default_factory=list)
+logger = logging.getLogger(__name__)
 
 
 def _extract_polys(raw_results: list) -> list[tuple[list, float]]:

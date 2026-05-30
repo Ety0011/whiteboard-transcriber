@@ -25,12 +25,16 @@ import os
 import time
 from pathlib import Path
 
-from board.board_masker import BoardMasker, NullBoardMasker
-from board.person_masker import NullPersonMasker, PersonMasker
-from board.reconstructor import BoardReconstructor, NullBoardReconstructor
-from board.rectifier import Rectifier
-from canvas_capture import CanvasCapture
-from capture import Capture
+from board import (
+    BoardMasker,
+    BoardReconstructor,
+    NullBoardMasker,
+    NullBoardReconstructor,
+    NullPersonMasker,
+    PersonMasker,
+    Rectifier,
+)
+from capture import CanvasCapture, Capture
 from layout import LayoutWorker
 from ledger import Ledger
 from logging_config import suppress_noise

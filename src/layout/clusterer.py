@@ -1,4 +1,4 @@
-"""Obstacle-vetoed agglomerative clustering for text layout grouping.
+"""Stage 7 — Obstacle-vetoed agglomerative clustering for text layout grouping.
 
 Merges cluster pairs in ascending order of nearest-point Euclidean
 distance. A merge is vetoed when the union bbox would newly
@@ -16,7 +16,23 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .text_detector import Block, TextLine
+from .detector import TextLine
+
+
+@dataclass
+class Block:
+    """A spatially coherent group of text lines forming one semantic unit.
+
+    Attributes:
+        bbox: Tight axis-aligned bounding box over all constituent lines,
+            shape (4,) int32: x1, y1, x2, y2 in rectified 1920×1080 space.
+        confidence: Maximum detection confidence among constituent lines.
+        lines: Individual TextLine anchors that make up this block.
+    """
+
+    bbox: np.ndarray
+    confidence: float
+    lines: list[TextLine] = field(default_factory=list)
 
 
 @dataclass
