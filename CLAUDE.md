@@ -50,7 +50,7 @@ Place the following model files under `models/` before running:
 | `models/sam3.1_multiplex.pt` | Ultralytics SAM 3.1 |
 | `models/selfie_segmenter.tflite` | MediaPipe Selfie Segmenter |
 
-HuggingFace models (`stepfun-ai/GOT-OCR-2.0-hf`, `mlx-community/PaddleOCR-VL-1.5-8bit`) and PaddleOCR (`PP-OCRv5_server_det`) are downloaded automatically on first run.
+The HuggingFace model (`mlx-community/PaddleOCR-VL-1.5-8bit`) and PaddleOCR (`PP-OCRv5_server_det`) are downloaded automatically on first run.
 
 ---
 
@@ -68,14 +68,6 @@ python src/main.py recording.mp4
 # Custom output directory
 python src/main.py --output-dir /tmp/lecture recording.mp4
 
-# Swap layout detector
-python src/main.py --detector hdbscan recording.mp4
-python src/main.py --detector aabbtree recording.mp4
-
-# Swap OCR backend
-python src/main.py --transcriber got recording.mp4
-python src/main.py --transcriber mock recording.mp4   # dev/test (no model load)
-
 # Verbose logging (propagates LOG_LEVEL=DEBUG to all subprocesses)
 python src/main.py --debug recording.mp4
 
@@ -91,8 +83,6 @@ python src/main.py --demo
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `source` | positional | webcam | Video/image file path |
-| `--detector` | `unionfind\|hdbscan\|aabbtree\|singlelinkage` | `singlelinkage` | Stage 7 block grouping strategy |
-| `--transcriber` | `mock\|got\|paddlevl` | `paddlevl` | Stage 9 OCR backend |
 | `--output-dir` | path | `output/` | Directory for `live.md` and `lecture_history.md` |
 | `--display-width` | int | `960` | Preview window width in pixels |
 | `--demo` | flag | off | Mouse-drawable canvas mode; skips camera, SAM, and EMA |
@@ -196,16 +186,9 @@ Pixels near or under the person mask have `lr≈0` and are frozen at their last 
 
 `LayoutWorker` manages the `layout-detector` subprocess. Inside the worker, `TextLineDetector` runs PaddleOCR `PP-OCRv5_server_det` synchronously, returning a list of `TextLine` objects (bbox + confidence).
 
-### Stage 7 — Block Grouping (`layout/`)
+### Stage 7 — Block Grouping (`layout/single_linkage.py`)
 
-A `BaseTextLineClusterer` strategy clusters the detected `TextLine` objects into `Block` objects. Four strategies are available:
-
-| Strategy | Class | Behaviour |
-|----------|-------|-----------|
-| `unionfind` | `UnionFindClusterer` | Asymmetric v/h dilation over median line height; early-break on y-gap; width-ratio guard against header absorption |
-| `hdbscan` | `HDBSCANClusterer` | Scale-invariant anisotropic distance; noise lines become singleton blocks |
-| `aabbtree` | `AABBTreeClusterer` | Greedy agglomerative merge via min-heap + AABB engulfment veto |
-| `singlelinkage` | `SingleLinkageClusterer` | Obstacle-vetoed agglomerative merge; nearest-point distance cap |
+`SingleLinkageClusterer` clusters the detected `TextLine` objects into `Block` objects via obstacle-vetoed agglomeration. Merges the closest cluster pair whose union bbox does not newly enclose any third cluster and whose nearest-point distance is within `max_gap_px`. Hysteresis prevents co-block lines from oscillating between merged/split states.
 
 ### Stage 8 — Note Tracker (`tracker.py`)
 
@@ -220,13 +203,7 @@ A `BaseTextLineClusterer` strategy clusters the detected `TextLine` objects into
 - `submit(notes)` — enqueue newly-INFERRING notes for OCR (non-blocking).
 - `collect()` — drain all completed `TranscriptionResult` objects since the last call (non-blocking). Results are passed into `tracker.update()` the following frame.
 
-Three backends:
-
-| Backend | Class | Notes |
-|---------|-------|-------|
-| `paddlevl` | `PaddleVLTranscriber` | `mlx-community/PaddleOCR-VL-1.5-8bit` via MLX. Default. |
-| `got` | `GotTranscriber` | `stepfun-ai/GOT-OCR-2.0-hf` via HuggingFace, float16 on MPS. CLAHE preprocessing applied. |
-| `mock` | `MockTranscriber` | Returns `[mock OCR]`. No model loaded. Use for testing. |
+Backend: `PaddleVLTranscriber` — `mlx-community/PaddleOCR-VL-1.5-8bit` via MLX.
 
 ### Stage 10 — Ledger Synthesis (`ledger.py`)
 
@@ -279,7 +256,7 @@ Three independent worker processes run throughout a session:
 |---|---|---|---|
 | `sam3-board-masker` | `BoardMasker` | SAM 3.1 | in: maxsize=1, out: maxsize=1 (drop-old pattern) |
 | `layout-detector` | `LayoutWorker` | PaddleOCR | in: maxsize=1, out: maxsize=1 (drop-old pattern) |
-| `transcription-worker` | `TranscriptionWorker` | VLM backend | in: maxsize=10, out: maxsize=30 |
+| `transcription-worker` | `TranscriptionWorker` | PaddleVL-1.5 (MLX) | in: maxsize=10, out: maxsize=30 |
 
 **Drop-old pattern** (used by board masker and layout): the output queue holds at most one result. Before publishing, the worker drains any stale result with `get_nowait()` before `put_nowait()`. The main loop always receives the freshest available result.
 
@@ -301,7 +278,7 @@ whiteboard-transcriber/
     ├── canvas_capture.py       # Stage 1 (demo): mouse-drawable 1920×1080 canvas
     ├── stage.py                # InlineStage + WorkerStage ABCs (stage taxonomy)
     ├── logging_config.py       # Third-party noise suppression
-    ├── tracker.py              # Stage 8: NoteTracker, Note, NoteState state machine
+    ├── tracker.py              # Stage 8: NoteTracker, Note, NoteState, TranscriptionResult
     ├── ledger.py               # Stage 10: append-only ledger + file synthesis
     ├── renderer.py             # OpenCV overlay rendering (display only)
     ├── board/                  # Stages 2–5: visual surface pipeline
@@ -310,22 +287,13 @@ whiteboard-transcriber/
     │   ├── rectifier.py        # Stage 4: homography + warp to 1920×1080
     │   └── reconstructor.py    # Stage 5: distance-weighted EMA composite
     ├── layout/                 # Stages 6–7: text detection + grouping
-    │   ├── base.py             # BaseLayoutDetector ABC
     │   ├── block.py            # Block dataclass
-    │   ├── clusterer.py        # BaseTextLineClusterer ABC
     │   ├── text_detector.py    # Stage 6: TextLine dataclass + PaddleOCR detection
-    │   ├── block_detector.py   # Composes TextLineDetector + clusterer strategy
-    │   ├── worker.py           # Stage 6: LayoutWorker subprocess manager
-    │   ├── union_find.py       # Stage 7: asymmetric dilation + Union-Find
-    │   ├── hdbscan.py          # Stage 7: anisotropic HDBSCAN
-    │   ├── aabb_tree.py        # Stage 7: greedy agglomerative + AABB veto
-    │   └── single_linkage.py   # Stage 7: obstacle-vetoed agglomeration
+    │   ├── single_linkage.py   # Stage 7: obstacle-vetoed agglomeration
+    │   └── worker.py           # LayoutWorker subprocess manager
     └── ocr/                    # Stage 9: VLM transcription
-        ├── base.py             # BaseTranscriber ABC + TranscriptionResult
-        ├── worker.py           # TranscriptionWorker subprocess manager
-        ├── got.py              # GotTranscriber (GOT-OCR 2.0, HuggingFace)
         ├── paddle_vl.py        # PaddleVLTranscriber (PaddleOCR-VL-1.5, MLX)
-        └── mock.py             # MockTranscriber (no model, for testing)
+        └── worker.py           # TranscriptionWorker subprocess manager
 ```
 
 ---
@@ -365,37 +333,25 @@ Model weights must never be loaded in `__init__`. Constructors are picklable con
 
 ```python
 # Correct
-class MyDetector(BaseLayoutDetector):
+class MyWorker(WorkerStage):
     def __init__(self, threshold: float = 0.6) -> None:
         self._threshold = threshold
         self._model = None  # loaded in load()
+        super().__init__()
 
     def load(self) -> None:
         self._model = load_model(...)
 
 # Wrong: loads model in __init__ — breaks pickling
-class MyDetector(BaseLayoutDetector):
+class MyWorker(WorkerStage):
     def __init__(self) -> None:
         self._model = load_model(...)
+        super().__init__()
 ```
 
 ### Subprocess Communication
 
 Use the drop-old queue pattern for single-result producers (board masker, layout detector). Use bounded queues (`maxsize > 1`) only for pipelines that must not drop results (transcription worker). Never use `queue.get()` with a blocking call in the main loop.
-
-### Adding a New Grouper
-
-1. Subclass `BaseTextLineClusterer` from `layout/clusterer.py`.
-2. Implement `cluster(lines: list[TextLine]) -> list[Block]`.
-3. Add the module to `layout/__init__.py` exports.
-4. Register in `main.py`'s `_DETECTOR_FACTORIES` dict and add the choice to `--detector`.
-
-### Adding a New Transcriber Backend
-
-1. Subclass `BaseTranscriber` from `ocr/base.py`.
-2. Implement `load()` and `transcribe(crop: np.ndarray) -> str`.
-3. Add the module to `ocr/__init__.py` exports.
-4. Register in `main.py`'s `_TRANSCRIBER_FACTORIES` dict and add the choice to `--transcriber`.
 
 ---
 
@@ -422,7 +378,7 @@ Every worker function must call `logging.basicConfig(...)` **before** importing 
 | Allocation | Budget |
 |---|---|
 | SAM 3.1 + PaddleOCR (CV resident) | ~9 GB |
-| VLM worker (GOT-OCR 2.0 float16 or PaddleVL-1.5 8-bit) | ~11 GB |
+| VLM worker (PaddleVL-1.5 8-bit) | ~11 GB |
 | OS + frame queues + system overhead | ~4 GB |
 
 If unified memory approaches 22GB, reduce VLM inference frequency before degrading SAM 3.1. Tracking integrity takes priority over OCR throughput.
