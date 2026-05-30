@@ -1,8 +1,8 @@
-"""TranscriptionWorker — non-blocking WorkerStage subprocess for any BaseTranscriber.
+"""TranscriptionWorker — non-blocking WorkerStage subprocess for PaddleVLTranscriber.
 
-Factory is pickled and shipped to the worker process; model loading happens
-inside the subprocess after unpickling. Main process submits notes via transcribe()
-and drains completed TranscriptionResult objects each call — both paths non-blocking.
+Model loading happens inside the subprocess after unpickling. Main process submits
+notes via submit() and drains completed TranscriptionResult objects via collect()
+— both paths non-blocking.
 
 Queue design:
   in_q  (maxsize=10): (note_id, crop) — accepts multiple newly-stable
@@ -12,25 +12,19 @@ Queue design:
 
 from __future__ import annotations
 
-from typing import Callable
-
 import numpy as np
 
 from stage import WorkerStage
-from tracker import Note
+from tracker import Note, TranscriptionResult
 
-from .base import BaseTranscriber, TranscriptionResult
+from .paddle_vl import PaddleVLTranscriber
 
 
 class TranscriptionWorker(WorkerStage):
     """Non-blocking transcription worker running in a dedicated subprocess.
 
-    transcribe() submits notes for OCR and drains completed TranscriptionResult
-    objects. Callers apply results to the NoteTracker separately.
-
-    Args:
-        factory: Zero-argument callable that constructs the BaseTranscriber
-            inside the subprocess after unpickling.
+    submit() enqueues notes for OCR; collect() drains completed
+    TranscriptionResult objects. Callers apply results to NoteTracker separately.
     """
 
     _process_name = "transcription-worker"
@@ -40,16 +34,22 @@ class TranscriptionWorker(WorkerStage):
     _daemon = True
     _shutdown_timeout = 10.0
 
-    def __init__(self, factory: Callable[[], BaseTranscriber]) -> None:
-        self._factory = factory
+    def __init__(self) -> None:
+        self._transcriber: PaddleVLTranscriber | None = None
         super().__init__()
 
+    def load(self) -> None:
+        """Instantiate and load PaddleVLTranscriber inside the subprocess."""
+        self._transcriber = PaddleVLTranscriber()
+        self._transcriber.load()
+        self._log.info("PaddleVLTranscriber ready")
+
     def _process_item(self, item: tuple[int, np.ndarray]) -> TranscriptionResult:
-        assert self._model is not None
+        assert self._transcriber is not None
         note_id, crop = item
         text = ""
         try:
-            text = self._model.transcribe(crop)
+            text = self._transcriber.transcribe(crop)
             self._log.debug("note %d → %d chars: %r", note_id, len(text), text[:60])
         except Exception:
             self._log.exception("inference failed for note %d", note_id)

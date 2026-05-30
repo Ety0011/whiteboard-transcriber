@@ -20,13 +20,25 @@ import time
 import numpy as np
 
 from layout import Block
-from ocr.base import TranscriptionResult
 
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Data types
 # ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class TranscriptionResult:
+    """OCR result produced by the transcription worker subprocess.
+
+    Attributes:
+        note_id: NoteTracker ID of the note whose crop was transcribed.
+        text: Recognised text (and/or LaTeX) returned by the VLM backend.
+    """
+
+    note_id: int
+    text: str
 
 
 class NoteState(enum.Enum):

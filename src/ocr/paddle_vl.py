@@ -10,12 +10,10 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from .base import BaseTranscriber
-
 _MODEL_ID = "mlx-community/PaddleOCR-VL-1.5-8bit"
 
 
-class PaddleVLTranscriber(BaseTranscriber):
+class PaddleVLTranscriber:
     """PaddleOCR-VL-1.5 OCR — reads text from whiteboard entity crops via MLX."""
 
     def __init__(self, model_id: str = _MODEL_ID) -> None:

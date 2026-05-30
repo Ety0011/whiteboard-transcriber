@@ -34,19 +34,12 @@ from capture import Capture
 from layout import LayoutWorker
 from ledger import Ledger
 from logging_config import suppress_noise
-from ocr import GotTranscriber, MockTranscriber, PaddleVLTranscriber
-from ocr.worker import TranscriptionWorker
+from ocr import TranscriptionWorker
 from renderer import Renderer
 from tracker import NoteTracker
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
-
-_TRANSCRIBER_FACTORIES = {
-    "mock": MockTranscriber,
-    "got": GotTranscriber,
-    "paddlevl": PaddleVLTranscriber,
-}
 
 
 # TODO: make all stages async, InlineStage was a fail
@@ -78,7 +71,7 @@ def main() -> None:
     log.info("Loading models …")
     layout_worker = LayoutWorker()
     tracker = NoteTracker()
-    transcriber = TranscriptionWorker(factory=_TRANSCRIBER_FACTORIES[args.transcriber])
+    transcriber = TranscriptionWorker()
     ledger = Ledger(output_dir=args.output_dir)
     renderer = Renderer(display_width=args.display_width, stack=not args.demo)
 
@@ -229,12 +222,6 @@ def _parse_args() -> argparse.Namespace:
         nargs="?",
         metavar="FILE",
         help="video or image file (omit to use the default webcam)",
-    )
-    parser.add_argument(
-        "--transcriber",
-        choices=list(_TRANSCRIBER_FACTORIES),
-        default="paddlevl",
-        help="Stage 9 OCR backend (default: paddlevl)",
     )
     parser.add_argument(
         "--display-width",
