@@ -19,7 +19,7 @@ _MP_MODEL_PATH = (
 )
 
 
-class PersonMasker(InlineStage):
+class PersonSegmenter(InlineStage):
     """MediaPipe selfie segmenter — self-throttled person mask.
 
     Returns a uint8 H×W mask (1=person, 0=board). Runs in the main loop but
@@ -97,7 +97,7 @@ class PersonMasker(InlineStage):
         return mask
 
 
-class NullPersonMasker:
+class NullPersonSegmenter:
     """Drop-in for PersonMasker that always returns an empty mask (demo mode).
 
     With no person detected, BoardReconstructor skips distanceTransform and

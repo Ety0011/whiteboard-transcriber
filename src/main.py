@@ -26,12 +26,12 @@ import time
 from pathlib import Path
 
 from board import (
-    BoardMasker,
-    BoardReconstructor,
-    NullBoardMasker,
-    NullBoardReconstructor,
-    NullPersonMasker,
-    PersonMasker,
+    BoardCompositor,
+    BoardSegmenter,
+    NullBoardCompositor,
+    NullBoardSegmenter,
+    NullPersonSegmenter,
+    PersonSegmenter,
     Rectifier,
 )
 from capture import CanvasCapture, Capture
@@ -45,7 +45,7 @@ from tracker import NoteTracker
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
 
-
+# TODO: fix demo messy integration
 # TODO: make all stages async, InlineStage was a fail
 def main() -> None:
     suppress_noise()  # sets env vars inherited by all worker subprocesses
@@ -59,18 +59,16 @@ def main() -> None:
 
     if args.demo:
         cap: Capture | CanvasCapture = CanvasCapture().start()
-        board_masker: BoardMasker | NullBoardMasker = NullBoardMasker()
-        person_masker: PersonMasker | NullPersonMasker = NullPersonMasker()
+        board_segmenter: BoardSegmenter | NullBoardSegmenter = NullBoardSegmenter()
+        person_segmenter: PersonSegmenter | NullPersonSegmenter = NullPersonSegmenter()
         rectifier = Rectifier()
-        reconstructor: BoardReconstructor | NullBoardReconstructor = (
-            NullBoardReconstructor()
-        )
+        compositor: BoardCompositor | NullBoardCompositor = NullBoardCompositor()
     else:
         cap = Capture(args.source).start()
-        board_masker = BoardMasker()
-        person_masker = PersonMasker()
+        board_segmenter = BoardSegmenter()
+        person_segmenter = PersonSegmenter()
         rectifier = Rectifier()
-        reconstructor = BoardReconstructor()
+        compositor = BoardCompositor()
 
     log.info("Loading models …")
     layout_worker = LayoutWorker()
@@ -79,7 +77,7 @@ def main() -> None:
     ledger = Ledger(output_dir=args.output_dir)
     renderer = Renderer(display_width=args.display_width, stack=not args.demo)
 
-    for worker in (board_masker, layout_worker, transcriber):
+    for worker in (board_segmenter, layout_worker, transcriber):
         worker.wait_ready()
         log.info("%s ready", type(worker).__name__)
     log.info("All workers ready.")
@@ -152,12 +150,12 @@ def main() -> None:
             last_t = now
 
             # --- pipeline ----------------------------------------------------
-            board_mask = board_masker.segment(frame)           # Stage 2
-            person_mask = person_masker.segment(frame)         # Stage 3
+            board_mask = board_segmenter.segment(frame)           # Stage 2
+            person_mask = person_segmenter.segment(frame)         # Stage 3
             rect_frame, rect_mask = rectifier.rectify(         # Stage 4
                 frame, board_mask, person_mask
             )
-            composite = reconstructor.reconstruct(             # Stage 5
+            composite = compositor.composite(             # Stage 5
                 rect_frame, rect_mask
             )
             blocks = layout_worker.detect(composite)           # Stage 6 + 7
@@ -170,7 +168,7 @@ def main() -> None:
             # --- display -----------------------------------------------------
             display_frame = renderer.render(
                 composite, blocks, tracker.all_notes, layout_worker.is_busy,
-                frame, person_mask, rectifier.cached_corners, board_masker.is_busy,
+                frame, person_mask, rectifier.cached_corners, board_segmenter.is_busy,
                 fps,
             )
             # numpy → pygame pixel buffer, scaled to current window size
@@ -183,7 +181,7 @@ def main() -> None:
         pass
     finally:
         cap.stop()
-        board_masker.shutdown()
+        board_segmenter.shutdown()
         layout_worker.shutdown()
         transcriber.shutdown()
         pygame.quit()

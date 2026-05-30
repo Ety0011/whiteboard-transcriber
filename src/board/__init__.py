@@ -1,14 +1,14 @@
-from .board_masker import BoardMasker, NullBoardMasker
-from .person_masker import NullPersonMasker, PersonMasker
-from .reconstructor import BoardReconstructor, NullBoardReconstructor
+from .board_segmenter import BoardSegmenter, NullBoardSegmenter
+from .compositor import BoardCompositor, NullBoardCompositor
+from .person_segmenter import NullPersonSegmenter, PersonSegmenter
 from .rectifier import Rectifier
 
 __all__ = [
-    "BoardMasker",
-    "NullBoardMasker",
-    "PersonMasker",
-    "NullPersonMasker",
+    "BoardSegmenter",
+    "NullBoardSegmenter",
+    "PersonSegmenter",
+    "NullPersonSegmenter",
     "Rectifier",
-    "BoardReconstructor",
-    "NullBoardReconstructor",
+    "BoardCompositor",
+    "NullBoardCompositor",
 ]

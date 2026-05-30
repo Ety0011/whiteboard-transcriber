@@ -18,7 +18,7 @@ from stage import WorkerStage
 _MODEL_PATH = Path(__file__).parent.parent.parent / "models" / "sam3.1_multiplex.pt"
 
 
-class BoardMasker(WorkerStage):
+class BoardSegmenter(WorkerStage):
     """Non-blocking SAM 3.1 board segmentation.
 
     Spawns a child process running SAM 3.1 to segment the whiteboard region.
@@ -97,7 +97,7 @@ class BoardMasker(WorkerStage):
         return None
 
 
-class NullBoardMasker:
+class NullBoardSegmenter:
     """Drop-in for BoardMasker that skips SAM entirely (demo mode).
 
     Always returns None from segment() so the Rectifier stays in its resize

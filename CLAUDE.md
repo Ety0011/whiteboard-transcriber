@@ -125,17 +125,17 @@ The pipeline is built around three principles:
 Camera / File
     │
     ▼
-[Stage 1: capture.py]           Frame queue (maxsize=1, always latest)
+[Stage 1: capture/video.py]     Frame queue (maxsize=1, always latest)
     │
     ▼
-[Stage 2: BoardMasker]          Async SAM 3.1 → binary board mask
-[Stage 3: PersonMasker]         Sync MediaPipe → binary person mask
+[Stage 2: BoardSegmenter]       Async SAM 3.1 → binary board mask
+[Stage 3: PersonSegmenter]      Sync MediaPipe → binary person mask
     │
     ▼
 [Stage 4: Rectifier]            Homography → 1920×1080 rectified frame + mask
     │
     ▼
-[Stage 5: BoardReconstructor]   Distance-weighted EMA → clean board composite
+[Stage 5: BoardCompositor]      Distance-weighted EMA → clean board composite
     │
     ├──▶ [Stage 6: TextLineDetector]  Async PaddleOCR → list[TextLine]
     ├──▶ [Stage 7: BlockGrouping]     Clusterer → list[Block]
@@ -153,17 +153,17 @@ Camera / File
 
 ## 4. 10-Stage Pipeline
 
-### Stage 1 — Video Feed (`capture.py`)
+### Stage 1 — Video Feed (`capture/video.py`)
 
 Reads from webcam or file in a background thread. Uses a `Queue(maxsize=1)` — stale frames are dropped automatically, so the main loop always processes the latest frame.
 
-### Stage 2 — Board Segmentation (`board/board_masker.py`)
+### Stage 2 — Board Segmentation (`board/board_segmenter.py`)
 
-SAM 3.1 runs in a dedicated subprocess with a ~5s cadence. Takes a raw camera frame, returns a binary H×W uint8 mask (1=board, 0=background). Outputs `None` between cycles — the rectifier uses its cached homography when `None` is received. Does **not** perform corner extraction or homography computation.
+`BoardSegmenter` runs SAM 3.1 in a dedicated subprocess with a ~5s cadence. Takes a raw camera frame, returns a binary H×W uint8 mask (1=board, 0=background). Outputs `None` between cycles — the rectifier uses its cached homography when `None` is received. Does **not** perform corner extraction or homography computation.
 
-### Stage 3 — Person Segmentation (`board/person_masker.py`)
+### Stage 3 — Person Segmentation (`board/person_segmenter.py`)
 
-MediaPipe selfie segmenter runs synchronously every frame (~5ms). Returns a binary H×W uint8 mask (1=person). The person mask ensures that pixels under or near the body are never updated in Stage 5, preserving board content under occlusion.
+`PersonSegmenter` runs MediaPipe selfie segmenter synchronously every frame (~5ms). Returns a binary H×W uint8 mask (1=person). The person mask ensures that pixels under or near the body are never updated in Stage 5, preserving board content under occlusion.
 
 ### Stage 4 — Perspective Correction (`board/rectifier.py`)
 
@@ -171,9 +171,9 @@ Owns all geometric computation. When a new board mask arrives from Stage 2, it e
 
 **Homography update trigger:** ≥2 corners shift >50px *or* the new quad is larger than cached (area ratio ≥0.98).
 
-### Stage 5 — Surface Reconstruction (`board/reconstructor.py`)
+### Stage 5 — Board Compositing (`board/compositor.py`)
 
-Maintains a clean board composite using distance-weighted EMA:
+`BoardCompositor` maintains a clean board composite using distance-weighted EMA:
 
 ```
 lr(x) = max_lr × (dist(x, person_mask) / falloff_distance) ^ power
@@ -182,11 +182,11 @@ composite = (1 - lr) × composite + lr × frame
 
 Pixels near or under the person mask have `lr≈0` and are frozen at their last known value. When no person is detected, a uniform EMA (`lr = max_lr`) is applied directly, skipping the expensive `distanceTransform`.
 
-### Stage 6 — Text Line Detection (`layout/text_detector.py`, `layout/worker.py`)
+### Stage 6 — Text Line Detection (`layout/detector.py`, `layout/worker.py`)
 
 `LayoutWorker` manages the `layout-detector` subprocess. Inside the worker, `TextLineDetector` runs PaddleOCR `PP-OCRv5_server_det` synchronously, returning a list of `TextLine` objects (bbox + confidence).
 
-### Stage 7 — Block Grouping (`layout/single_linkage.py`)
+### Stage 7 — Block Grouping (`layout/clusterer.py`)
 
 `SingleLinkageClusterer` clusters the detected `TextLine` objects into `Block` objects via obstacle-vetoed agglomeration. Merges the closest cluster pair whose union bbox does not newly enclose any third cluster and whose nearest-point distance is within `max_gap_px`. Hysteresis prevents co-block lines from oscillating between merged/split states.
 
@@ -254,11 +254,11 @@ Three independent worker processes run throughout a session:
 
 | Process name | Owner class | Model | Queue design |
 |---|---|---|---|
-| `sam3-board-masker` | `BoardMasker` | SAM 3.1 | in: maxsize=1, out: maxsize=1 (drop-old pattern) |
+| `sam3-board-masker` | `BoardSegmenter` | SAM 3.1 | in: maxsize=1, out: maxsize=1 (drop-old pattern) |
 | `layout-detector` | `LayoutWorker` | PaddleOCR | in: maxsize=1, out: maxsize=1 (drop-old pattern) |
 | `transcription-worker` | `TranscriptionWorker` | PaddleVL-1.5 (MLX) | in: maxsize=10, out: maxsize=30 |
 
-**Drop-old pattern** (used by board masker and layout): the output queue holds at most one result. Before publishing, the worker drains any stale result with `get_nowait()` before `put_nowait()`. The main loop always receives the freshest available result.
+**Drop-old pattern** (used by board segmenter and layout): the output queue holds at most one result. Before publishing, the worker drains any stale result with `get_nowait()` before `put_nowait()`. The main loop always receives the freshest available result.
 
 **Logging in workers:** Workers call `logging.basicConfig(level=_level, format=...)` before any imports, then call `logging_config.suppress_worker_noise()` to set third-party loggers to WARNING. The level is inherited via the `LOG_LEVEL` environment variable set by `--debug`.
 
@@ -274,25 +274,25 @@ whiteboard-transcriber/
 ├── output/                     # Generated output (not committed)
 └── src/
     ├── main.py                 # Entry point — pipeline orchestrator + UI
-    ├── capture.py              # Stage 1: frame ingestion thread
-    ├── canvas_capture.py       # Stage 1 (demo): mouse-drawable 1920×1080 canvas
     ├── stage.py                # InlineStage + WorkerStage ABCs (stage taxonomy)
     ├── logging_config.py       # Third-party noise suppression
     ├── tracker.py              # Stage 8: NoteTracker, Note, NoteState, TranscriptionResult
     ├── ledger.py               # Stage 10: append-only ledger + file synthesis
     ├── renderer.py             # OpenCV overlay rendering (display only)
+    ├── capture/                # Stage 1: frame ingestion
+    │   ├── video.py            # Capture — webcam/file/image source
+    │   └── canvas.py           # CanvasCapture — demo mouse-drawable canvas
     ├── board/                  # Stages 2–5: visual surface pipeline
-    │   ├── board_masker.py     # Stage 2: SAM 3.1 async subprocess
-    │   ├── person_masker.py    # Stage 3: MediaPipe sync, self-throttled (InlineStage)
-    │   ├── rectifier.py        # Stage 4: homography + warp to 1920×1080
-    │   └── reconstructor.py    # Stage 5: distance-weighted EMA composite
+    │   ├── board_segmenter.py  # Stage 2: BoardSegmenter — SAM 3.1 async subprocess
+    │   ├── person_segmenter.py # Stage 3: PersonSegmenter — MediaPipe sync (InlineStage)
+    │   ├── rectifier.py        # Stage 4: Rectifier — homography + warp to 1920×1080
+    │   └── compositor.py       # Stage 5: BoardCompositor — distance-weighted EMA
     ├── layout/                 # Stages 6–7: text detection + grouping
-    │   ├── block.py            # Block dataclass
-    │   ├── text_detector.py    # Stage 6: TextLine dataclass + PaddleOCR detection
-    │   ├── single_linkage.py   # Stage 7: obstacle-vetoed agglomeration
+    │   ├── detector.py         # Stage 6: TextLine + TextLineDetector (PaddleOCR)
+    │   ├── clusterer.py        # Stage 7: Block + SingleLinkageClusterer
     │   └── worker.py           # LayoutWorker subprocess manager
     └── ocr/                    # Stage 9: VLM transcription
-        ├── paddle_vl.py        # PaddleVLTranscriber (PaddleOCR-VL-1.5, MLX)
+        ├── transcriber.py      # PaddleVLTranscriber (PaddleOCR-VL-1.5, MLX)
         └── worker.py           # TranscriptionWorker subprocess manager
 ```
 
@@ -351,7 +351,7 @@ class MyWorker(WorkerStage):
 
 ### Subprocess Communication
 
-Use the drop-old queue pattern for single-result producers (board masker, layout detector). Use bounded queues (`maxsize > 1`) only for pipelines that must not drop results (transcription worker). Never use `queue.get()` with a blocking call in the main loop.
+Use the drop-old queue pattern for single-result producers (board segmenter, layout detector). Use bounded queues (`maxsize > 1`) only for pipelines that must not drop results (transcription worker). Never use `queue.get()` with a blocking call in the main loop.
 
 ---
 

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
+# TODO: remove this
 if TYPE_CHECKING:
     from tracker import Note
 

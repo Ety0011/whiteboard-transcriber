@@ -1,4 +1,4 @@
-"""Stage 5 — Surface Reconstruction.
+"""Stage 5 — Board Compositing.
 
 Maintains a clean composite of the whiteboard surface using a distance-weighted
 Exponential Moving Average (EMA).
@@ -16,8 +16,8 @@ import numpy as np
 
 from stage import InlineStage
 
-class BoardReconstructor(InlineStage):
-    """Stateful board-reconstruction stage backed by distance-weighted EMA."""
+class BoardCompositor(InlineStage):
+    """Stateful board-compositeion stage backed by distance-weighted EMA."""
 
     def __init__(
         self,
@@ -38,7 +38,7 @@ class BoardReconstructor(InlineStage):
             power,
         )
 
-    def reconstruct(self, frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    def composite(self, frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
         """Update the board model and return the clean composite.
 
         Args:
@@ -65,12 +65,12 @@ class BoardReconstructor(InlineStage):
         return self._composite.astype(np.uint8)
 
 
-class NullBoardReconstructor:
+class NullBoardCompositor:
     """Drop-in for BoardReconstructor that passes the frame through unchanged.
 
     The canvas is already clean, so EMA would ghost erased strokes.
     """
 
-    def reconstruct(self, frame: np.ndarray, _mask: np.ndarray) -> np.ndarray:
+    def composite(self, frame: np.ndarray, _mask: np.ndarray) -> np.ndarray:
         """Return *frame* unchanged."""
         return frame
