@@ -84,7 +84,7 @@ def main() -> None:
         cap = Capture(args.source).start()
         board_segmenter = BoardSegmenter()
         person_segmenter = PersonSegmenter()
-        person_segmenter.load()  # type: ignore[union-attr]  # synchronous; runs here
+        person_segmenter.load()  # synchronous; runs here before workers start
         rectifier = Rectifier()
         compositor = BoardCompositor()
 
