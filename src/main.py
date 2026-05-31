@@ -93,7 +93,7 @@ def main() -> None:
     tracker = NoteTracker()
     transcriber = TranscriptionWorker()
     ledger = Ledger(output_dir=args.output_dir)
-    renderer = Renderer(display_width=args.display_width, stack=not args.demo)
+    renderer = Renderer(display_width=args.display_width)
 
     for worker in (board_segmenter, person_segmenter, layout_worker, transcriber):
         worker.wait_ready()
@@ -127,6 +127,9 @@ def main() -> None:
     paused = False
     last_raw_surface: pygame.Surface | None = None
     last_board_surface: pygame.Surface | None = None
+    last_person_mask: np.ndarray | None = None
+    last_corners: np.ndarray | None = None
+    last_sam_busy: bool = False
 
     log.info("Ready. Press q or Ctrl-C to stop.")
 
@@ -149,7 +152,7 @@ def main() -> None:
                         paused = not paused
                         cap.pause() if paused else cap.resume()
                         log.info("[space] %s", "Paused" if paused else "Resumed")
-                    elif event.key == ord("c"):
+                    elif event.key == pygame.K_c:
                         cap.clear()
                         log.info("[c] Canvas cleared")
                     else:
@@ -176,7 +179,9 @@ def main() -> None:
                 frame = cap.try_read()
                 if frame is not None:
                     last_raw_surface = pygame.surfarray.make_surface(
-                        renderer.render_raw_panel(frame)
+                        renderer.render_raw_panel(
+                            frame, last_person_mask, last_corners, last_sam_busy
+                        )
                     )
                     _drop_put(frame_queue, frame)
                 elif not cap.is_active:
@@ -187,6 +192,9 @@ def main() -> None:
             # --- board panel: async update from orchestrator -------------
             try:
                 result = render_queue.get_nowait()
+                last_person_mask = result.person_mask
+                last_corners = result.cached_corners
+                last_sam_busy = result.sam_busy
                 last_board_surface = pygame.surfarray.make_surface(
                     renderer.render_board_panel(
                         result.composite, result.blocks, result.notes, result.layout_busy

@@ -122,9 +122,8 @@ def _draw_notes(frame: np.ndarray, notes: list[Note]) -> np.ndarray:
 class Renderer:
     """Owns overlay toggle state and renders both pipeline display windows."""
 
-    def __init__(self, display_width: int = 960, stack: bool = True) -> None:
+    def __init__(self, display_width: int = 960) -> None:
         self._display_width = display_width
-        self._stack = stack
         self.show_corners = True
         self.show_mask = True
         self.show_blocks = True
@@ -185,9 +184,21 @@ class Renderer:
         board = self.render_board(composite, blocks, notes, layout_busy)
         return self._to_pygame(board)
 
-    def render_raw_panel(self, frame: np.ndarray) -> np.ndarray:
-        """Raw camera frame scaled to display_width. Returns RGB (W,H,3) for pygame."""
-        return self._to_pygame(frame)
+    def render_raw_panel(
+        self,
+        frame: np.ndarray,
+        person_mask: np.ndarray | None,
+        cached_corners: np.ndarray | None,
+        sam_busy: bool,
+    ) -> np.ndarray:
+        """Raw camera frame with overlays, scaled to display_width. Returns RGB (W,H,3) for pygame."""
+        mask = (
+            person_mask
+            if person_mask is not None
+            else np.zeros(frame.shape[:2], dtype=np.uint8)
+        )
+        raw = self.render_raw(frame, mask, cached_corners, sam_busy)
+        return self._to_pygame(raw)
 
     def _to_pygame(self, bgr: np.ndarray) -> np.ndarray:
         """Scale BGR frame to display_width and convert to RGB (W,H,3) for pygame."""

@@ -28,14 +28,18 @@ from tracker import Note, NoteTracker
 class PipelineResult:
     """Board-side pipeline output, ready for the UI thread to render.
 
-    All arrays are in 1920×1080 rectified space. The raw camera frame
-    is never included — the UI thread displays it directly at source FPS.
+    composite, blocks, and notes are in 1920×1080 rectified space.
+    person_mask and cached_corners are in raw-camera space — used for
+    the raw-panel overlays in the UI thread.
     """
 
     composite: np.ndarray
     blocks: list[Block]
     notes: list[Note]
     layout_busy: bool
+    person_mask: np.ndarray          # raw-camera-space; zeros when no person detected
+    cached_corners: np.ndarray | None  # None before first SAM result
+    sam_busy: bool
 
 log = logging.getLogger(__name__)
 
@@ -144,6 +148,9 @@ class PipelineOrchestrator(threading.Thread):
                     blocks=blocks,
                     notes=self._tracker.all_notes,
                     layout_busy=self._layout_worker.is_busy,
+                    person_mask=self._cached_person_mask,
+                    cached_corners=self._rectifier.cached_corners,
+                    sam_busy=self._board_segmenter.is_busy,
                 ),
             )
 
