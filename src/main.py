@@ -34,6 +34,7 @@ import numpy as np
 from board import (
     BoardCompositor,
     BoardSegmenter,
+    Compositor,
     NullBoardCompositor,
     NullBoardSegmenter,
     NullPersonSegmenter,
@@ -78,7 +79,7 @@ def main() -> None:
         board_segmenter = NullBoardSegmenter()
         person_segmenter = NullPersonSegmenter()
         rectifier = Rectifier()
-        compositor: BoardCompositor | NullBoardCompositor = NullBoardCompositor()
+        compositor: Compositor = NullBoardCompositor()
     else:
         cap = Capture(args.source).start()
         board_segmenter = BoardSegmenter()
@@ -224,7 +225,7 @@ def main() -> None:
                 screen.blit(fps_surf, (10, 10))
                 pygame.display.flip()
 
-            clock.tick(60)
+            clock.tick(240)
 
     except KeyboardInterrupt:
         pass

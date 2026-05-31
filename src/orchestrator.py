@@ -14,8 +14,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from board import (
-    BoardCompositor,
-    NullBoardCompositor,
+    Compositor,
     Rectifier,
     Segmenter,
 )
@@ -70,7 +69,7 @@ class PipelineOrchestrator(threading.Thread):
         board_segmenter: Segmenter,
         person_segmenter: Segmenter,
         rectifier: Rectifier,
-        compositor: BoardCompositor | NullBoardCompositor,
+        compositor: Compositor,
         layout_worker: LayoutWorker,
         tracker: NoteTracker,
         transcriber: TranscriptionWorker,
