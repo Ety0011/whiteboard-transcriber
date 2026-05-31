@@ -160,7 +160,7 @@ class WorkerStage(ABC):
         """Main worker loop — blocks on input queue, processes items until sentinel."""
         while True:
             try:
-                item = self._in_q.get(timeout=1.0)
+                item = self._in_q.get(timeout=0.1)
             except queue.Empty:
                 continue
             if item is None:
@@ -247,6 +247,10 @@ class WorkerStage(ABC):
 
     def shutdown(self) -> None:
         """Send shutdown sentinel, join subprocess, terminate if timeout exceeded."""
+        try:
+            self._in_q.get_nowait()  # drain in-flight item so sentinel is guaranteed delivery
+        except queue.Empty:
+            pass
         try:
             self._in_q.put_nowait(None)
         except queue.Full:
