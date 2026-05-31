@@ -1,12 +1,16 @@
-"""Whiteboard transcription pipeline — entry point.
+"""Whiteboard transcription pipeline — entry point (Tier 1: UI thread).
+
+Pure pygame event loop at ~30 FPS. Reads frames non-blocking, drops them
+into frame_queue for the PipelineOrchestrator, polls render_queue for the
+latest overlay matrix, and handles all keyboard/mouse input.
 
 Usage::
 
-    python src/main.py                                        # live webcam
-    python src/main.py video.mp4                             # video file
-    python src/main.py --transcriber got video.mp4
+    python src/main.py                      # live webcam
+    python src/main.py video.mp4            # video file
     python src/main.py --output-dir /tmp/lecture video.mp4
-    python src/main.py --debug                               # verbose logging
+    python src/main.py --debug              # verbose logging
+    python src/main.py --demo               # mouse-drawable canvas
 
 Keyboard controls:
     q      — quit
@@ -22,8 +26,10 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import time
+import queue
 from pathlib import Path
+
+import numpy as np
 
 from board import (
     BoardCompositor,
@@ -31,7 +37,7 @@ from board import (
     NullBoardCompositor,
     NullBoardSegmenter,
     NullPersonSegmenter,
-    PersonSegmenter,
+    PersonSegmenterWorker,
     Rectifier,
 )
 from capture import CanvasCapture, Capture
@@ -39,14 +45,19 @@ from layout import LayoutWorker
 from ledger import Ledger
 from logging_config import suppress_noise
 from ocr import TranscriptionWorker
+from orchestrator import PipelineOrchestrator, PipelineResult, _drop_put
 from renderer import Renderer
 from tracker import NoteTracker
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
 
-# TODO: fix demo messy integration
-# TODO: make all stages async, InlineStage was a fail
+
+# ---------------------------------------------------------------------------
+# Tier 1 — UI thread
+# ---------------------------------------------------------------------------
+
+
 def main() -> None:
     suppress_noise()  # sets env vars inherited by all worker subprocesses
     import pygame  # after suppress_noise — env vars in place before pygame loads
@@ -60,13 +71,15 @@ def main() -> None:
     if args.demo:
         cap: Capture | CanvasCapture = CanvasCapture().start()
         board_segmenter: BoardSegmenter | NullBoardSegmenter = NullBoardSegmenter()
-        person_segmenter: PersonSegmenter | NullPersonSegmenter = NullPersonSegmenter()
+        person_segmenter: PersonSegmenterWorker | NullPersonSegmenter = (
+            NullPersonSegmenter()
+        )
         rectifier = Rectifier()
         compositor: BoardCompositor | NullBoardCompositor = NullBoardCompositor()
     else:
         cap = Capture(args.source).start()
         board_segmenter = BoardSegmenter()
-        person_segmenter = PersonSegmenter()
+        person_segmenter = PersonSegmenterWorker()
         rectifier = Rectifier()
         compositor = BoardCompositor()
 
@@ -77,10 +90,27 @@ def main() -> None:
     ledger = Ledger(output_dir=args.output_dir)
     renderer = Renderer(display_width=args.display_width, stack=not args.demo)
 
-    for worker in (board_segmenter, layout_worker, transcriber):
+    for worker in (board_segmenter, person_segmenter, layout_worker, transcriber):
         worker.wait_ready()
         log.info("%s ready", type(worker).__name__)
     log.info("All workers ready.")
+
+    frame_queue: queue.Queue[np.ndarray | None] = queue.Queue(maxsize=1)
+    render_queue: queue.Queue[PipelineResult | None] = queue.Queue(maxsize=1)
+
+    orchestrator = PipelineOrchestrator(
+        frame_queue=frame_queue,
+        render_queue=render_queue,
+        board_segmenter=board_segmenter,
+        person_segmenter=person_segmenter,
+        rectifier=rectifier,
+        compositor=compositor,
+        layout_worker=layout_worker,
+        tracker=tracker,
+        transcriber=transcriber,
+        ledger=ledger,
+    )
+    orchestrator.start()
 
     pygame.init()
     init_size = _display_size(cap, args.display_width, stack=not args.demo)
@@ -88,15 +118,16 @@ def main() -> None:
     screen = pygame.display.set_mode(init_size, pygame.RESIZABLE)
     pygame.display.set_caption("Lecture Historian")
     clock = pygame.time.Clock()
+    fps_font = pygame.font.SysFont("monospace", 18)
     paused = False
-    fps = 0.0
-    last_t = time.monotonic()
+    last_raw_surface: pygame.Surface | None = None
+    last_board_surface: pygame.Surface | None = None
 
     log.info("Ready. Press q or Ctrl-C to stop.")
 
     try:
         while True:
-            # --- events ------------------------------------------------------
+            # --- events --------------------------------------------------
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     raise KeyboardInterrupt
@@ -135,53 +166,72 @@ def main() -> None:
                     elif event.button == 3:
                         cap.on_eraser_up()
 
-            if paused:
-                clock.tick(30)
-                continue
+            # --- raw frame: display at source FPS, also feed orchestrator --
+            if not paused:
+                try:
+                    frame = cap.try_read()
+                    if frame is None:
+                        log.info("End of stream.")
+                        _drop_put(frame_queue, None)
+                        break
+                    last_raw_surface = pygame.surfarray.make_surface(
+                        renderer.render_raw_panel(frame)
+                    )
+                    _drop_put(frame_queue, frame)
+                except queue.Empty:
+                    pass
 
-            # --- frame -------------------------------------------------------
-            frame = cap.read()
-            if frame is None:
-                log.info("End of stream.")
-                break
+            # --- board panel: async update from orchestrator -------------
+            try:
+                result = render_queue.get_nowait()
+                last_board_surface = pygame.surfarray.make_surface(
+                    renderer.render_board_panel(
+                        result.composite, result.blocks, result.notes, result.layout_busy
+                    )
+                )
+            except queue.Empty:
+                pass
 
-            now = time.monotonic()
-            fps = 0.9 * fps + 0.1 / max(now - last_t, 1e-6)
-            last_t = now
+            # --- display: stack raw (live) above board (async) -----------
+            w = screen.get_width()
+            if not args.demo and last_raw_surface is not None:
+                raw_aspect = (
+                    last_raw_surface.get_height() / last_raw_surface.get_width()
+                )
+                raw_h = round(w * raw_aspect)
+                screen.blit(
+                    pygame.transform.smoothscale(last_raw_surface, (w, raw_h)),
+                    (0, 0),
+                )
+                board_y = raw_h
+            else:
+                board_y = 0
+            if last_board_surface is not None:
+                board_aspect = (
+                    last_board_surface.get_height() / last_board_surface.get_width()
+                )
+                board_h = round(w * board_aspect)
+                screen.blit(
+                    pygame.transform.smoothscale(last_board_surface, (w, board_h)),
+                    (0, board_y),
+                )
+            if last_raw_surface is not None or last_board_surface is not None:
+                fps_surf = fps_font.render(
+                    f"{clock.get_fps():.1f} fps", True, (0, 255, 0)
+                )
+                screen.blit(fps_surf, (10, 10))
+                pygame.display.flip()
 
-            # --- pipeline ----------------------------------------------------
-            board_mask = board_segmenter.segment(frame)           # Stage 2
-            person_mask = person_segmenter.segment(frame)         # Stage 3
-            rect_frame, rect_mask = rectifier.rectify(         # Stage 4
-                frame, board_mask, person_mask
-            )
-            composite = compositor.composite(             # Stage 5
-                rect_frame, rect_mask
-            )
-            blocks = layout_worker.detect(composite)           # Stage 6 + 7
-            newly_inferring, newly_erased, newly_active = tracker.update(  # Stage 8
-                blocks, composite, transcriber.collect()       # Stage 9
-            )
-            transcriber.submit(newly_inferring)
-            ledger.sync(newly_erased, newly_active, composite)  # Stage 10
-
-            # --- display -----------------------------------------------------
-            display_frame = renderer.render(
-                composite, blocks, tracker.all_notes, layout_worker.is_busy,
-                frame, person_mask, rectifier.cached_corners, board_segmenter.is_busy,
-                fps,
-            )
-            # numpy → pygame pixel buffer, scaled to current window size
-            surface = pygame.surfarray.make_surface(display_frame)
-            scaled = pygame.transform.smoothscale(surface, screen.get_size())
-            screen.blit(scaled, (0, 0))
-            pygame.display.flip()  # swap back→front (show)
+            clock.tick(60)
 
     except KeyboardInterrupt:
         pass
     finally:
+        orchestrator.stop()
+        orchestrator.join(timeout=5.0)
         cap.stop()
         board_segmenter.shutdown()
+        person_segmenter.shutdown()
         layout_worker.shutdown()
         transcriber.shutdown()
         pygame.quit()
@@ -197,6 +247,11 @@ def main() -> None:
         args.output_dir,
     )
     ledger.synthesize_timelapse()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def _display_size(

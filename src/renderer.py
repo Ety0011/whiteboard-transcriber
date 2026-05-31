@@ -158,9 +158,8 @@ class Renderer:
         person_mask: np.ndarray,
         cached_corners: np.ndarray | None,
         is_busy: bool,
-        fps: float = 0.0,
     ) -> np.ndarray:
-        """Draw mask + corner overlays, SAM busy dot, and FPS. Returns the frame."""
+        """Draw mask + corner overlays and SAM busy dot. Returns the frame."""
         raw = frame.copy()
         if self.show_mask:
             raw = _apply_mask_overlay(raw, person_mask)
@@ -173,58 +172,29 @@ class Renderer:
             (0, 165, 255) if is_busy else (0, 255, 0),
             -1,
         )
-        fps_label = f"{fps:.1f} fps"
-        (tw, th), _ = cv2.getTextSize(fps_label, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 1)
-        cv2.rectangle(raw, (6, 6), (14 + tw, 14 + th), (0, 0, 0), -1)
-        cv2.putText(
-            raw,
-            fps_label,
-            (10, 10 + th),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (0, 255, 0),
-            1,
-            cv2.LINE_AA,
-        )
         return raw
 
-    def render(
+    def render_board_panel(
         self,
         composite: np.ndarray,
         blocks: list[Block],
         notes: list[Note],
         layout_busy: bool,
-        frame: np.ndarray,
-        person_mask: np.ndarray,
-        cached_corners: np.ndarray | None,
-        board_busy: bool,
-        fps: float,
     ) -> np.ndarray:
-        """Render and scale to display width. Returns RGB (W,H,3) for pygame.
-
-        When stack=False (demo mode) only the board panel is shown. When
-        stack=True the raw camera frame is stacked above the board composite.
-        """
+        """Board panel scaled to display_width. Returns RGB (W,H,3) for pygame."""
         board = self.render_board(composite, blocks, notes, layout_busy)
-        if not self._stack:
-            fps_label = f"{fps:.1f} fps"
-            (tw, th), _ = cv2.getTextSize(fps_label, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 1)
-            cv2.rectangle(board, (6, 6), (14 + tw, 14 + th), (0, 0, 0), -1)
-            cv2.putText(
-                board, fps_label, (10, 10 + th),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 1, cv2.LINE_AA,
-            )
-            combined = board
-        else:
-            raw = self.render_raw(frame, person_mask, cached_corners, board_busy, fps)
-            if raw.shape[1] != board.shape[1]:
-                scale = board.shape[1] / raw.shape[1]
-                raw = cv2.resize(raw, (board.shape[1], int(raw.shape[0] * scale)))
-            combined = np.vstack([raw, board])
-        h, w = combined.shape[:2]
+        return self._to_pygame(board)
+
+    def render_raw_panel(self, frame: np.ndarray) -> np.ndarray:
+        """Raw camera frame scaled to display_width. Returns RGB (W,H,3) for pygame."""
+        return self._to_pygame(frame)
+
+    def _to_pygame(self, bgr: np.ndarray) -> np.ndarray:
+        """Scale BGR frame to display_width and convert to RGB (W,H,3) for pygame."""
+        h, w = bgr.shape[:2]
         target_h = int(h * self._display_width / w)
-        bgr = cv2.resize(combined, (self._display_width, target_h))
-        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        scaled = cv2.resize(bgr, (self._display_width, target_h))
+        rgb = cv2.cvtColor(scaled, cv2.COLOR_BGR2RGB)
         return rgb.swapaxes(0, 1)  # (H,W,3) → (W,H,3) for pygame surfarray
 
     def handle_key(self, key: int) -> bool:
