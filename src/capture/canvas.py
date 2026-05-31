@@ -169,7 +169,7 @@ class CanvasCapture(FrameSource):
     def _loop(self) -> None:
         """Publish canvas frames at ~30fps using monotonic deadline tracking."""
         interval = 1.0 / 30
-        next_deadline = time.monotonic() + interval
+        next_deadline = time.monotonic()
         while self._active:
             with self._lock:
                 frame = self._canvas.copy()
@@ -181,11 +181,12 @@ class CanvasCapture(FrameSource):
                 self._queue.put_nowait(frame)
             except queue.Full:
                 pass
-            now = time.monotonic()
-            sleep_for = next_deadline - now
-            if sleep_for > 0:
-                time.sleep(sleep_for)
             next_deadline += interval
+            remaining = next_deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(remaining)
+            else:
+                next_deadline = time.monotonic()
         try:
             self._queue.put_nowait(None)
         except queue.Full:

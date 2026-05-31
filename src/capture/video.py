@@ -63,10 +63,6 @@ class Capture(FrameSource):
         self.fps: float | None = None
         self.frame_size: tuple[int, int] | None = None
 
-        # Pre-read file metadata so frame_size is available before start() if needed.
-        if not self._is_camera and not self._is_image_src:
-            self._probe_metadata()
-
     # ------------------------------------------------------------------
     # FrameSource implementation
     # ------------------------------------------------------------------
@@ -92,29 +88,20 @@ class Capture(FrameSource):
             if not self._cap.isOpened():
                 raise RuntimeError(f"Cannot open source: {self._source!r}")
             self._active = True  # must precede thread spawn to avoid race
-            if self._is_camera:
-                w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                if w > 0 and h > 0:
-                    self.frame_size = (w, h)
-                self._thread = threading.Thread(
-                    target=self._camera_loop,
-                    daemon=True,
-                    name=f"capture-{self._source}",
-                )
-                self._thread.start()
-            else:
-                if not self.frame_size:  # fallback if _probe_metadata() missed it
-                    w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                    h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                    if w > 0 and h > 0:
-                        self.frame_size = (w, h)
-                self._thread = threading.Thread(
-                    target=self._file_loop,
-                    daemon=True,
-                    name=f"capture-{self._source}",
-                )
-                self._thread.start()
+            w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            if w > 0 and h > 0:
+                self.frame_size = (w, h)
+            raw_fps = self._cap.get(cv2.CAP_PROP_FPS)
+            if raw_fps > 0:
+                self.fps = raw_fps
+            target = self._camera_loop if self._is_camera else self._file_loop
+            self._thread = threading.Thread(
+                target=target,
+                daemon=True,
+                name=f"capture-{self._source}",
+            )
+            self._thread.start()
         log.info(
             "Capture started: %r  %s",
             self._source,
@@ -131,6 +118,10 @@ class Capture(FrameSource):
             BGR uint8 frame, or None if paused, no frame buffered this tick,
             or end-of-stream. Never raises. Use is_active to distinguish
             end-of-stream (False) from a transient empty tick (True).
+
+        Note:
+            Image sources return the same cached array on every call. Callers
+            must not modify the returned array in-place.
         """
         if self._paused:
             return None
@@ -142,7 +133,7 @@ class Capture(FrameSource):
             return None
 
     def stop(self) -> None:
-        """Release the source and unblock any pending reads."""
+        """Release the source, unblock any pending reads, and join the capture thread."""
         self._active = False
         if self._cap is not None:
             self._cap.release()
@@ -151,6 +142,8 @@ class Capture(FrameSource):
             self._queue.put_nowait(None)
         except queue.Full:
             pass
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
 
     def pause(self) -> None:
         """Freeze playback — try_read() returns None while paused."""
@@ -172,20 +165,6 @@ class Capture(FrameSource):
     # ------------------------------------------------------------------
     # Private
     # ------------------------------------------------------------------
-
-    def _probe_metadata(self) -> None:
-        """Read fps and frame dimensions from the file header without decoding frames."""
-        cap = cv2.VideoCapture(self._source)
-        if not cap.isOpened():
-            return
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        raw_fps = cap.get(cv2.CAP_PROP_FPS)
-        cap.release()
-        if w > 0 and h > 0:
-            self.frame_size = (w, h)
-        if raw_fps > 0:
-            self.fps = raw_fps
 
     def _camera_loop(self) -> None:
         """Background thread — drains the camera into the drop-old queue."""
