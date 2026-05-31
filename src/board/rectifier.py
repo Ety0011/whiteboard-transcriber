@@ -1,7 +1,7 @@
 """Stage 4 — Perspective Correction.
 
 Warps the raw camera frame and person mask to a canonical 1920×1080 view.
-Accepts the latest board mask from BoardMasker; derives corners from it,
+Accepts the latest board mask from BoardSegmenter; derives corners from it,
 computes and caches the homography, then warps both inputs every frame.
 Falls back to a simple resize before the first SAM result arrives.
 
@@ -118,10 +118,10 @@ class Rectifier(InlineStage):
 
         Args:
             frame: BGR uint8 raw camera frame.
-            board_mask: uint8 H×W board segmentation from BoardMasker, or None
+            board_mask: uint8 H×W board segmentation from BoardSegmenter, or None
                 when SAM has not produced a fresh result this cycle. When
                 non-None, corners are re-derived and the homography updated.
-            person_mask: uint8 H×W person mask from PersonMasker (always fresh).
+            person_mask: uint8 H×W person mask from PersonSegmenter (always fresh).
 
         Returns:
             Tuple ``(rect_frame, rect_mask)`` both at ``output_size``.

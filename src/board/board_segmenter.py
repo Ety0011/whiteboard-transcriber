@@ -30,7 +30,7 @@ class BoardSegmenter(WorkerStage):
         recompute_interval: Minimum seconds between SAM inference runs.
     """
 
-    _process_name = "sam3-board-masker"
+    _process_name = "sam3-board-segmenter"
     _daemon = True
 
     def __init__(
@@ -98,7 +98,7 @@ class BoardSegmenter(WorkerStage):
 
 
 class NullBoardSegmenter:
-    """Drop-in for BoardMasker that skips SAM entirely (demo mode).
+    """Drop-in for BoardSegmenter that skips SAM entirely (demo mode).
 
     Always returns None from segment() so the Rectifier stays in its resize
     fallback, passing the canvas frame through unchanged.
