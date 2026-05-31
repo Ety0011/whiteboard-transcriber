@@ -76,6 +76,27 @@ def _are_corners_shifted(
     return count >= 2
 
 
+def _compute_homography(
+    corners: np.ndarray,
+    output_size: tuple[int, int],
+) -> np.ndarray:
+    """Compute perspective transform from *corners* to the output rectangle.
+
+    Args:
+        corners:     (4, 2) float32 source corners in TL/TR/BR/BL order.
+        output_size: (width, height) of the destination rectangle.
+
+    Returns:
+        3×3 float64 perspective transform matrix.
+    """
+    w, h = output_size
+    dst = np.array(
+        [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]],
+        dtype=np.float32,
+    )
+    return cv2.getPerspectiveTransform(corners, dst)
+
+
 # ---------------------------------------------------------------------------
 # Rectifier
 # ---------------------------------------------------------------------------
@@ -89,15 +110,21 @@ class Rectifier(InlineStage):
     is applied to warp the raw frame and person mask to the canonical output
     size. Falls back to a centred resize until the first board mask arrives.
 
+    Output buffers are pre-allocated to avoid per-frame heap allocation.
+
     Args:
         output_size: (width, height) of the rectified output images.
     """
 
     def __init__(self, output_size: tuple[int, int] = (1920, 1080)) -> None:
-        super().__init__()
+        super().__init__(interval_s=0.0)
         self._output_size = output_size
         self._homography: np.ndarray | None = None
         self._cached_corners: np.ndarray | None = None  # (4, 2) float32, TL/TR/BR/BL
+
+        w, h = output_size
+        self._rect_frame = np.empty((h, w, 3), dtype=np.uint8)
+        self._rect_mask = np.empty((h, w), dtype=np.uint8)
 
     # ------------------------------------------------------------------
     # Public
@@ -133,16 +160,16 @@ class Rectifier(InlineStage):
         w, h = self._output_size
 
         if self._homography is None:
-            return (
-                cv2.resize(frame, (w, h)),
-                cv2.resize(person_mask, (w, h), interpolation=cv2.INTER_NEAREST),
-            )
+            cv2.resize(frame, (w, h), dst=self._rect_frame)
+            cv2.resize(person_mask, (w, h), dst=self._rect_mask,
+                       interpolation=cv2.INTER_NEAREST)
+        else:
+            cv2.warpPerspective(frame, self._homography, (w, h),
+                                dst=self._rect_frame)
+            cv2.warpPerspective(person_mask, self._homography, (w, h),
+                                dst=self._rect_mask, flags=cv2.INTER_NEAREST)
 
-        rect_frame = cv2.warpPerspective(frame, self._homography, (w, h))
-        rect_mask = cv2.warpPerspective(
-            person_mask, self._homography, (w, h), flags=cv2.INTER_NEAREST
-        )
-        return rect_frame, rect_mask
+        return self._rect_frame, self._rect_mask
 
     # ------------------------------------------------------------------
     # Private
@@ -155,19 +182,10 @@ class Rectifier(InlineStage):
             return
         sorted_c = _sort_corners(corners)
         is_first = self._cached_corners is None
-        if is_first or _are_corners_shifted(sorted_c, self._cached_corners):
-            self._homography = self._compute_homography(sorted_c)
+        if is_first or _are_corners_shifted(sorted_c, self._cached_corners):  # type: ignore[arg-type]
+            self._homography = _compute_homography(sorted_c, self._output_size)
             self._cached_corners = sorted_c
             if is_first:
                 self._log.info("Homography established")
             else:
                 self._log.debug("Homography recomputed — board corners shifted")
-
-    def _compute_homography(self, corners: np.ndarray) -> np.ndarray:
-        """Compute perspective transform from *corners* to the output rectangle."""
-        w, h = self._output_size
-        dst = np.array(
-            [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]],
-            dtype=np.float32,
-        )
-        return cv2.getPerspectiveTransform(corners, dst)
