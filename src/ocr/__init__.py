@@ -1,4 +1,4 @@
-from tracker import TranscriptionResult
+from .result import TranscriptionResult
 from .transcriber import PaddleVLTranscriber
 from .worker import TranscriptionWorker
 
