@@ -1,8 +1,8 @@
 """Stage 1 — Video Feed.
 
-Reads frames from a camera or file. File sources decode directly on each
-try_read() call — caller's loop rate determines playback speed. Camera sources
-use a background thread so try_read() never blocks on hardware I/O.
+Reads frames from a camera or file. Both sources run a background thread that
+feeds frames into a drop-old queue at the natural source rate. try_read() is
+always a non-blocking queue poll — never coupled to the UI loop rate.
 
 Usage::
 
@@ -36,9 +36,10 @@ _IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", "
 class Capture(FrameSource):
     """Video/image source with pause/resume support.
 
-    For file sources, frames are decoded directly on each try_read() call —
-    the caller's loop rate determines playback speed. For camera sources, a
-    background thread drains the camera so the UI thread is never blocked.
+    Both camera and file sources run a background thread that feeds frames into
+    a drop-old queue. File sources sleep between reads to honour the encoded FPS
+    so playback speed is independent of the UI loop rate. try_read() is always a
+    non-blocking queue poll.
 
     Metadata (fps, frame_size) is populated in start() once the source is open.
 
@@ -71,7 +72,7 @@ class Capture(FrameSource):
     # ------------------------------------------------------------------
 
     def start(self) -> Capture:
-        """Open the source and, for cameras, spawn the capture thread.
+        """Open the source and spawn the background capture thread.
 
         Returns:
             self for fluent chaining.
@@ -85,10 +86,12 @@ class Capture(FrameSource):
                 raise RuntimeError(f"Cannot read image: {self._source!r}")
             h, w = self._cached_image.shape[:2]
             self.frame_size = (w, h)
+            self._active = True
         else:
             self._cap = cv2.VideoCapture(self._source)
             if not self._cap.isOpened():
                 raise RuntimeError(f"Cannot open source: {self._source!r}")
+            self._active = True  # must precede thread spawn to avoid race
             if self._is_camera:
                 w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                 h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -100,8 +103,18 @@ class Capture(FrameSource):
                     name=f"capture-{self._source}",
                 )
                 self._thread.start()
-
-        self._active = True
+            else:
+                if not self.frame_size:  # fallback if _probe_metadata() missed it
+                    w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    if w > 0 and h > 0:
+                        self.frame_size = (w, h)
+                self._thread = threading.Thread(
+                    target=self._file_loop,
+                    daemon=True,
+                    name=f"capture-{self._source}",
+                )
+                self._thread.start()
         log.info(
             "Capture started: %r  %s",
             self._source,
@@ -123,18 +136,10 @@ class Capture(FrameSource):
             return None
         if self._is_image_src:
             return self._cached_image
-        if self._is_camera:
-            try:
-                return self._queue.get_nowait()
-            except queue.Empty:
-                return None
-        if self._cap is None or not self._active:
+        try:
+            return self._queue.get_nowait()
+        except queue.Empty:
             return None
-        ok, frame = self._cap.read()
-        if not ok:
-            self._active = False
-            return None
-        return frame
 
     def stop(self) -> None:
         """Release the source and unblock any pending reads."""
@@ -202,6 +207,48 @@ class Capture(FrameSource):
                     self._queue.put_nowait(frame)
                 except queue.Full:
                     pass
+        finally:
+            self._active = False
+            try:
+                self._queue.put_nowait(None)
+            except queue.Full:
+                pass
+
+    def _file_loop(self) -> None:
+        """Background thread — decodes file at encoded FPS into the drop-old queue.
+
+        Uses absolute per-frame deadlines so sleep overshoots (macOS ~10-15ms
+        minimum resolution) are absorbed by the next frame rather than
+        accumulating into permanent slowdown.
+        """
+        assert self._cap is not None
+        interval = 1.0 / self.fps if self.fps else 0.0
+        next_deadline = time.monotonic()
+        try:
+            while self._active:
+                if self._paused:
+                    time.sleep(0.01)
+                    next_deadline = time.monotonic()
+                    continue
+                ok, frame = self._cap.read()
+                if not ok:
+                    log.info("End of file — stopping capture thread.")
+                    break
+                try:
+                    self._queue.get_nowait()  # evict stale frame
+                except queue.Empty:
+                    pass
+                try:
+                    self._queue.put_nowait(frame)
+                except queue.Full:
+                    pass
+                next_deadline += interval
+                remaining = next_deadline - time.monotonic()
+                if remaining > 0:
+                    time.sleep(remaining)
+                else:
+                    # Behind schedule — skip sleep and let next frame catch up
+                    next_deadline = time.monotonic()
         finally:
             self._active = False
             try:
