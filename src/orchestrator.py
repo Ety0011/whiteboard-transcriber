@@ -15,12 +15,9 @@ import numpy as np
 
 from board import (
     BoardCompositor,
-    BoardSegmenter,
     NullBoardCompositor,
-    NullBoardSegmenter,
-    NullPersonSegmenter,
-    PersonSegmenterWorker,
     Rectifier,
+    Segmenter,
 )
 from layout import Block, LayoutWorker
 from ledger import Ledger
@@ -56,8 +53,8 @@ class PipelineOrchestrator(threading.Thread):
     Args:
         frame_queue:      Drop-old queue supplying raw camera frames from Tier 1.
         render_queue:     Drop-old queue delivering PipelineResult to Tier 1.
-        board_segmenter:  Stage 2 worker (async subprocess).
-        person_segmenter: Stage 3 worker (async subprocess or null for demo).
+        board_segmenter:  Stage 2 — SAM 3.1 async subprocess.
+        person_segmenter: Stage 3 — MediaPipe inline, ~10 Hz (or null for demo).
         rectifier:        Stage 4 — perspective warp (synchronous, fast).
         compositor:       Stage 5 — distance-weighted EMA (synchronous).
         layout_worker:    Stages 6+7 worker (async subprocess).
@@ -70,8 +67,8 @@ class PipelineOrchestrator(threading.Thread):
         self,
         frame_queue: queue.Queue[np.ndarray | None],
         render_queue: queue.Queue[PipelineResult | None],
-        board_segmenter: BoardSegmenter | NullBoardSegmenter,
-        person_segmenter: PersonSegmenterWorker | NullPersonSegmenter,
+        board_segmenter: Segmenter,
+        person_segmenter: Segmenter,
         rectifier: Rectifier,
         compositor: BoardCompositor | NullBoardCompositor,
         layout_worker: LayoutWorker,
@@ -113,7 +110,7 @@ class PipelineOrchestrator(threading.Thread):
             # Stage 2: board segmentation (async subprocess, ~5s cadence)
             board_mask = self._board_segmenter.segment(frame)
 
-            # Stage 3: person segmentation (async subprocess, ~10 Hz)
+            # Stage 3: person segmentation (inline ~5ms, ~10 Hz throttled)
             person_mask_new = self._person_segmenter.segment(frame)
             if person_mask_new is not None:
                 self._cached_person_mask = person_mask_new

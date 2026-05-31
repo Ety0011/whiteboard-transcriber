@@ -37,10 +37,11 @@ from board import (
     NullBoardCompositor,
     NullBoardSegmenter,
     NullPersonSegmenter,
-    PersonSegmenterWorker,
+    PersonSegmenter,
     Rectifier,
+    Segmenter,
 )
-from capture import CanvasCapture, Capture
+from capture import CanvasCapture, Capture, FrameSource
 from layout import LayoutWorker
 from ledger import Ledger
 from logging_config import suppress_noise
@@ -68,18 +69,21 @@ def main() -> None:
         os.environ["LOG_LEVEL"] = "DEBUG"
         logging.getLogger().setLevel(logging.DEBUG)
 
+    cap: FrameSource
+    board_segmenter: Segmenter
+    person_segmenter: Segmenter
+
     if args.demo:
-        cap: Capture | CanvasCapture = CanvasCapture().start()
-        board_segmenter: BoardSegmenter | NullBoardSegmenter = NullBoardSegmenter()
-        person_segmenter: PersonSegmenterWorker | NullPersonSegmenter = (
-            NullPersonSegmenter()
-        )
+        cap = CanvasCapture().start()
+        board_segmenter = NullBoardSegmenter()
+        person_segmenter = NullPersonSegmenter()
         rectifier = Rectifier()
         compositor: BoardCompositor | NullBoardCompositor = NullBoardCompositor()
     else:
         cap = Capture(args.source).start()
         board_segmenter = BoardSegmenter()
-        person_segmenter = PersonSegmenterWorker()
+        person_segmenter = PersonSegmenter()
+        person_segmenter.load()  # type: ignore[union-attr]  # synchronous; runs here
         rectifier = Rectifier()
         compositor = BoardCompositor()
 
@@ -168,18 +172,16 @@ def main() -> None:
 
             # --- raw frame: display at source FPS, also feed orchestrator --
             if not paused:
-                try:
-                    frame = cap.try_read()
-                    if frame is None:
-                        log.info("End of stream.")
-                        _drop_put(frame_queue, None)
-                        break
+                frame = cap.try_read()
+                if frame is not None:
                     last_raw_surface = pygame.surfarray.make_surface(
                         renderer.render_raw_panel(frame)
                     )
                     _drop_put(frame_queue, frame)
-                except queue.Empty:
-                    pass
+                elif not cap.is_active:
+                    log.info("End of stream.")
+                    _drop_put(frame_queue, None)
+                    break
 
             # --- board panel: async update from orchestrator -------------
             try:
@@ -255,7 +257,7 @@ def main() -> None:
 
 
 def _display_size(
-    cap: Capture | CanvasCapture, display_width: int, stack: bool = True
+    cap: FrameSource, display_width: int, stack: bool = True
 ) -> tuple[int, int]:
     """Compute the pygame window size from source metadata and display width.
 
