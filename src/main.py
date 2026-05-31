@@ -10,7 +10,7 @@ Usage::
     python src/main.py video.mp4            # video file
     python src/main.py --output-dir /tmp/lecture video.mp4
     python src/main.py --debug              # verbose logging
-    python src/main.py --demo               # mouse-drawable canvas
+    python src/main.py --canvas             # mouse-drawable canvas
 
 Keyboard controls:
     q      — quit
@@ -59,7 +59,8 @@ log = logging.getLogger(__name__)
 # Tier 1 — UI thread
 # ---------------------------------------------------------------------------
 
-
+# TODO: clean messy demo integration
+# TODO: optimize phase 2-4s
 def main() -> None:
     suppress_noise()  # sets env vars inherited by all worker subprocesses
     import pygame  # after suppress_noise — env vars in place before pygame loads
@@ -74,7 +75,7 @@ def main() -> None:
     board_segmenter: Segmenter
     person_segmenter: Segmenter
 
-    if args.demo:
+    if args.canvas:
         cap = CanvasCapture().start()
         board_segmenter = NullBoardSegmenter()
         person_segmenter = NullPersonSegmenter()
@@ -118,7 +119,7 @@ def main() -> None:
     orchestrator.start()
 
     pygame.init()
-    init_size = _display_size(cap, args.display_width, stack=not args.demo)
+    init_size = _display_size(cap, args.display_width, stack=not args.canvas)
     aspect_ratio = init_size[0] / init_size[1]
     screen = pygame.display.set_mode(init_size, pygame.RESIZABLE)
     pygame.display.set_caption("Lecture Historian")
@@ -205,7 +206,7 @@ def main() -> None:
 
             # --- display: stack raw (live) above board (async) -----------
             w = screen.get_width()
-            if not args.demo and last_raw_surface is not None:
+            if not args.canvas and last_raw_surface is not None:
                 raw_aspect = (
                     last_raw_surface.get_height() / last_raw_surface.get_width()
                 )
@@ -305,9 +306,9 @@ def _parse_args() -> argparse.Namespace:
         help="Directory for live.md and lecture_history.md (default: output/)",
     )
     parser.add_argument(
-        "--demo",
+        "--canvas",
         action="store_true",
-        help="Demo mode: mouse-drawable canvas, no camera/video required",
+        help="Mouse-drawable canvas mode; skips camera, SAM, and EMA",
     )
     parser.add_argument(
         "--debug",

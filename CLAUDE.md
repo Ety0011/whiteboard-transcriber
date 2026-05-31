@@ -74,8 +74,8 @@ python src/main.py --debug recording.mp4
 # Adjust display window width
 python src/main.py --display-width 1280
 
-# Demo mode: mouse-drawable canvas, no camera required
-python src/main.py --demo
+# Canvas mode: mouse-drawable canvas, no camera required
+python src/main.py --canvas
 ```
 
 ### CLI Reference
@@ -85,7 +85,7 @@ python src/main.py --demo
 | `source` | positional | webcam | Video/image file path |
 | `--output-dir` | path | `output/` | Directory for `live.md` and `lecture_history.md` |
 | `--display-width` | int | `960` | Preview window width in pixels |
-| `--demo` | flag | off | Mouse-drawable canvas mode; skips camera, SAM, and EMA |
+| `--canvas` | flag | off | Mouse-drawable canvas mode; skips camera, SAM, and EMA |
 | `--debug` | flag | off | Set root log level to DEBUG across all processes |
 
 ### Keyboard Controls (Live Window)
