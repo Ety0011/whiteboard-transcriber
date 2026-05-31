@@ -46,7 +46,7 @@ from capture import CanvasCapture, Capture, FrameSource
 from layout import LayoutWorker
 from ledger import Ledger
 from logging_config import suppress_noise
-from ocr import TranscriptionWorker
+from ocr.worker import TranscriptionWorker
 from orchestrator import PipelineOrchestrator, PipelineResult, drop_put
 from renderer import Renderer
 from tracker import NoteTracker

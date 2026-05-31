@@ -7,19 +7,15 @@ lecture_history.md to the configured output directory.
 Nothing is ever deleted — erasure is recorded, not enacted.
 """
 
-from __future__ import annotations
-
 import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
 
-if TYPE_CHECKING:
-    from tracker import Note
+from tracker import Note
 
 log = logging.getLogger(__name__)
 

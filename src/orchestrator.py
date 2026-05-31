@@ -20,7 +20,7 @@ from board import (
 )
 from layout import Block, LayoutWorker
 from ledger import Ledger
-from ocr import TranscriptionWorker
+from ocr.worker import TranscriptionWorker
 from tracker import Note, NoteTracker
 
 

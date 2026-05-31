@@ -12,17 +12,13 @@ Queue design:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import numpy as np
 
 from stage import WorkerStage
+from tracker import Note
 
 from .result import TranscriptionResult
 from .transcriber import PaddleVLTranscriber
-
-if TYPE_CHECKING:
-    from tracker import Note
 
 
 class TranscriptionWorker(WorkerStage):
