@@ -63,22 +63,21 @@ def main() -> None:
                     cap.pause() if paused else cap.resume()
 
         if not paused:
-            bgr = cap.read()
-            if bgr is None:
+            bgr = cap.try_read()
+            if bgr is None and not cap.is_active:
                 break
-            frame_n += 1
-
-            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            surf = pygame.surfarray.make_surface(rgb.swapaxes(0, 1))
-            scaled = pygame.transform.smoothscale(surf, screen.get_size())
-            screen.blit(scaled, (0, 0))
-
-            fps_surf = font.render(
-                f"{clock.get_fps():.1f} fps  frame {frame_n}",
-                True, (0, 255, 0),
-            )
-            screen.blit(fps_surf, (10, 10))
-            pygame.display.flip()
+            if bgr is not None:
+                frame_n += 1
+                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                surf = pygame.surfarray.make_surface(rgb.swapaxes(0, 1))
+                scaled = pygame.transform.smoothscale(surf, screen.get_size())
+                screen.blit(scaled, (0, 0))
+                fps_surf = font.render(
+                    f"{clock.get_fps():.1f} fps  frame {frame_n}",
+                    True, (0, 255, 0),
+                )
+                screen.blit(fps_surf, (10, 10))
+                pygame.display.flip()
 
         clock.tick(target_fps)
 

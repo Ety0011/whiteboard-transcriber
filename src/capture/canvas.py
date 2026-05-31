@@ -1,4 +1,5 @@
 """Demo canvas — mouse-drawable whiteboard with the same API as Capture."""
+
 from __future__ import annotations
 
 import queue
@@ -8,25 +9,27 @@ import time
 import cv2
 import numpy as np
 
+from .source import FrameSource
 
-class CanvasCapture:
+
+class CanvasCapture(FrameSource):
     """Drawable 1920×1080 white canvas that publishes frames at ~30fps.
 
-    Provides start()/read()/pause()/resume()/stop() so it can replace
-    Capture in the main loop without any pipeline changes.
+    Provides the same interface as :class:`~capture.Capture` so it can replace
+    it in the main loop without pipeline changes.
 
-    Use on_mouse_down/on_mouse_move/on_mouse_up to paint strokes onto the
-    canvas; clear() resets it to white.
+    Use on_mouse_down/on_mouse_move/on_mouse_up to paint pen strokes;
+    on_eraser_down/on_eraser_move/on_eraser_up to erase; clear() to reset.
     """
-
-    fps: float | None = 30.0
-    frame_size: tuple[int, int] = (1920, 1080)
 
     _PEN_COLOR: tuple[int, int, int] = (0, 0, 0)
     _PEN_RADIUS: int = 8
     _ERASER_RADIUS: int = 20
 
     def __init__(self) -> None:
+        self.fps: float | None = 30.0
+        self.frame_size: tuple[int, int] = (1920, 1080)
+
         self._canvas = np.full((1080, 1920, 3), 255, dtype=np.uint8)
         self._lock = threading.Lock()
         self._queue: queue.Queue[np.ndarray | None] = queue.Queue(maxsize=1)
@@ -36,11 +39,15 @@ class CanvasCapture:
         self._last_eraser_pos: tuple[int, int] | None = None
 
     # ------------------------------------------------------------------
-    # Public API (matches Capture)
+    # FrameSource implementation
     # ------------------------------------------------------------------
 
     def start(self) -> CanvasCapture:
-        """Spawn the frame-publish thread. Returns self for fluent chaining."""
+        """Spawn the frame-publish thread.
+
+        Returns:
+            self for fluent chaining.
+        """
         self._active = True
         self._thread = threading.Thread(
             target=self._loop, daemon=True, name="canvas-capture"
@@ -48,34 +55,31 @@ class CanvasCapture:
         self._thread.start()
         return self
 
-    def read(self) -> np.ndarray | None:
-        """Block until the next frame is available."""
-        return self._queue.get()
-
     def try_read(self) -> np.ndarray | None:
-        """Non-blocking read. Raises ``queue.Empty`` if no frame is ready.
+        """Non-blocking read.
 
         Returns:
-            BGR uint8 frame, or ``None`` on end-of-stream.
-
-        Raises:
-            queue.Empty: No frame available this tick.
+            BGR uint8 frame, or None if no frame is ready this tick or
+            on end-of-stream. Never raises.
         """
-        return self._queue.get_nowait()
+        try:
+            return self._queue.get_nowait()
+        except queue.Empty:
+            return None
+
+    def stop(self) -> None:
+        """Signal the publish thread to exit and unblock any pending reads."""
+        self._active = False
+        try:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            pass
 
     def pause(self) -> None:
         """No-op — canvas is always live."""
 
     def resume(self) -> None:
         """No-op — canvas is always live."""
-
-    def stop(self) -> None:
-        """Signal the publish thread to exit and unblock any pending read()."""
-        self._active = False
-        try:
-            self._queue.put_nowait(None)
-        except queue.Full:
-            pass
 
     # ------------------------------------------------------------------
     # Drawing API
@@ -84,18 +88,15 @@ class CanvasCapture:
     def on_mouse_down(
         self, display_pos: tuple[int, int], display_size: tuple[int, int]
     ) -> None:
-        """Begin a pen stroke at display_pos."""
-        self._paint(
-            display_pos, display_size, self._PEN_COLOR, self._PEN_RADIUS, pen=True
-        )
+        """Begin a pen stroke at *display_pos*."""
+        self._last_pos = None  # discard stale endpoint from any previous stroke
+        self._paint(display_pos, display_size, self._PEN_COLOR, self._PEN_RADIUS, pen=True)
 
     def on_mouse_move(
         self, display_pos: tuple[int, int], display_size: tuple[int, int]
     ) -> None:
-        """Continue pen stroke to display_pos (call only while LMB is held)."""
-        self._paint(
-            display_pos, display_size, self._PEN_COLOR, self._PEN_RADIUS, pen=True
-        )
+        """Continue pen stroke to *display_pos* (call only while LMB is held)."""
+        self._paint(display_pos, display_size, self._PEN_COLOR, self._PEN_RADIUS, pen=True)
 
     def on_mouse_up(self) -> None:
         """End the current pen stroke."""
@@ -104,7 +105,8 @@ class CanvasCapture:
     def on_eraser_down(
         self, display_pos: tuple[int, int], display_size: tuple[int, int]
     ) -> None:
-        """Begin an eraser stroke at display_pos (RMB)."""
+        """Begin an eraser stroke at *display_pos* (RMB)."""
+        self._last_eraser_pos = None  # discard stale endpoint from any previous stroke
         self._paint(
             display_pos, display_size, (255, 255, 255), self._ERASER_RADIUS, pen=False
         )
@@ -141,7 +143,7 @@ class CanvasCapture:
         *,
         pen: bool,
     ) -> None:
-        """Draw a dot and optionally a line from the previous position."""
+        """Draw a dot and optionally a line from the previous stroke position."""
         pos = self._to_canvas(display_pos, display_size)
         prev = self._last_pos if pen else self._last_eraser_pos
         with self._lock:
@@ -158,11 +160,16 @@ class CanvasCapture:
     ) -> tuple[int, int]:
         """Map display pixel coordinates to 1920×1080 canvas coordinates."""
         dw, dh = display_size
+        if dw == 0 or dh == 0:
+            return (0, 0)
         cx = max(0, min(1919, int(display_pos[0] * 1920 / dw)))
         cy = max(0, min(1079, int(display_pos[1] * 1080 / dh)))
         return (cx, cy)
 
     def _loop(self) -> None:
+        """Publish canvas frames at ~30fps using monotonic deadline tracking."""
+        interval = 1.0 / 30
+        next_deadline = time.monotonic() + interval
         while self._active:
             with self._lock:
                 frame = self._canvas.copy()
@@ -174,7 +181,11 @@ class CanvasCapture:
                 self._queue.put_nowait(frame)
             except queue.Full:
                 pass
-            time.sleep(1 / 30)
+            now = time.monotonic()
+            sleep_for = next_deadline - now
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            next_deadline += interval
         try:
             self._queue.put_nowait(None)
         except queue.Full:
