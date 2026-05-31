@@ -20,25 +20,13 @@ import time
 import numpy as np
 
 from layout import Block
+from ocr.result import TranscriptionResult
 
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Data types
 # ---------------------------------------------------------------------------
-
-
-@dataclasses.dataclass
-class TranscriptionResult:
-    """OCR result produced by the transcription worker subprocess.
-
-    Attributes:
-        note_id: NoteTracker ID of the note whose crop was transcribed.
-        text: Recognised text (and/or LaTeX) returned by the VLM backend.
-    """
-
-    note_id: int
-    text: str
 
 
 class NoteState(enum.Enum):
@@ -56,6 +44,13 @@ class Note:
 
     Bounding box is kept EMA-smoothed to reduce jitter. All timestamps are
     from time.monotonic().
+
+    Attributes:
+        ocr_gen: Incremented on each INFERRING dispatch. TranscriptionResult
+                 carries the generation at dispatch time; mismatches are
+                 discarded as stale results from a superseded inference cycle.
+        crop:    Board region snapshot taken at INFERRING dispatch. Cleared to
+                 None once OCR completes (ACTIVE) to release memory.
     """
 
     id: int
@@ -66,10 +61,9 @@ class Note:
     last_modified: float
     last_seen: float
     ocr_text: str = ""
+    ocr_gen: int = 0  # incremented at each INFERRING dispatch
     last_stable_center: np.ndarray | None = None  # shape (2,) float64 cx,cy
-    crop: np.ndarray | None = None  # board region snapshot taken at INFERRING dispatch
-
-
+    crop: np.ndarray | None = None  # cleared to None after OCR completes
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +147,7 @@ class NoteTracker:
 
         self._notes: dict[int, Note] = {}
         self._next_id: int = 0
-        self._pending_ocr: dict[int, Note] = {}
+        self._pending_ocr: set[int] = set()
 
     @property
     def notes(self) -> list[Note]:
@@ -165,23 +159,34 @@ class NoteTracker:
         """All notes including ERASED tombstones (retained for tombstone_retention seconds)."""
         return list(self._notes.values())
 
-    def _commit_ocr_result(self, note_id: int, text: str) -> Note | None:
+    def _commit_ocr_result(self, result: TranscriptionResult) -> Note | None:
         """Transition INFERRING → ACTIVE with the completed OCR text.
 
+        Rejects stale results — those arriving after a note has drifted and
+        been re-dispatched — by comparing result.generation to note.ocr_gen.
+
         Args:
-            note_id: ID of the note whose OCR completed.
-            text:    Recognised text from the VLM.
+            result: Completed TranscriptionResult from the transcription worker.
 
         Returns:
-            The activated note, or None if it drifted before the result arrived.
+            The activated Note, or None if the result was stale or the note
+            is no longer in INFERRING state.
         """
-        note = self._pending_ocr.pop(note_id, None)
-        if note is None or note.state != NoteState.INFERRING:
+        if result.note_id not in self._pending_ocr:
             return None
-        note.ocr_text = text
+        note = self._notes.get(result.note_id)
+        if note is None or note.state != NoteState.INFERRING:
+            self._pending_ocr.discard(result.note_id)
+            return None
+        if result.generation != note.ocr_gen:
+            # Stale result from a superseded dispatch cycle (drift-and-redispatch).
+            return None
+        self._pending_ocr.discard(result.note_id)
+        note.ocr_text = result.text
         note.state = NoteState.ACTIVE
+        note.crop = None  # release crop memory — not needed after OCR completes
         note.last_modified = time.monotonic()
-        log.debug("Note %d → ACTIVE: %r", note.id, text[:30])
+        log.debug("Note %d → ACTIVE (gen %d): %r", note.id, note.ocr_gen, result.text[:30])
         return note
 
     def update(
@@ -225,13 +230,13 @@ class NoteTracker:
         self._prune_tombstones(now)
 
         for note in newly_erased:
-            self._pending_ocr.pop(note.id, None)
+            self._pending_ocr.discard(note.id)
         for note in newly_inferring:
-            self._pending_ocr[note.id] = note
+            self._pending_ocr.add(note.id)
 
         newly_active = [
             n for r in transcriptions
-            if (n := self._commit_ocr_result(r.note_id, r.text)) is not None
+            if (n := self._commit_ocr_result(r)) is not None
         ]
         return newly_inferring, newly_erased, newly_active
 
@@ -298,6 +303,8 @@ class NoteTracker:
                 note.crop = None
                 note.last_modified = now
                 note.last_stable_center = cur_center  # anchor new baseline
+                # Cancel any in-flight OCR — result would be stale on arrival.
+                self._pending_ocr.discard(note.id)
 
         # Physical update — EMA bbox smoothing
         note.bbox = (0.2 * block.bbox + 0.8 * note.bbox).astype(np.int32)
@@ -317,10 +324,11 @@ class NoteTracker:
         """Transition STABILIZING → INFERRING, snapshot crop, anchor stable center."""
         note.last_stable_center = (note.bbox[:2] + note.bbox[2:]) / 2.0
         x1, y1, x2, y2 = note.bbox
+        note.ocr_gen += 1  # increment before submit so worker carries the new gen
         note.crop = composite[y1:y2, x1:x2].copy()
         note.state, note.last_modified = NoteState.INFERRING, now
         newly_inferring.append(note)
-        log.debug("Note %d → INFERRING", note.id)
+        log.debug("Note %d → INFERRING (gen %d)", note.id, note.ocr_gen)
 
     def _erase_unmatched(
         self,
