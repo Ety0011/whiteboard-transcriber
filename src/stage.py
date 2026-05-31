@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import multiprocessing as mp
+import queue
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Callable
@@ -36,7 +37,13 @@ def _run_worker(stage: WorkerStage) -> None:
     _level = logging.DEBUG if os.getenv("LOG_LEVEL") == "DEBUG" else logging.INFO
     logging.basicConfig(level=_level, format="%(levelname)s %(name)s: %(message)s")
     suppress_worker_noise()
-    stage.load()
+    try:
+        stage.load()
+    except Exception:
+        logging.getLogger(type(stage).__name__).exception("worker load() failed")
+        stage._error.set()
+        stage._ready.set()
+        return
     stage._ready.set()
     stage._run_loop()
 
@@ -106,6 +113,7 @@ class WorkerStage(ABC):
         self._in_q: mp.Queue = mp.Queue(maxsize=self._in_queue_size)
         self._out_q: mp.Queue = mp.Queue(maxsize=self._out_queue_size)
         self._ready: mp.Event = mp.Event()
+        self._error: mp.Event = mp.Event()
         self._is_busy: bool = False
         self._last_submit: float = 0.0
         self._proc = mp.Process(
@@ -151,7 +159,10 @@ class WorkerStage(ABC):
     def _run_loop(self) -> None:
         """Main worker loop — blocks on input queue, processes items until sentinel."""
         while True:
-            item = self._in_q.get()
+            try:
+                item = self._in_q.get(timeout=1.0)
+            except queue.Empty:
+                continue
             if item is None:
                 self._on_shutdown()
                 break
@@ -163,7 +174,7 @@ class WorkerStage(ABC):
             if self._drop_old:
                 try:
                     self._out_q.get_nowait()
-                except Exception:
+                except queue.Empty:
                     pass
             self._put_result(result)
 
@@ -171,7 +182,7 @@ class WorkerStage(ABC):
         """Put result on output queue, warns if full."""
         try:
             self._out_q.put_nowait(result)
-        except Exception:
+        except queue.Full:
             self._log.warning("output queue full — result dropped")
 
     def _submit(self, item: Any) -> None:
@@ -179,10 +190,8 @@ class WorkerStage(ABC):
         try:
             self._in_q.put_nowait(item)
             self._is_busy = True
-        except Exception:
-            if not self._is_busy:
-                # self._log.warning("input queue full — item dropped")
-                pass
+        except queue.Full:
+            pass
 
     def _submit_if_due(self, item: Any, interval_s: float) -> bool:
         """Submit *item* if *interval_s* has elapsed since last submission.
@@ -203,7 +212,7 @@ class WorkerStage(ABC):
             result = self._out_q.get_nowait()
             self._is_busy = False
             return result
-        except Exception:
+        except queue.Empty:
             return None
 
     @property
@@ -220,8 +229,16 @@ class WorkerStage(ABC):
 
         Returns:
             True if ready, False if timeout expired before load completed.
+
+        Raises:
+            RuntimeError: If the worker's load() raised an exception.
         """
-        return self._ready.wait(timeout=timeout)
+        ready = self._ready.wait(timeout=timeout)
+        if ready and self._error.is_set():
+            raise RuntimeError(
+                f"Worker {self._process_name!r} failed to load — check worker logs"
+            )
+        return ready
 
     @property
     def is_busy(self) -> bool:
@@ -232,7 +249,7 @@ class WorkerStage(ABC):
         """Send shutdown sentinel, join subprocess, terminate if timeout exceeded."""
         try:
             self._in_q.put_nowait(None)
-        except Exception:
+        except queue.Full:
             pass
         self._proc.join(timeout=self._shutdown_timeout)
         if self._proc.is_alive():
