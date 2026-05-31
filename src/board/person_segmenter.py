@@ -59,6 +59,7 @@ class PersonSegmenter(InlineStage, Segmenter):
         self._dilation_px = dilation_px
         self._segmenter = None  # loaded in load()
         self._kernel: np.ndarray | None = None  # built in load()
+        self._mp = None  # mediapipe module ref, cached in load()
 
     def load(self) -> None:
         """Load the MediaPipe model. Call once before the pipeline starts."""
@@ -76,6 +77,7 @@ class PersonSegmenter(InlineStage, Segmenter):
             self._segmenter = mp_lib.tasks.vision.ImageSegmenter.create_from_options(
                 options
             )
+        self._mp = mp_lib
 
         if self._dilation_px > 0:
             ksize = 2 * self._dilation_px + 1
@@ -107,10 +109,8 @@ class PersonSegmenter(InlineStage, Segmenter):
         if not self._due():
             return None
 
-        import mediapipe as mp_lib  # cached after load(); effectively free
-
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_image = mp_lib.Image(image_format=mp_lib.ImageFormat.SRGB, data=rgb)
+        mp_image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
         result = self._segmenter.segment(mp_image)
         float_mask = np.array(result.confidence_masks[0].numpy_view()).squeeze()
         mask = (float_mask > self._threshold).astype(np.uint8)
