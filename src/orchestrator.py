@@ -141,7 +141,7 @@ class PipelineOrchestrator(threading.Thread):
             self._ledger.sync(newly_erased, newly_active, composite)
 
             # Push board result to UI thread for rendering
-            _drop_put(
+            drop_put(
                 self._render_queue,
                 PipelineResult(
                     composite=composite,
@@ -155,7 +155,7 @@ class PipelineOrchestrator(threading.Thread):
             )
 
 
-def _drop_put(q: queue.Queue, item: object) -> None:
+def drop_put(q: queue.Queue, item: object) -> None:
     """Evict any stale entry and publish the latest item (drop-old pattern)."""
     try:
         q.get_nowait()

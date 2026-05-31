@@ -47,7 +47,7 @@ from layout import LayoutWorker
 from ledger import Ledger
 from logging_config import suppress_noise
 from ocr import TranscriptionWorker
-from orchestrator import PipelineOrchestrator, PipelineResult, _drop_put
+from orchestrator import PipelineOrchestrator, PipelineResult, drop_put
 from renderer import Renderer
 from tracker import NoteTracker
 
@@ -183,10 +183,10 @@ def main() -> None:
                             frame, last_person_mask, last_corners, last_sam_busy
                         )
                     )
-                    _drop_put(frame_queue, frame)
+                    drop_put(frame_queue, frame)
                 elif not cap.is_active:
                     log.info("End of stream.")
-                    _drop_put(frame_queue, None)
+                    drop_put(frame_queue, None)
                     break
 
             # --- board panel: async update from orchestrator -------------
