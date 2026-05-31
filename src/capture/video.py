@@ -1,15 +1,14 @@
 """Stage 1 — Video Feed.
 
-Reads frames from a camera or file in a background thread. Callers interact
-only through the ``Capture`` object — the internal queue is an implementation
-detail.
+Reads frames from a camera or file. File sources read directly per caller tick
+(same pattern as replay.py — no background thread, no sleep, caller paces via
+clock.tick). Camera sources read in a background thread so cap.read() blocking
+does not stall the UI loop.
 
 Usage::
 
     cap = Capture("recording.mp4").start()
     frame = cap.read()          # blocks until next frame (or None at EOF)
-    cap.pause()
-    cap.resume()
     cap.stop()
 
     # Or as a context manager:
@@ -22,7 +21,6 @@ from __future__ import annotations
 import logging
 import queue
 import threading
-import time
 from pathlib import Path
 
 import cv2
@@ -34,25 +32,35 @@ _IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", "
 
 
 class Capture:
-    """Thread-backed video/image source with pause/resume support.
+    """Video/image source with pause/resume support.
+
+    For file sources, frames are decoded directly on each ``try_read()`` call —
+    the caller's loop rate (e.g. ``clock.tick(fps)``) determines playback speed.
+    For camera sources, a background thread drains the camera so the UI thread
+    is never blocked by a hardware read.
 
     Metadata (fps, frame_size) is read synchronously from the source header
     in ``__init__`` so callers can inspect it before the stream starts.
-
-    The internal frame queue holds at most one entry — stale frames are
-    dropped automatically so callers always receive the latest frame.
     """
 
     def __init__(self, source: str | int | None = None) -> None:
         self._source: int | str = 0 if source is None else source
-        self._queue: queue.Queue[np.ndarray | None] = queue.Queue(maxsize=1)
-        self._paused = threading.Event()
-        self._paused.set()  # not paused initially
+        self._is_camera = isinstance(self._source, int)
+        self._is_image_src = _is_image(self._source)
+
+        self._cap: cv2.VideoCapture | None = None
+        self._cached_image: np.ndarray | None = None
         self._active = False
+        self._paused = False
+
+        # Camera path only — background thread + drop-old queue.
+        self._queue: queue.Queue[np.ndarray | None] = queue.Queue(maxsize=1)
+        self._paused_event = threading.Event()
+        self._paused_event.set()
         self._thread: threading.Thread | None = None
 
         self.fps: float | None = None
-        """Source fps from file header. ``None`` for live cameras (unreliable)."""
+        """Source fps from file header. ``None`` for live cameras."""
 
         self.frame_size: tuple[int, int] | None = None
         """``(width, height)`` from source metadata. ``None`` if unknown."""
@@ -64,34 +72,93 @@ class Capture:
     # ------------------------------------------------------------------
 
     def start(self) -> Capture:
-        """Spawn the capture thread. Returns *self* for fluent chaining."""
+        """Open the source and, for cameras, spawn the capture thread.
+
+        Returns:
+            *self* for fluent chaining.
+        """
+        if self._is_image_src:
+            self._cached_image = cv2.imread(str(self._source))
+            if self._cached_image is None:
+                raise RuntimeError(f"Cannot read image: {self._source!r}")
+            h, w = self._cached_image.shape[:2]
+            self.frame_size = (w, h)
+        else:
+            self._cap = cv2.VideoCapture(self._source)
+            if not self._cap.isOpened():
+                raise RuntimeError(f"Cannot open source: {self._source!r}")
+            if self._is_camera:
+                self._thread = threading.Thread(
+                    target=self._camera_loop, daemon=True, name="capture"
+                )
+                self._thread.start()
+
         self._active = True
-        fn = self._image_loop if _is_image(self._source) else self._video_loop
-        self._thread = threading.Thread(target=fn, daemon=True, name="capture")
-        self._thread.start()
-        log.info("Capture started: %r", self._source)
+        log.info(
+            "Capture started: %r  %s",
+            self._source,
+            f"{self.frame_size[0]}×{self.frame_size[1]} @ {self.fps:.0f} fps"
+            if self.frame_size and self.fps
+            else str(self.frame_size or ""),
+        )
         return self
 
     def read(self) -> np.ndarray | None:
-        """Block until the next frame is available.
+        """Return the next frame, blocking if necessary.
 
         Returns:
             BGR uint8 frame, or ``None`` at end-of-stream.
         """
-        return self._queue.get()
+        if self._is_image_src:
+            return self._cached_image
+        if self._is_camera:
+            return self._queue.get()
+        if self._cap is None:
+            return None
+        ok, frame = self._cap.read()
+        return frame if ok else None
+
+    def try_read(self) -> np.ndarray | None:
+        """Non-blocking read.
+
+        For file sources, decodes and returns the next frame immediately.
+        For camera sources, returns the latest buffered frame or raises
+        ``queue.Empty`` if the background thread has not produced one yet.
+
+        Returns:
+            BGR uint8 frame, or ``None`` on end-of-stream.
+
+        Raises:
+            queue.Empty: Camera source has no new frame buffered this tick.
+        """
+        if self._paused:
+            raise queue.Empty
+        if self._is_image_src:
+            return self._cached_image
+        if self._is_camera:
+            return self._queue.get_nowait()
+        if self._cap is None or not self._active:
+            raise queue.Empty
+        ok, frame = self._cap.read()
+        return frame if ok else None
 
     def pause(self) -> None:
-        """Freeze the capture thread before its next frame read."""
-        self._paused.clear()
+        """Freeze playback before the next frame."""
+        self._paused = True
+        self._paused_event.clear()
 
     def resume(self) -> None:
-        """Unfreeze the capture thread."""
-        self._paused.set()
+        """Unfreeze playback."""
+        self._paused = False
+        self._paused_event.set()
 
     def stop(self) -> None:
-        """Signal the capture thread to exit and unblock any pending read()."""
+        """Release the source and unblock any pending read()."""
         self._active = False
-        self._paused.set()  # unblock if paused
+        self._paused_event.set()  # unblock camera thread if paused
+        if self._cap is not None:
+            self._cap.release()
+            self._cap = None
         try:
             self._queue.put_nowait(None)
         except queue.Full:
@@ -141,12 +208,8 @@ class Capture:
     # ------------------------------------------------------------------
 
     def _probe_metadata(self) -> None:
-        """Read fps and frame dimensions from the source header.
-
-        Opens and immediately releases a VideoCapture — no frames decoded.
-        Camera fps is not populated because driver-reported values are unreliable.
-        """
-        if _is_image(self._source):
+        """Read fps and frame dimensions from the source header without decoding frames."""
+        if self._is_image_src:
             return
         cap = cv2.VideoCapture(self._source)
         if not cap.isOpened():
@@ -160,52 +223,27 @@ class Capture:
         if raw_fps > 0 and isinstance(self._source, str):
             self.fps = raw_fps
 
-    def _image_loop(self) -> None:
-        """Republish a still image at ~30 fps so the processing loop keeps ticking."""
-        frame = cv2.imread(str(self._source))
-        if frame is None:
-            log.error("Cannot read image: %s", self._source)
-            self._queue.put(None)
-            return
-        log.info("Image %dx%d: %s", frame.shape[1], frame.shape[0], self._source)
-        while self._active:
-            self._paused.wait()
-            if not self._active:
-                break
-            _drop_put(self._queue, frame)
-            time.sleep(1 / 30)
-
-    def _video_loop(self) -> None:
-        """Stream frames from a camera or video file."""
-        cap = cv2.VideoCapture(self._source)
-        if not cap.isOpened():
-            log.error("Cannot open source: %r", self._source)
-            self._queue.put(None)
-            return
-        log.info(
-            "Opened %dx%d @ %s: %r",
-            cap.get(cv2.CAP_PROP_FRAME_WIDTH),
-            cap.get(cv2.CAP_PROP_FRAME_HEIGHT),
-            f"{self.fps:.0f} fps" if self.fps else "live",
-            self._source,
-        )
-        # Files pace to source fps; cameras block naturally in cap.read().
-        frame_interval = (1.0 / self.fps) if self.fps is not None else 0.0
+    def _camera_loop(self) -> None:
+        """Background thread — drains the camera into the drop-old queue."""
+        assert self._cap is not None
         try:
             while self._active:
-                self._paused.wait()
+                self._paused_event.wait()
                 if not self._active:
                     break
-                t = time.monotonic()
-                ok, frame = cap.read()
+                ok, frame = self._cap.read()
                 if not ok:
-                    log.info("End of stream: %r", self._source)
+                    log.info("Camera read failed — stopping capture thread.")
                     break
-                _drop_put(self._queue, frame)
-                if frame_interval:
-                    time.sleep(max(0.0, frame_interval - (time.monotonic() - t)))
+                try:
+                    self._queue.get_nowait()  # evict stale frame
+                except queue.Empty:
+                    pass
+                try:
+                    self._queue.put_nowait(frame)
+                except queue.Full:
+                    pass
         finally:
-            cap.release()
             try:
                 self._queue.put_nowait(None)
             except queue.Full:
@@ -219,12 +257,3 @@ class Capture:
 
 def _is_image(source: int | str) -> bool:
     return isinstance(source, str) and Path(source).suffix.lower() in _IMAGE_SUFFIXES
-
-
-def _drop_put(q: queue.Queue, frame: np.ndarray) -> None:
-    """Evict the stale frame (if any) and publish the latest one."""
-    try:
-        q.get_nowait()
-    except queue.Empty:
-        pass
-    q.put(frame)

@@ -52,6 +52,17 @@ class CanvasCapture:
         """Block until the next frame is available."""
         return self._queue.get()
 
+    def try_read(self) -> np.ndarray | None:
+        """Non-blocking read. Raises ``queue.Empty`` if no frame is ready.
+
+        Returns:
+            BGR uint8 frame, or ``None`` on end-of-stream.
+
+        Raises:
+            queue.Empty: No frame available this tick.
+        """
+        return self._queue.get_nowait()
+
     def pause(self) -> None:
         """No-op — canvas is always live."""
 
