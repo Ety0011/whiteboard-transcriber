@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
-# TODO: remove this
 if TYPE_CHECKING:
     from tracker import Note
 
@@ -246,15 +245,8 @@ class Ledger:
         active = self.get_active()
         if not active:
             return "# Whiteboard\n\n*(board empty)*\n"
-
-        blocks = ["# Whiteboard\n"]
-        for entry in active:
-            blocks.append(entry.versions[-1].text)
-            blocks.append("---")
-        # drop trailing separator
-        if blocks[-1] == "---":
-            blocks.pop()
-        return "\n\n".join(blocks) + "\n"
+        body = "\n\n---\n\n".join(e.versions[-1].text for e in active)
+        return f"# Whiteboard\n\n{body}\n"
 
     def _render_history(self) -> str:
         """Render lecture_history.md: full chronological ledger with TOC."""
@@ -265,7 +257,7 @@ class Ledger:
         toc_lines = ["## Contents\n"]
         for entry in all_entries:
             ts = self._mono_to_wall_str(entry.first_seen)
-            anchor = f"note{entry.note_id}-{ts.replace(':', '')}"
+            anchor = f"note-{entry.note_id}"
             content_lines = [
                 line for line in entry.versions[-1].text.splitlines() if line.strip()
             ]
@@ -284,7 +276,7 @@ class Ledger:
     def _render_entry(self, entry: LedgerEntry) -> str:
         """Render one history section: heading, latest text, collapsible revisions."""
         ts = self._mono_to_wall_str(entry.first_seen)
-        anchor = f"note{entry.note_id}-{ts.replace(':', '')}"
+        anchor = f"note-{entry.note_id}"
         parts = [f"## {ts} {{#{anchor}}}", "", entry.versions[-1].text]
 
         if len(entry.versions) > 1:
