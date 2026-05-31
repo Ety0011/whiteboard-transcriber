@@ -181,11 +181,11 @@ class Rectifier(InlineStage):
         if corners is None:
             return
         sorted_c = _sort_corners(corners)
-        is_first = self._cached_corners is None
-        if is_first or _are_corners_shifted(sorted_c, self._cached_corners):  # type: ignore[arg-type]
+        cached = self._cached_corners
+        if cached is None or _are_corners_shifted(sorted_c, cached):
             self._homography = _compute_homography(sorted_c, self._output_size)
             self._cached_corners = sorted_c
-            if is_first:
+            if cached is None:
                 self._log.info("Homography established")
             else:
                 self._log.debug("Homography recomputed — board corners shifted")
