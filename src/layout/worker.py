@@ -47,7 +47,9 @@ class LayoutWorker(WorkerStage):
             self._detector.shutdown()
 
     def _process_item(self, frame: np.ndarray) -> list[Block]:
-        assert self._detector is not None and self._clusterer is not None
+        if self._detector is None or self._clusterer is None:
+            self._log.error("_process_item called before load() completed; skipping frame")
+            return []
         lines = self._detector.detect(frame)
         blocks = self._clusterer.cluster(lines)
         self._log.debug("%d blocks detected", len(blocks))
