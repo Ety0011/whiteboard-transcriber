@@ -15,10 +15,12 @@ import numpy as np
 
 from stage import WorkerStage
 
+from .segmenter import Segmenter
+
 _MODEL_PATH = Path(__file__).parent.parent.parent / "models" / "sam3.1_multiplex.pt"
 
 
-class BoardSegmenter(WorkerStage):
+class BoardSegmenter(WorkerStage, Segmenter):
     """Non-blocking SAM 3.1 board segmentation.
 
     Spawns a child process running SAM 3.1 to segment the whiteboard region.
@@ -28,6 +30,9 @@ class BoardSegmenter(WorkerStage):
     Args:
         model_path: Path to the SAM 3.1 model weights.
         recompute_interval: Minimum seconds between SAM inference runs.
+
+    Raises:
+        FileNotFoundError: If *model_path* does not exist (checked before subprocess spawn).
     """
 
     _process_name = "sam3-board-segmenter"
@@ -38,6 +43,11 @@ class BoardSegmenter(WorkerStage):
         model_path: Path = _MODEL_PATH,
         recompute_interval: float = 5.0,
     ) -> None:
+        if not Path(model_path).is_file():
+            raise FileNotFoundError(
+                f"SAM model not found: {model_path!r}. "
+                "Download sam3.1_multiplex.pt and place it in models/."
+            )
         self._model_path = str(model_path)
         self._recompute_interval = recompute_interval
         self._sam: Any = None  # loaded in load()
@@ -86,6 +96,12 @@ class BoardSegmenter(WorkerStage):
         Non-blocking. Returns a uint8 H×W mask (1=board, 0=background) when SAM
         produces a new result, otherwise None. The rectifier should use its cached
         homography when None is returned.
+
+        Args:
+            frame: BGR uint8 camera frame.
+
+        Returns:
+            Fresh board mask, or None if no new result this cycle.
         """
         result = self._poll()
         if result is not None:
@@ -97,16 +113,14 @@ class BoardSegmenter(WorkerStage):
         return None
 
 
-class NullBoardSegmenter:
+class NullBoardSegmenter(Segmenter):
     """Drop-in for BoardSegmenter that skips SAM entirely (demo mode).
 
     Always returns None from segment() so the Rectifier stays in its resize
     fallback, passing the canvas frame through unchanged.
     """
 
-    is_busy: bool = False
-
-    def segment(self, frame: np.ndarray) -> None:
+    def segment(self, frame: np.ndarray) -> np.ndarray | None:
         """Return None every call — Rectifier uses its resize fallback."""
         return None
 
