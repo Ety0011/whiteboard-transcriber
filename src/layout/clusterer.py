@@ -26,12 +26,10 @@ class Block:
     Attributes:
         bbox: Tight axis-aligned bounding box over all constituent lines,
             shape (4,) int32: x1, y1, x2, y2 in rectified 1920×1080 space.
-        confidence: Maximum detection confidence among constituent lines.
         lines: Individual TextLine anchors that make up this block.
     """
 
     bbox: np.ndarray
-    confidence: float
     lines: list[TextLine] = field(default_factory=list)
 
 
@@ -164,12 +162,8 @@ class SingleLinkageClusterer:
         )
 
     def _make_block(self, lines: list[TextLine]) -> Block:
-        """Construct a Block from *lines* — tight bbox and max confidence."""
-        return Block(
-            bbox=self._compute_bbox(lines),
-            confidence=max(l.confidence for l in lines),
-            lines=lines,
-        )
+        """Construct a Block from *lines* — tight bbox over all constituents."""
+        return Block(bbox=self._compute_bbox(lines), lines=lines)
 
     def cluster(self, lines: list[TextLine]) -> list[Block]:
         """Cluster text lines into blocks via obstacle-vetoed agglomeration.

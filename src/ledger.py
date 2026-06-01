@@ -32,11 +32,9 @@ class TextVersion:
 
     Attributes:
         text: The full OCR/LaTeX string returned by the VLM.
-        timestamp: time.monotonic() at the moment the result was received.
     """
 
     text: str
-    timestamp: float
 
 
 @dataclass
@@ -45,7 +43,8 @@ class LedgerEntry:
 
     Attributes:
         note_id: Stable integer ID from the NoteTracker.
-        bbox: Last known bbox, shape (4,) int32: x1, y1, x2, y2 in rectified space.
+        sort_y: y1 coordinate (rectified space) at first OCR result; used to sort
+            active entries top-to-bottom in live.md.
         first_seen: time.monotonic() when the note was first submitted to the VLM.
         versions: Ordered list of OCR results; index 0 is the first, each subsequent
             entry is a VERSIONED correction.
@@ -53,7 +52,7 @@ class LedgerEntry:
     """
 
     note_id: int
-    bbox: np.ndarray
+    sort_y: int
     first_seen: float
     versions: list[TextVersion] = field(default_factory=list)
     erased_at: float | None = None
@@ -208,7 +207,7 @@ class Ledger:
     def get_active(self) -> list[LedgerEntry]:
         """All non-erased entries, sorted top-to-bottom by bbox y1."""
         active = [e for e in self._entries.values() if e.erased_at is None]
-        return sorted(active, key=lambda e: int(e.bbox[1]))
+        return sorted(active, key=lambda e: e.sort_y)
 
     def get_all(self) -> list[LedgerEntry]:
         """All entries, sorted chronologically by first_seen."""
@@ -224,15 +223,15 @@ class Ledger:
         if note_id not in self._entries:
             self._entries[note_id] = LedgerEntry(
                 note_id=note_id,
-                bbox=bbox.copy(),
+                sort_y=int(bbox[1]),
                 first_seen=now,
-                versions=[TextVersion(text=text, timestamp=now)],
+                versions=[TextVersion(text=text)],
             )
             return True
         entry = self._entries[note_id]
         if entry.versions[-1].text == text:
             return False  # identical — no change
-        entry.versions.append(TextVersion(text=text, timestamp=now))
+        entry.versions.append(TextVersion(text=text))
         return True
 
     def _apply_erase(self, note_id: int) -> bool:

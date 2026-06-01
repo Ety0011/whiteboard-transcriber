@@ -55,9 +55,7 @@ class Note:
 
     id: int
     bbox: np.ndarray  # shape (4,) int32: x1, y1, x2, y2 — EMA-smoothed
-    confidence: float
     state: NoteState
-    first_seen: float
     last_modified: float
     last_seen: float
     ocr_text: str = ""
@@ -313,7 +311,7 @@ class NoteTracker:
 
         # Physical update — EMA bbox smoothing
         note.bbox = (0.2 * block.bbox + 0.8 * note.bbox).astype(np.int32)
-        note.confidence, note.last_seen = block.confidence, now
+        note.last_seen = now
 
         if note.state == NoteState.STABILIZING:
             if now - note.last_modified >= self._stable_time_threshold:
@@ -364,9 +362,7 @@ class NoteTracker:
                 self._notes[new_id] = Note(
                     id=new_id,
                     bbox=block.bbox.copy(),
-                    confidence=block.confidence,
                     state=NoteState.STABILIZING,
-                    first_seen=now,
                     last_seen=now,
                     last_modified=now,
                     ocr_text="",
