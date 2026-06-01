@@ -11,9 +11,9 @@ import numpy as np
 class FrameSource(ABC):
     """Abstract base for video and canvas frame sources.
 
-    Provides a unified, non-blocking interface. try_read() always returns
-    immediately and never raises. Drawing interaction methods default to no-ops
-    so video sources do not need to stub them.
+    Core contract: non-blocking frame delivery with start/stop lifecycle and
+    optional pause/resume. Drawing interaction (mouse, clear) is not part of
+    this interface — it belongs exclusively to CanvasCapture.
 
     Two concrete implementations:
     - :class:`~capture.Capture` — webcam, video file, or static image.
@@ -68,35 +68,6 @@ class FrameSource(ABC):
 
     def resume(self) -> None:
         """Unfreeze playback. Default: no-op."""
-
-    def clear(self) -> None:
-        """Reset canvas to white. Default: no-op for non-canvas sources."""
-
-    def on_mouse_down(
-        self, display_pos: tuple[int, int], display_size: tuple[int, int]
-    ) -> None:
-        """Begin a pen stroke at *display_pos*. Default: no-op."""
-
-    def on_mouse_move(
-        self, display_pos: tuple[int, int], display_size: tuple[int, int]
-    ) -> None:
-        """Continue a pen stroke to *display_pos*. Default: no-op."""
-
-    def on_mouse_up(self) -> None:
-        """End the current pen stroke. Default: no-op."""
-
-    def on_eraser_down(
-        self, display_pos: tuple[int, int], display_size: tuple[int, int]
-    ) -> None:
-        """Begin an eraser stroke at *display_pos*. Default: no-op."""
-
-    def on_eraser_move(
-        self, display_pos: tuple[int, int], display_size: tuple[int, int]
-    ) -> None:
-        """Continue an eraser stroke to *display_pos*. Default: no-op."""
-
-    def on_eraser_up(self) -> None:
-        """End the current eraser stroke. Default: no-op."""
 
     def __enter__(self) -> Self:
         return self.start()
