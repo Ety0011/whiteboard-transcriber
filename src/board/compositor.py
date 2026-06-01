@@ -140,14 +140,3 @@ class BoardCompositor(InlineStage, Compositor):
             self._composite += self._diff_buf
 
         return self._composite.astype(np.uint8)
-
-
-class NullBoardCompositor(Compositor):
-    """Drop-in for BoardCompositor that passes the frame through unchanged.
-
-    The canvas is already clean, so EMA would ghost erased strokes.
-    """
-
-    def composite(self, frame: np.ndarray, _mask: np.ndarray) -> np.ndarray:
-        """Return *frame* unchanged."""
-        return frame

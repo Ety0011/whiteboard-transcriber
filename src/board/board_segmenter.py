@@ -111,19 +111,3 @@ class BoardSegmenter(WorkerStage, Segmenter):
             self._submit_if_due(frame, self._recompute_interval)
 
         return None
-
-
-class NullBoardSegmenter(Segmenter):
-    """Drop-in for BoardSegmenter that skips SAM entirely (demo mode).
-
-    Always returns None from segment() so the Rectifier stays in its resize
-    fallback, passing the canvas frame through unchanged.
-    """
-
-    def segment(self, frame: np.ndarray) -> np.ndarray | None:
-        """Return None every call — Rectifier uses its resize fallback."""
-        return None
-
-    def wait_ready(self, timeout: float | None = None) -> bool:
-        """Immediately ready — no subprocess to wait for."""
-        return True

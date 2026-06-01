@@ -131,19 +131,3 @@ class PersonSegmenter(InlineStage, Segmenter):
         if self._segmenter is not None:
             self._segmenter.close()
             self._segmenter = None
-
-
-class NullPersonSegmenter(Segmenter):
-    """Drop-in for PersonSegmenter that always returns None (demo mode).
-
-    The orchestrator falls back to a zero mask when None is received, achieving
-    the same effect as having no person detected.
-    """
-
-    def segment(self, frame: np.ndarray) -> np.ndarray | None:
-        """Return None — no person present in demo mode."""
-        return None
-
-    def wait_ready(self, timeout: float | None = None) -> bool:
-        """Immediately ready — no model to load."""
-        return True
