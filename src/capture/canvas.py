@@ -172,24 +172,26 @@ class CanvasCapture(FrameSource):
     def _loop(self) -> None:
         """Publish canvas frames at ~30fps using monotonic deadline tracking.
 
-        Skips copy+publish on ticks where the canvas has not been modified,
-        saving a 6 MB allocation per tick on a static canvas.
+        Copies the canvas only when dirty (user drew or erased). Between draws
+        the previous frame reference is republished — no allocation, but the
+        orchestrator still receives frames so note tracking continues updating.
         """
         interval = 1.0 / 30
         next_deadline = time.monotonic()
+        frame = self._canvas.copy()  # initial blank frame
         while self._active:
             if self._dirty:
                 with self._lock:
                     self._dirty = False
                     frame = self._canvas.copy()
-                try:
-                    self._queue.get_nowait()
-                except queue.Empty:
-                    pass
-                try:
-                    self._queue.put_nowait(frame)
-                except queue.Full:
-                    pass
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._queue.put_nowait(frame)
+            except queue.Full:
+                pass
             next_deadline += interval
             remaining = next_deadline - time.monotonic()
             if remaining > 0:
