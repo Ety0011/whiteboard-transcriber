@@ -37,17 +37,24 @@ _CORNER_LABELS = ["TL", "TR", "BR", "BL"]
 
 def _apply_mask_overlay(frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
     """Blend a translucent red overlay onto pixels where mask == 1."""
+    if not mask.any():
+        return frame
     overlay = frame.copy()
     overlay[mask == 1] = (0, 0, 220)
     return cv2.addWeighted(frame, 0.65, overlay, 0.35, 0)
 
 
-def _draw_corners(frame: np.ndarray, corners: np.ndarray | None) -> np.ndarray:
+def _draw_corners(
+    frame: np.ndarray,
+    corners: np.ndarray | None,
+    sx: float = 1.0,
+    sy: float = 1.0,
+) -> np.ndarray:
     """Draw the board quad outline and labeled corner circles onto *frame*."""
     if corners is None:
         return frame
 
-    pts = corners.astype(np.int32)
+    pts = (corners * np.array([sx, sy], dtype=np.float32)).astype(np.int32)
     cv2.polylines(
         frame,
         [pts.reshape(-1, 1, 2)],
@@ -74,23 +81,39 @@ def _draw_corners(frame: np.ndarray, corners: np.ndarray | None) -> np.ndarray:
 _ANCHOR_COLOR = (255, 165, 0)  # sky blue (BGR)
 
 
-def _draw_blocks(frame: np.ndarray, blocks: list[Block]) -> np.ndarray:
+def _draw_blocks(
+    frame: np.ndarray,
+    blocks: list[Block],
+    sx: float = 1.0,
+    sy: float = 1.0,
+) -> np.ndarray:
     """Draw translucent line-level bbox fills for all blocks onto *frame*."""
     overlay = frame.copy()
     for block in blocks:
         for line in block.lines:
-            x1, y1, x2, y2 = line.bbox.astype(int)
+            x1 = int(line.bbox[0] * sx)
+            y1 = int(line.bbox[1] * sy)
+            x2 = int(line.bbox[2] * sx)
+            y2 = int(line.bbox[3] * sy)
             cv2.rectangle(overlay, (x1, y1), (x2, y2), _ANCHOR_COLOR, -1)
             cv2.rectangle(frame, (x1, y1), (x2, y2), _ANCHOR_COLOR, 1, cv2.LINE_AA)
     cv2.addWeighted(overlay, 0.18, frame, 0.82, 0, frame)
     return frame
 
 
-def _draw_notes(frame: np.ndarray, notes: list[Note]) -> np.ndarray:
+def _draw_notes(
+    frame: np.ndarray,
+    notes: list[Note],
+    sx: float = 1.0,
+    sy: float = 1.0,
+) -> np.ndarray:
     """Draw note bboxes and state labels colour-coded by NoteState."""
     overlay = frame.copy()
     for ent in notes:
-        x1, y1, x2, y2 = ent.bbox
+        x1 = int(ent.bbox[0] * sx)
+        y1 = int(ent.bbox[1] * sy)
+        x2 = int(ent.bbox[2] * sx)
+        y2 = int(ent.bbox[3] * sy)
         color = _STATE_COLORS.get(ent.state, (255, 255, 255))
 
         cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
@@ -129,50 +152,6 @@ class Renderer:
         self.show_blocks = True
         self.show_tracker = True
 
-    def render_board(
-        self,
-        composite: np.ndarray,
-        blocks: list[Block],
-        notes: list[Note],
-        is_busy: bool,
-    ) -> np.ndarray:
-        """Draw block + note overlays and LayoutWorker busy dot. Returns the frame."""
-        board = composite.copy()
-        if self.show_blocks:
-            board = _draw_blocks(board, blocks)
-        if self.show_tracker:
-            board = _draw_notes(board, notes)
-        cv2.circle(
-            board,
-            (board.shape[1] - 30, 30),
-            10,
-            (0, 165, 255) if is_busy else (0, 255, 0),
-            -1,
-        )
-        return board
-
-    def render_raw(
-        self,
-        frame: np.ndarray,
-        person_mask: np.ndarray,
-        cached_corners: np.ndarray | None,
-        is_busy: bool,
-    ) -> np.ndarray:
-        """Draw mask + corner overlays and SAM busy dot. Returns the frame."""
-        raw = frame.copy()
-        if self.show_mask:
-            raw = _apply_mask_overlay(raw, person_mask)
-        if self.show_corners:
-            raw = _draw_corners(raw, cached_corners)
-        cv2.circle(
-            raw,
-            (raw.shape[1] - 30, 30),
-            10,
-            (0, 165, 255) if is_busy else (0, 255, 0),
-            -1,
-        )
-        return raw
-
     def render_board_panel(
         self,
         composite: np.ndarray,
@@ -180,9 +159,30 @@ class Renderer:
         notes: list[Note],
         layout_busy: bool,
     ) -> np.ndarray:
-        """Board panel scaled to display_width. Returns RGB (W,H,3) for pygame."""
-        board = self.render_board(composite, blocks, notes, layout_busy)
-        return self._to_pygame(board)
+        """Board panel scaled to display_width. Returns RGB (W,H,3) for pygame.
+
+        Resizes composite to display resolution before drawing overlays — 4× fewer
+        pixels to copy and process than drawing at the native 1920×1080.
+        """
+        h, w = composite.shape[:2]
+        target_h = int(h * self._display_width / w)
+        # cv2.resize allocates the output; overlays are drawn directly on it.
+        board = cv2.resize(composite, (self._display_width, target_h))
+        sx = self._display_width / w
+        sy = target_h / h
+        if self.show_blocks:
+            _draw_blocks(board, blocks, sx, sy)
+        if self.show_tracker:
+            _draw_notes(board, notes, sx, sy)
+        cv2.circle(
+            board,
+            (board.shape[1] - 30, 30),
+            10,
+            (0, 165, 255) if layout_busy else (0, 255, 0),
+            -1,
+        )
+        rgb = cv2.cvtColor(board, cv2.COLOR_BGR2RGB)
+        return rgb.swapaxes(0, 1)
 
     def render_raw_panel(
         self,
@@ -192,21 +192,28 @@ class Renderer:
         sam_busy: bool,
     ) -> np.ndarray:
         """Raw camera frame with overlays, scaled to display_width. Returns RGB (W,H,3) for pygame."""
-        mask = (
-            person_mask
-            if person_mask is not None
-            else np.zeros(frame.shape[:2], dtype=np.uint8)
+        target_h = int(frame.shape[0] * self._display_width / frame.shape[1])
+        raw = cv2.resize(frame, (self._display_width, target_h))
+        sx = self._display_width / frame.shape[1]
+        sy = target_h / frame.shape[0]
+        if self.show_mask and person_mask is not None:
+            small_mask = cv2.resize(
+                person_mask,
+                (self._display_width, target_h),
+                interpolation=cv2.INTER_NEAREST,
+            )
+            raw = _apply_mask_overlay(raw, small_mask)
+        if self.show_corners:
+            raw = _draw_corners(raw, cached_corners, sx, sy)
+        cv2.circle(
+            raw,
+            (raw.shape[1] - 30, 30),
+            10,
+            (0, 165, 255) if sam_busy else (0, 255, 0),
+            -1,
         )
-        raw = self.render_raw(frame, mask, cached_corners, sam_busy)
-        return self._to_pygame(raw)
-
-    def _to_pygame(self, bgr: np.ndarray) -> np.ndarray:
-        """Scale BGR frame to display_width and convert to RGB (W,H,3) for pygame."""
-        h, w = bgr.shape[:2]
-        target_h = int(h * self._display_width / w)
-        scaled = cv2.resize(bgr, (self._display_width, target_h))
-        rgb = cv2.cvtColor(scaled, cv2.COLOR_BGR2RGB)
-        return rgb.swapaxes(0, 1)  # (H,W,3) → (W,H,3) for pygame surfarray
+        rgb = cv2.cvtColor(raw, cv2.COLOR_BGR2RGB)
+        return rgb.swapaxes(0, 1)
 
     def handle_key(self, key: int) -> bool:
         """Handle overlay toggle keys [w/p/t/r]. Returns True if key was consumed."""
