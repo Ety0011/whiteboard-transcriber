@@ -144,4 +144,3 @@ class TextLineDetector:
 
     def shutdown(self) -> None:
         """No-op — model is released when the worker process exits."""
-        pass

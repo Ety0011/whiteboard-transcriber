@@ -148,6 +148,8 @@ class NoteTracker:
         self._notes: dict[int, Note] = {}
         self._next_id: int = 0
         self._pending_ocr: set[int] = set()
+        self._frame_diagonal: float = 0.0
+        self._frame_shape: tuple[int, int] = (0, 0)
 
     @property
     def notes(self) -> list[Note]:
@@ -210,7 +212,10 @@ class NoteTracker:
         """
         now = time.monotonic()
         h, w = composite.shape[:2]
-        frame_diagonal = math.sqrt(h * h + w * w)
+        if (h, w) != self._frame_shape:
+            self._frame_diagonal = math.sqrt(h * h + w * w)
+            self._frame_shape = (h, w)
+        frame_diagonal = self._frame_diagonal
 
         active_notes = [n for n in self._notes.values() if n.state != NoteState.ERASED]
 
@@ -342,6 +347,7 @@ class NoteTracker:
             if note.id not in matched_note_ids:
                 if now - note.last_seen >= self._erase_grace_period:
                     note.state, note.last_modified = NoteState.ERASED, now
+                    note.crop = None  # release crop memory; don't hold until tombstone prune
                     newly_erased.append(note)
                     log.debug("Note %d → ERASED", note.id)
 
