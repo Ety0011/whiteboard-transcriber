@@ -47,8 +47,9 @@ from layout import LayoutWorker
 from ledger import Ledger
 from logging_config import suppress_noise
 from ocr.worker import TranscriptionWorker
-from orchestrator import PipelineOrchestrator, PipelineResult, drop_put
+from orchestrator import PipelineOrchestrator, PipelineResult
 from renderer import Renderer
+from stage import drop_put
 from tracker import NoteTracker
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")

@@ -21,6 +21,7 @@ from board import (
 from layout import Block, LayoutWorker
 from ledger import Ledger
 from ocr.worker import TranscriptionWorker
+from stage import drop_put
 from tracker import Note, NoteTracker
 
 
@@ -92,7 +93,7 @@ class PipelineOrchestrator(threading.Thread):
         self._ledger = ledger
 
         self._stop = threading.Event()
-        self._cached_person_mask: np.ndarray | None = None
+        self._zero_mask: np.ndarray | None = None
 
     def stop(self) -> None:
         """Signal the orchestrator to exit its run loop."""
@@ -114,16 +115,16 @@ class PipelineOrchestrator(threading.Thread):
             board_mask = self._board_segmenter.segment(frame)
 
             # Stage 3: person segmentation (inline ~5ms, ~10 Hz throttled)
-            person_mask_new = self._person_segmenter.segment(frame)
-            if person_mask_new is not None:
-                self._cached_person_mask = person_mask_new
-            if self._cached_person_mask is None:
-                self._cached_person_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+            # PersonSegmenter.segment() self-caches: returns cached mask on
+            # sub-interval ticks, new mask when due. None only before first run.
+            person_mask = self._person_segmenter.segment(frame)
+            if person_mask is None:
+                if self._zero_mask is None:
+                    self._zero_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+                person_mask = self._zero_mask
 
             # Stage 4: perspective rectification (fast sync, uses cached homography)
-            rect_frame, rect_mask = self._rectifier.rectify(
-                frame, board_mask, self._cached_person_mask
-            )
+            rect_frame, rect_mask = self._rectifier.rectify(frame, board_mask, person_mask)
 
             # Stage 5: distance-weighted EMA compositing (sync)
             composite = self._compositor.composite(rect_frame, rect_mask)
@@ -148,20 +149,10 @@ class PipelineOrchestrator(threading.Thread):
                     blocks=blocks,
                     notes=self._tracker.all_notes,
                     layout_busy=self._layout_worker.is_busy,
-                    person_mask=self._cached_person_mask,
+                    person_mask=person_mask,
                     cached_corners=self._rectifier.cached_corners,
                     sam_busy=self._board_segmenter.is_busy,
                 ),
             )
 
 
-def drop_put(q: queue.Queue, item: object) -> None:
-    """Evict any stale entry and publish the latest item (drop-old pattern)."""
-    try:
-        q.get_nowait()
-    except queue.Empty:
-        pass
-    try:
-        q.put_nowait(item)
-    except queue.Full:
-        pass

@@ -265,3 +265,15 @@ class WorkerStage(ABC):
         state = self.__dict__.copy()
         state.pop("_proc", None)
         return state
+
+
+def drop_put(q: queue.Queue, item: object) -> None:
+    """Evict any stale entry and publish the latest item (drop-old pattern)."""
+    try:
+        q.get_nowait()
+    except queue.Empty:
+        pass
+    try:
+        q.put_nowait(item)
+    except queue.Full:
+        pass
