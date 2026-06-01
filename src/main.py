@@ -32,26 +32,11 @@ from pathlib import Path
 import numpy as np
 import pygame
 
-from board import (
-    BoardCompositor,
-    BoardSegmenter,
-    Compositor,
-    NullBoardCompositor,
-    NullBoardSegmenter,
-    NullPersonSegmenter,
-    PersonSegmenter,
-    Rectifier,
-    Segmenter,
-)
 from capture import CanvasCapture, Capture, FrameSource
-from layout import LayoutWorker
-from ledger import Ledger
 from logging_config import suppress_noise
-from ocr.worker import TranscriptionWorker
 from orchestrator import PipelineOrchestrator, PipelineResult
 from renderer import Renderer
 from stage import replace
-from tracker import NoteTracker
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
@@ -70,35 +55,11 @@ def main() -> None:
         os.environ["LOG_LEVEL"] = "DEBUG"
         logging.getLogger().setLevel(logging.DEBUG)
 
-    cap: FrameSource
-    board_segmenter: Segmenter
-    person_segmenter: Segmenter
-
-    if args.canvas:
-        cap = CanvasCapture().start()
-        board_segmenter = NullBoardSegmenter()
-        person_segmenter = NullPersonSegmenter()
-        rectifier = Rectifier()
-        compositor: Compositor = NullBoardCompositor()
-    else:
-        cap = Capture(args.source).start()
-        board_segmenter = BoardSegmenter()
-        person_segmenter = PersonSegmenter()
-        person_segmenter.load()  # synchronous; runs here before workers start
-        rectifier = Rectifier()
-        compositor = BoardCompositor()
-
-    log.info("Loading models …")
-    layout_worker = LayoutWorker()
-    tracker = NoteTracker()
-    transcriber = TranscriptionWorker()
-    ledger = Ledger(output_dir=args.output_dir)
-    renderer = Renderer(display_width=args.display_width)
-
-    for worker in (board_segmenter, person_segmenter, layout_worker, transcriber):
-        worker.wait_ready()
-        log.info("%s ready", type(worker).__name__)
-    log.info("All workers ready.")
+    cap: FrameSource = (
+        CanvasCapture().start() if args.canvas else Capture(args.source).start()
+    )
+    canvas = cap if isinstance(cap, CanvasCapture) else None
+    show_raw = canvas is None  # canvas raw == board, no point showing twice
 
     frame_queue: queue.Queue[np.ndarray | None] = queue.Queue(maxsize=1)
     render_queue: queue.Queue[PipelineResult | None] = queue.Queue(maxsize=1)
@@ -106,19 +67,19 @@ def main() -> None:
     orchestrator = PipelineOrchestrator(
         frame_queue=frame_queue,
         render_queue=render_queue,
-        board_segmenter=board_segmenter,
-        person_segmenter=person_segmenter,
-        rectifier=rectifier,
-        compositor=compositor,
-        layout_worker=layout_worker,
-        tracker=tracker,
-        transcriber=transcriber,
-        ledger=ledger,
+        canvas=args.canvas,
+        output_dir=args.output_dir,
     )
+
+    log.info("Loading workers...")
+    orchestrator.wait_ready()
+    log.info("All workers ready.")
     orchestrator.start()
 
+    renderer = Renderer(display_width=args.display_width)
+
     pygame.init()
-    init_size = _display_size(cap, args.display_width, stack=not args.canvas)
+    init_size = _display_size(cap, args.display_width, show_raw)
     aspect_ratio = init_size[0] / init_size[1]
     screen = pygame.display.set_mode(init_size, pygame.RESIZABLE)
     pygame.display.set_caption("Lecture Historian")
@@ -133,7 +94,9 @@ def main() -> None:
     try:
         while True:
             # --- events --------------------------------------------------
-            screen, paused = _handle_events(screen, aspect_ratio, cap, renderer, paused)
+            screen, paused = _handle_events(
+                screen, aspect_ratio, cap, canvas, renderer, paused
+            )
 
             # --- raw frame: display at source FPS, also feed orchestrator --
             if not paused:
@@ -141,9 +104,9 @@ def main() -> None:
                 if frame is not None:
                     raw_surf = renderer.raw_surface(
                         frame,
-                        person_segmenter.cached_mask,
-                        rectifier.cached_corners,
-                        board_segmenter.is_busy,
+                        orchestrator.person_mask,
+                        orchestrator.board_corners,
+                        orchestrator.board_busy,
                     )
                     replace(frame_queue, frame)
                 elif not cap.is_active:
@@ -158,16 +121,16 @@ def main() -> None:
                     result.composite,
                     result.blocks,
                     result.notes,
-                    layout_worker.is_busy,
+                    orchestrator.layout_busy,
                 )
             except queue.Empty:
                 pass
 
-            # --- display: stack raw (live) above board (async) -----------
+            # --- display: raw (live) above board (async) -----------------
             if raw_surf is not None or board_surf is not None:
                 w = screen.get_width()
                 y = 0
-                if not args.canvas and raw_surf is not None:
+                if show_raw and raw_surf is not None:
                     y = _blit_panel(screen, raw_surf, y, w)
                 if board_surf is not None:
                     _blit_panel(screen, board_surf, y, w)
@@ -185,23 +148,10 @@ def main() -> None:
         orchestrator.stop()
         orchestrator.join(timeout=5.0)
         cap.stop()
-        board_segmenter.shutdown()
-        person_segmenter.shutdown()
-        layout_worker.shutdown()
-        transcriber.shutdown()
+        orchestrator.shutdown()
         pygame.quit()
 
-    all_entries = ledger.get_all()
-    n_total = len(all_entries)
-    n_erased = sum(1 for e in all_entries if e.erased_at is not None)
-    log.info(
-        "Session complete — %d notes tracked (%d active, %d erased). Output: %s",
-        n_total,
-        n_total - n_erased,
-        n_erased,
-        args.output_dir,
-    )
-    ledger.synthesize_timelapse()
+    orchestrator.finalize()
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +163,7 @@ def _handle_events(
     screen: pygame.Surface,
     aspect_ratio: float,
     cap: FrameSource,
+    canvas: CanvasCapture | None,
     renderer: Renderer,
     paused: bool,
 ) -> tuple[pygame.Surface, bool]:
@@ -221,7 +172,9 @@ def _handle_events(
     Args:
         screen: Current pygame display surface.
         aspect_ratio: Window width/height ratio used to constrain resizes.
-        cap: Frame source — receives mouse and pause/resume events.
+        cap: Frame source — receives pause/resume events.
+        canvas: CanvasCapture instance, or None in camera mode. Mouse events
+            and the clear key are only dispatched when this is not None.
         renderer: Receives overlay toggle-key events.
         paused: Current pause state.
 
@@ -247,8 +200,8 @@ def _handle_events(
                 paused = not paused
                 cap.pause() if paused else cap.resume()
                 log.info("[space] %s", "Paused" if paused else "Resumed")
-            elif event.key == pygame.K_c:
-                cap.clear()
+            elif event.key == pygame.K_c and canvas is not None:
+                canvas.clear()
                 log.info("[c] Canvas cleared")
             elif event.key == pygame.K_w:
                 renderer.show_corners = not renderer.show_corners
@@ -262,21 +215,22 @@ def _handle_events(
             elif event.key == pygame.K_r:
                 renderer.show_tracker = not renderer.show_tracker
                 log.info("[r] Entities → %s", "ON" if renderer.show_tracker else "OFF")
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            if event.button == 1:
-                cap.on_mouse_down(event.pos, sz)
-            elif event.button == 3:
-                cap.on_eraser_down(event.pos, sz)
-        elif event.type == pygame.MOUSEMOTION:
-            if event.buttons[0]:
-                cap.on_mouse_move(event.pos, sz)
-            elif event.buttons[2]:
-                cap.on_eraser_move(event.pos, sz)
-        elif event.type == pygame.MOUSEBUTTONUP:
-            if event.button == 1:
-                cap.on_mouse_up()
-            elif event.button == 3:
-                cap.on_eraser_up()
+        if canvas is not None:
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:
+                    canvas.on_mouse_down(event.pos, sz)
+                elif event.button == 3:
+                    canvas.on_eraser_down(event.pos, sz)
+            elif event.type == pygame.MOUSEMOTION:
+                if event.buttons[0]:
+                    canvas.on_mouse_move(event.pos, sz)
+                elif event.buttons[2]:
+                    canvas.on_eraser_move(event.pos, sz)
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 1:
+                    canvas.on_mouse_up()
+                elif event.button == 3:
+                    canvas.on_eraser_up()
     return screen, paused
 
 
@@ -310,20 +264,21 @@ def _blit_panel(
 
 
 def _display_size(
-    cap: FrameSource, display_width: int, stack: bool = True
+    cap: FrameSource, display_width: int, show_raw: bool
 ) -> tuple[int, int]:
     """Compute the pygame window size from source metadata and display width.
 
-    When stack=False only the 1920×1080 board panel is shown. When stack=True
-    the raw frame is stacked above the composite.
+    When show_raw is True (camera mode) the raw frame is stacked above the
+    1920×1080 board composite. When False (canvas mode) only the board panel
+    is shown.
     """
     board_w, board_h = 1920, 1080
-    if not stack:
-        return (display_width, display_width * board_h // board_w)
+    board_panel_h = display_width * board_h // board_w
+    if not show_raw:
+        return (display_width, board_panel_h)
     raw_w, raw_h = cap.frame_size or (board_w, board_h)
-    scaled_raw_h = int(raw_h * board_w / raw_w)
-    display_height = int((scaled_raw_h + board_h) * display_width / board_w)
-    return (display_width, display_height)
+    raw_panel_h = int(raw_h * display_width / raw_w)
+    return (display_width, raw_panel_h + board_panel_h)
 
 
 def _parse_args() -> argparse.Namespace:
