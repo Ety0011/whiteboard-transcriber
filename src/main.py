@@ -127,9 +127,6 @@ def main() -> None:
     paused = False
     last_raw_surface: pygame.Surface | None = None
     last_board_surface: pygame.Surface | None = None
-    last_person_mask: np.ndarray | None = None
-    last_corners: np.ndarray | None = None
-    last_sam_busy: bool = False
 
     log.info("Ready. Press q or Ctrl-C to stop.")
 
@@ -181,7 +178,10 @@ def main() -> None:
                 if frame is not None:
                     last_raw_surface = pygame.surfarray.make_surface(
                         renderer.render_raw_panel(
-                            frame, last_person_mask, last_corners, last_sam_busy
+                            frame,
+                            person_segmenter.cached_mask,
+                            rectifier.cached_corners,
+                            board_segmenter.is_busy,
                         )
                     )
                     replace(frame_queue, frame)
@@ -193,12 +193,12 @@ def main() -> None:
             # --- board panel: async update from orchestrator -------------
             try:
                 result = render_queue.get_nowait()
-                last_person_mask = result.person_mask
-                last_corners = result.cached_corners
-                last_sam_busy = result.sam_busy
                 last_board_surface = pygame.surfarray.make_surface(
                     renderer.render_board_panel(
-                        result.composite, result.blocks, result.notes, result.layout_busy
+                        result.composite,
+                        result.blocks,
+                        result.notes,
+                        layout_worker.is_busy,
                     )
                 )
             except queue.Empty:

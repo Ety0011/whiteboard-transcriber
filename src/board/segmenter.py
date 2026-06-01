@@ -40,6 +40,11 @@ class Segmenter(ABC):
         """
         ...
 
+    @property
+    def cached_mask(self) -> np.ndarray | None:
+        """Latest computed mask, or None before first inference. Override to expose cache."""
+        return None
+
     def load(self) -> None:
         """Load model resources. No-op by default; override for synchronous loaders."""
 

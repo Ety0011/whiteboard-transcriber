@@ -91,6 +91,11 @@ class PersonSegmenter(InlineStage, Segmenter):
             self._interval_s,
         )
 
+    @property
+    def cached_mask(self) -> np.ndarray | None:
+        """Latest computed person mask, or None before first inference."""
+        return self._cached_mask
+
     def wait_ready(self, timeout: float | None = None) -> bool:
         """Return True immediately — PersonSegmenter loads synchronously via load()."""
         return self._segmenter is not None
