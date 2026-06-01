@@ -108,27 +108,12 @@ class Ledger:
         - Existing note, different text → appends VERSIONED event.
         - Existing note, identical text → no-op (no file write).
         """
-        now = time.monotonic()
-        if note_id not in self._entries:
-            self._entries[note_id] = LedgerEntry(
-                note_id=note_id,
-                bbox=bbox.copy(),
-                first_seen=now,
-                versions=[TextVersion(text=text, timestamp=now)],
-            )
-        else:
-            entry = self._entries[note_id]
-            if entry.versions[-1].text == text:
-                return  # identical — skip write
-            entry.versions.append(TextVersion(text=text, timestamp=now))
-
-        self._synthesize()
+        if self._apply_update(note_id, bbox, text):
+            self._synthesize()
 
     def mark_erased(self, note_id: int) -> None:
         """Record that *note_id* is no longer visible on the board."""
-        entry = self._entries.get(note_id)
-        if entry is not None and entry.erased_at is None:
-            entry.erased_at = time.monotonic()
+        if self._apply_erase(note_id):
             self._synthesize()
 
     def sync(
@@ -139,17 +124,23 @@ class Ledger:
     ) -> None:
         """Apply one pipeline cycle's erasures, OCR activations, and timelapse snapshot.
 
+        Batches all mutations from the current frame and calls _synthesize() at
+        most once, regardless of how many notes became active or were erased.
+
         Args:
             erased:       Notes that left the board this frame.
             newly_active: Notes that just completed OCR transcription.
             composite:    Full-resolution BGR board composite from Stage 5.
         """
+        changed = False
         for note in erased:
-            self.mark_erased(note.id)
+            changed |= self._apply_erase(note.id)
         for note in newly_active:
-            self.update(note.id, note.bbox, note.ocr_text or "")
+            changed |= self._apply_update(note.id, note.bbox, note.ocr_text or "")
         if newly_active:
             self.record_snapshot(composite, time.monotonic())
+        if changed:
+            self._synthesize()
 
     # ------------------------------------------------------------------
     # Timelapse
@@ -226,6 +217,31 @@ class Ledger:
     # ------------------------------------------------------------------
     # Private — synthesis
     # ------------------------------------------------------------------
+
+    def _apply_update(self, note_id: int, bbox: np.ndarray, text: str) -> bool:
+        """Mutate ledger state for one OCR result. Returns True if state changed."""
+        now = time.monotonic()
+        if note_id not in self._entries:
+            self._entries[note_id] = LedgerEntry(
+                note_id=note_id,
+                bbox=bbox.copy(),
+                first_seen=now,
+                versions=[TextVersion(text=text, timestamp=now)],
+            )
+            return True
+        entry = self._entries[note_id]
+        if entry.versions[-1].text == text:
+            return False  # identical — no change
+        entry.versions.append(TextVersion(text=text, timestamp=now))
+        return True
+
+    def _apply_erase(self, note_id: int) -> bool:
+        """Mutate ledger state for one erasure. Returns True if state changed."""
+        entry = self._entries.get(note_id)
+        if entry is not None and entry.erased_at is None:
+            entry.erased_at = time.monotonic()
+            return True
+        return False
 
     def _synthesize(self) -> None:
         """Re-render and atomically overwrite both output files."""
