@@ -267,8 +267,11 @@ class WorkerStage(ABC):
         return state
 
 
-def drop_put(q: queue.Queue, item: object) -> None:
-    """Evict any stale entry and publish the latest item (drop-old pattern)."""
+def replace(q: queue.Queue, item: object) -> None:
+    """Replace any pending stale item with the latest.
+
+    Latest-wins semantic on a maxsize=1 queue.
+    """
     try:
         q.get_nowait()
     except queue.Empty:

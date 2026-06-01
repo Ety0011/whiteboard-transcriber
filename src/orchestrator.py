@@ -21,7 +21,7 @@ from board import (
 from layout import Block, LayoutWorker
 from ledger import Ledger
 from ocr.worker import TranscriptionWorker
-from stage import drop_put
+from stage import replace
 from tracker import Note, NoteTracker
 
 
@@ -142,7 +142,7 @@ class PipelineOrchestrator(threading.Thread):
             self._ledger.sync(newly_erased, newly_active, composite)
 
             # Push board result to UI thread for rendering
-            drop_put(
+            replace(
                 self._render_queue,
                 PipelineResult(
                     composite=composite,

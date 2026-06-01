@@ -49,7 +49,7 @@ from logging_config import suppress_noise
 from ocr.worker import TranscriptionWorker
 from orchestrator import PipelineOrchestrator, PipelineResult
 from renderer import Renderer
-from stage import drop_put
+from stage import replace
 from tracker import NoteTracker
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -184,10 +184,10 @@ def main() -> None:
                             frame, last_person_mask, last_corners, last_sam_busy
                         )
                     )
-                    drop_put(frame_queue, frame)
+                    replace(frame_queue, frame)
                 elif not cap.is_active:
                     log.info("End of stream.")
-                    drop_put(frame_queue, None)
+                    replace(frame_queue, None)
                     break
 
             # --- board panel: async update from orchestrator -------------
