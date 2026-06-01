@@ -60,6 +60,7 @@ class PersonSegmenter(InlineStage, Segmenter):
         self._segmenter = None  # loaded in load()
         self._kernel: np.ndarray | None = None  # built in load()
         self._mp = None  # mediapipe module ref, cached in load()
+        self._cached_mask: np.ndarray | None = None  # returned on sub-interval ticks
 
     def load(self) -> None:
         """Load the MediaPipe model. Call once before the pipeline starts."""
@@ -95,19 +96,20 @@ class PersonSegmenter(InlineStage, Segmenter):
         return self._segmenter is not None
 
     def segment(self, frame: np.ndarray) -> np.ndarray | None:
-        """Run MediaPipe inference if due; return latest person mask or None.
+        """Run MediaPipe inference if due; return latest person mask.
 
-        Non-blocking. Throttled by _interval_s; returns None on sub-interval ticks.
-        The orchestrator should cache and reuse the last known mask on None returns.
+        Non-blocking. Throttled by _interval_s; returns the cached result on
+        sub-interval ticks so callers never need to manage their own cache.
+        Returns None only before the first inference has run.
 
         Args:
             frame: BGR uint8 camera frame.
 
         Returns:
-            uint8 H×W mask (1=person, 0=board), or None if interval not elapsed.
+            uint8 H×W mask (1=person, 0=board), or None before first run.
         """
         if not self._due():
-            return None
+            return self._cached_mask
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
@@ -116,6 +118,7 @@ class PersonSegmenter(InlineStage, Segmenter):
         mask = (float_mask > self._threshold).astype(np.uint8)
         if self._kernel is not None:
             mask = cv2.dilate(mask, self._kernel, iterations=1)
+        self._cached_mask = mask
         return mask
 
     def shutdown(self) -> None:
@@ -139,6 +142,3 @@ class NullPersonSegmenter(Segmenter):
     def wait_ready(self, timeout: float | None = None) -> bool:
         """Immediately ready — no model to load."""
         return True
-
-    def shutdown(self) -> None:
-        """No-op."""

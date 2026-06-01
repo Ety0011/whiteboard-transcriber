@@ -43,7 +43,5 @@ class Segmenter(ABC):
     def load(self) -> None:
         """Load model resources. No-op by default; override for synchronous loaders."""
 
-    @abstractmethod
     def shutdown(self) -> None:
-        """Release model resources."""
-        ...
+        """Release model resources. Override for implementations that hold resources."""

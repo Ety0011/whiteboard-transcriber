@@ -126,6 +126,10 @@ class Rectifier(InlineStage):
         self._rect_frame = np.empty((h, w, 3), dtype=np.uint8)
         self._rect_mask = np.empty((h, w), dtype=np.uint8)
 
+        # Cached person-mask warp: re-warp only when source mask or homography changes.
+        self._last_raw_mask: np.ndarray | None = None
+        self._last_homography_for_mask: np.ndarray | None = None
+
     # ------------------------------------------------------------------
     # Public
     # ------------------------------------------------------------------
@@ -159,15 +163,28 @@ class Rectifier(InlineStage):
 
         w, h = self._output_size
 
+        # Only re-warp the person mask when source mask or homography changed.
+        # PersonSegmenter returns the same array reference between ticks, so
+        # object identity reliably detects when a new mask or new homography arrived.
+        mask_stale = (
+            person_mask is not self._last_raw_mask
+            or self._homography is not self._last_homography_for_mask
+        )
+
         if self._homography is None:
             cv2.resize(frame, (w, h), dst=self._rect_frame)
-            cv2.resize(person_mask, (w, h), dst=self._rect_mask,
-                       interpolation=cv2.INTER_NEAREST)
+            if mask_stale:
+                cv2.resize(person_mask, (w, h), dst=self._rect_mask,
+                           interpolation=cv2.INTER_NEAREST)
+                self._last_raw_mask = person_mask
+                self._last_homography_for_mask = None
         else:
-            cv2.warpPerspective(frame, self._homography, (w, h),
-                                dst=self._rect_frame)
-            cv2.warpPerspective(person_mask, self._homography, (w, h),
-                                dst=self._rect_mask, flags=cv2.INTER_NEAREST)
+            cv2.warpPerspective(frame, self._homography, (w, h), dst=self._rect_frame)
+            if mask_stale:
+                cv2.warpPerspective(person_mask, self._homography, (w, h),
+                                    dst=self._rect_mask, flags=cv2.INTER_NEAREST)
+                self._last_raw_mask = person_mask
+                self._last_homography_for_mask = self._homography
 
         return self._rect_frame, self._rect_mask
 

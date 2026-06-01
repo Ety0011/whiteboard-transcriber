@@ -32,6 +32,7 @@ class CanvasCapture(FrameSource):
 
         self._canvas = np.full((1080, 1920, 3), 255, dtype=np.uint8)
         self._lock = threading.Lock()
+        self._dirty: bool = True  # seed True so first frame is always published
         self._queue: queue.Queue[np.ndarray | None] = queue.Queue(maxsize=1)
         self._active = False
         self._thread: threading.Thread | None = None
@@ -127,6 +128,7 @@ class CanvasCapture(FrameSource):
         """Reset canvas to white and end any in-progress stroke."""
         with self._lock:
             self._canvas[:] = 255
+            self._dirty = True
         self._last_pos = None
         self._last_eraser_pos = None
 
@@ -150,6 +152,7 @@ class CanvasCapture(FrameSource):
             if prev is not None:
                 cv2.line(self._canvas, prev, pos, color, radius * 2)
             cv2.circle(self._canvas, pos, radius, color, -1)
+            self._dirty = True
         if pen:
             self._last_pos = pos
         else:
@@ -167,20 +170,26 @@ class CanvasCapture(FrameSource):
         return (cx, cy)
 
     def _loop(self) -> None:
-        """Publish canvas frames at ~30fps using monotonic deadline tracking."""
+        """Publish canvas frames at ~30fps using monotonic deadline tracking.
+
+        Skips copy+publish on ticks where the canvas has not been modified,
+        saving a 6 MB allocation per tick on a static canvas.
+        """
         interval = 1.0 / 30
         next_deadline = time.monotonic()
         while self._active:
-            with self._lock:
-                frame = self._canvas.copy()
-            try:
-                self._queue.get_nowait()
-            except queue.Empty:
-                pass
-            try:
-                self._queue.put_nowait(frame)
-            except queue.Full:
-                pass
+            if self._dirty:
+                with self._lock:
+                    self._dirty = False
+                    frame = self._canvas.copy()
+                try:
+                    self._queue.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self._queue.put_nowait(frame)
+                except queue.Full:
+                    pass
             next_deadline += interval
             remaining = next_deadline - time.monotonic()
             if remaining > 0:

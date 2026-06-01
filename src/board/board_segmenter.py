@@ -127,6 +127,3 @@ class NullBoardSegmenter(Segmenter):
     def wait_ready(self, timeout: float | None = None) -> bool:
         """Immediately ready — no subprocess to wait for."""
         return True
-
-    def shutdown(self) -> None:
-        """No-op — nothing to tear down."""
