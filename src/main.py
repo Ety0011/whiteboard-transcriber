@@ -2,7 +2,7 @@
 
 Pure pygame event loop at ~30 FPS. Reads frames non-blocking, drops them
 into frame_queue for the PipelineOrchestrator, polls render_queue for the
-latest overlay matrix, and handles all keyboard/mouse input.
+latest overlay surface, and handles all keyboard/mouse input.
 
 Usage::
 
@@ -30,6 +30,7 @@ import queue
 from pathlib import Path
 
 import numpy as np
+import pygame
 
 from board import (
     BoardCompositor,
@@ -60,10 +61,9 @@ log = logging.getLogger(__name__)
 # Tier 1 — UI thread
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     suppress_noise()  # sets env vars inherited by all worker subprocesses
-    import pygame  # after suppress_noise — env vars in place before pygame loads
-
     args = _parse_args()
 
     if args.debug:
@@ -125,64 +125,25 @@ def main() -> None:
     clock = pygame.time.Clock()
     fps_font = pygame.font.SysFont("monospace", 18)
     paused = False
-    last_raw_surface: pygame.Surface | None = None
-    last_board_surface: pygame.Surface | None = None
+    raw_surf: pygame.Surface | None = None
+    board_surf: pygame.Surface | None = None
 
     log.info("Ready. Press q or Ctrl-C to stop.")
 
     try:
         while True:
             # --- events --------------------------------------------------
-            sz = screen.get_size()
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    raise KeyboardInterrupt
-                elif event.type == pygame.VIDEORESIZE:
-                    new_h = round(event.w / aspect_ratio)
-                    screen = pygame.display.set_mode(
-                        (event.w, new_h), pygame.RESIZABLE
-                    )
-                    sz = screen.get_size()  # update after resize
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_q:
-                        log.info("[q] Quit")
-                        raise KeyboardInterrupt
-                    elif event.key == pygame.K_SPACE:
-                        paused = not paused
-                        cap.pause() if paused else cap.resume()
-                        log.info("[space] %s", "Paused" if paused else "Resumed")
-                    elif event.key == pygame.K_c:
-                        cap.clear()
-                        log.info("[c] Canvas cleared")
-                    else:
-                        renderer.handle_key(event.key)
-                if event.type == pygame.MOUSEBUTTONDOWN:
-                    if event.button == 1:
-                        cap.on_mouse_down(event.pos, sz)
-                    elif event.button == 3:
-                        cap.on_eraser_down(event.pos, sz)
-                elif event.type == pygame.MOUSEMOTION:
-                    if event.buttons[0]:
-                        cap.on_mouse_move(event.pos, sz)
-                    elif event.buttons[2]:
-                        cap.on_eraser_move(event.pos, sz)
-                elif event.type == pygame.MOUSEBUTTONUP:
-                    if event.button == 1:
-                        cap.on_mouse_up()
-                    elif event.button == 3:
-                        cap.on_eraser_up()
+            screen, paused = _handle_events(screen, aspect_ratio, cap, renderer, paused)
 
             # --- raw frame: display at source FPS, also feed orchestrator --
             if not paused:
                 frame = cap.try_read()
                 if frame is not None:
-                    last_raw_surface = pygame.surfarray.make_surface(
-                        renderer.render_raw_panel(
-                            frame,
-                            person_segmenter.cached_mask,
-                            rectifier.cached_corners,
-                            board_segmenter.is_busy,
-                        )
+                    raw_surf = renderer.raw_surface(
+                        frame,
+                        person_segmenter.cached_mask,
+                        rectifier.cached_corners,
+                        board_segmenter.is_busy,
                     )
                     replace(frame_queue, frame)
                 elif not cap.is_active:
@@ -193,54 +154,30 @@ def main() -> None:
             # --- board panel: async update from orchestrator -------------
             try:
                 result = render_queue.get_nowait()
-                last_board_surface = pygame.surfarray.make_surface(
-                    renderer.render_board_panel(
-                        result.composite,
-                        result.blocks,
-                        result.notes,
-                        layout_worker.is_busy,
-                    )
+                board_surf = renderer.board_surface(
+                    result.composite,
+                    result.blocks,
+                    result.notes,
+                    layout_worker.is_busy,
                 )
             except queue.Empty:
                 pass
 
             # --- display: stack raw (live) above board (async) -----------
-            w = screen.get_width()
-            if not args.canvas and last_raw_surface is not None:
-                raw_aspect = (
-                    last_raw_surface.get_height() / last_raw_surface.get_width()
-                )
-                raw_h = round(w * raw_aspect)
-                raw_target = (w, raw_h)
-                blit_raw = (
-                    last_raw_surface
-                    if last_raw_surface.get_size() == raw_target
-                    else pygame.transform.smoothscale(last_raw_surface, raw_target)
-                )
-                screen.blit(blit_raw, (0, 0))
-                board_y = raw_h
-            else:
-                board_y = 0
-            if last_board_surface is not None:
-                board_aspect = (
-                    last_board_surface.get_height() / last_board_surface.get_width()
-                )
-                board_h = round(w * board_aspect)
-                board_target = (w, board_h)
-                blit_board = (
-                    last_board_surface
-                    if last_board_surface.get_size() == board_target
-                    else pygame.transform.smoothscale(last_board_surface, board_target)
-                )
-                screen.blit(blit_board, (0, board_y))
-            if last_raw_surface is not None or last_board_surface is not None:
+            if raw_surf is not None or board_surf is not None:
+                w = screen.get_width()
+                y = 0
+                if not args.canvas and raw_surf is not None:
+                    y = _blit_panel(screen, raw_surf, y, w)
+                if board_surf is not None:
+                    _blit_panel(screen, board_surf, y, w)
                 fps_surf = fps_font.render(
                     f"{clock.get_fps():.1f} fps", True, (0, 255, 0)
                 )
                 screen.blit(fps_surf, (10, 10))
                 pygame.display.flip()
 
-            clock.tick(240)
+            clock.tick(60)
 
     except KeyboardInterrupt:
         pass
@@ -272,6 +209,106 @@ def main() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _handle_events(
+    screen: pygame.Surface,
+    aspect_ratio: float,
+    cap: FrameSource,
+    renderer: Renderer,
+    paused: bool,
+) -> tuple[pygame.Surface, bool]:
+    """Process all pending pygame events for one loop tick.
+
+    Args:
+        screen: Current pygame display surface.
+        aspect_ratio: Window width/height ratio used to constrain resizes.
+        cap: Frame source — receives mouse and pause/resume events.
+        renderer: Receives overlay toggle-key events.
+        paused: Current pause state.
+
+    Returns:
+        Updated (screen, paused) after processing all queued events.
+
+    Raises:
+        KeyboardInterrupt: On QUIT event or q keypress.
+    """
+    sz = screen.get_size()
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            raise KeyboardInterrupt
+        elif event.type == pygame.VIDEORESIZE:
+            new_h = round(event.w / aspect_ratio)
+            screen = pygame.display.set_mode((event.w, new_h), pygame.RESIZABLE)
+            sz = screen.get_size()
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_q:
+                log.info("[q] Quit")
+                raise KeyboardInterrupt
+            elif event.key == pygame.K_SPACE:
+                paused = not paused
+                cap.pause() if paused else cap.resume()
+                log.info("[space] %s", "Paused" if paused else "Resumed")
+            elif event.key == pygame.K_c:
+                cap.clear()
+                log.info("[c] Canvas cleared")
+            elif event.key == pygame.K_w:
+                renderer.show_corners = not renderer.show_corners
+                log.info("[w] Corners → %s", "ON" if renderer.show_corners else "OFF")
+            elif event.key == pygame.K_p:
+                renderer.show_mask = not renderer.show_mask
+                log.info("[p] Mask → %s", "ON" if renderer.show_mask else "OFF")
+            elif event.key == pygame.K_t:
+                renderer.show_blocks = not renderer.show_blocks
+                log.info("[t] Blocks → %s", "ON" if renderer.show_blocks else "OFF")
+            elif event.key == pygame.K_r:
+                renderer.show_tracker = not renderer.show_tracker
+                log.info("[r] Entities → %s", "ON" if renderer.show_tracker else "OFF")
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 1:
+                cap.on_mouse_down(event.pos, sz)
+            elif event.button == 3:
+                cap.on_eraser_down(event.pos, sz)
+        elif event.type == pygame.MOUSEMOTION:
+            if event.buttons[0]:
+                cap.on_mouse_move(event.pos, sz)
+            elif event.buttons[2]:
+                cap.on_eraser_move(event.pos, sz)
+        elif event.type == pygame.MOUSEBUTTONUP:
+            if event.button == 1:
+                cap.on_mouse_up()
+            elif event.button == 3:
+                cap.on_eraser_up()
+    return screen, paused
+
+
+def _blit_panel(
+    screen: pygame.Surface,
+    surf: pygame.Surface,
+    y: int,
+    width: int,
+) -> int:
+    """Blit *surf* scaled to *width* at vertical offset *y*.
+
+    Skips smoothscale when the surface is already the right size (common case —
+    renderer produces surfaces at display_width).
+
+    Args:
+        screen: Destination display surface.
+        surf: Source surface to blit.
+        y: Vertical pixel offset.
+        width: Target width in pixels.
+
+    Returns:
+        y + height of the blitted area (vertical offset for the next panel).
+    """
+    height = round(surf.get_height() * width / surf.get_width())
+    scaled = (
+        surf if surf.get_size() == (width, height)
+        else pygame.transform.smoothscale(surf, (width, height))
+    )
+    screen.blit(scaled, (0, y))
+    return y + height
+
+
 def _display_size(
     cap: FrameSource, display_width: int, stack: bool = True
 ) -> tuple[int, int]:
@@ -285,8 +322,8 @@ def _display_size(
         return (display_width, display_width * board_h // board_w)
     raw_w, raw_h = cap.frame_size or (board_w, board_h)
     scaled_raw_h = int(raw_h * board_w / raw_w)
-    display_h = int((scaled_raw_h + board_h) * display_width / board_w)
-    return (display_width, display_h)
+    display_height = int((scaled_raw_h + board_h) * display_width / board_w)
+    return (display_width, display_height)
 
 
 def _parse_args() -> argparse.Namespace:
