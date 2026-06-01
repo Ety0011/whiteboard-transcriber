@@ -20,13 +20,21 @@ class PaddleVLTranscriber:
         self._model = None
         self._processor = None
         self._config = None
+        self._generate = None       # mlx_vlm.generate, cached at load time
+        self._apply_chat = None     # mlx_vlm.prompt_utils.apply_chat_template
+        self._pil_image = None      # PIL.Image module, cached at load time
 
     def load(self) -> None:
         """Load model weights inside the subprocess."""
-        from mlx_vlm import load as load_mlx
+        from mlx_vlm import generate, load as load_mlx
+        from mlx_vlm.prompt_utils import apply_chat_template
+        from PIL import Image
 
         self._model, self._processor = load_mlx(self.model_id)
         self._config = self._model.config
+        self._generate = generate
+        self._apply_chat = apply_chat_template
+        self._pil_image = Image
 
     def transcribe(self, crop: np.ndarray) -> str:
         """Transcribe text from *crop* using PaddleOCR-VL-1.5.
@@ -37,17 +45,11 @@ class PaddleVLTranscriber:
         Returns:
             Recognised text string (may include LaTeX).
         """
-        from mlx_vlm import generate
-        from mlx_vlm.prompt_utils import apply_chat_template
-        from PIL import Image
-
         rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(rgb)
+        pil_img = self._pil_image.fromarray(rgb)
 
-        prompt = apply_chat_template(
-            self._processor, self._config, "OCR:", num_images=1
-        )
-        result = generate(
+        prompt = self._apply_chat(self._processor, self._config, "OCR:", num_images=1)
+        result = self._generate(
             self._model,
             self._processor,
             prompt,
