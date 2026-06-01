@@ -59,8 +59,6 @@ log = logging.getLogger(__name__)
 # Tier 1 — UI thread
 # ---------------------------------------------------------------------------
 
-# TODO: clean messy demo integration
-# TODO: optimize phase 2-4s
 def main() -> None:
     suppress_noise()  # sets env vars inherited by all worker subprocesses
     import pygame  # after suppress_noise — env vars in place before pygame loads
@@ -137,6 +135,7 @@ def main() -> None:
     try:
         while True:
             # --- events --------------------------------------------------
+            sz = screen.get_size()
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     raise KeyboardInterrupt
@@ -145,6 +144,7 @@ def main() -> None:
                     screen = pygame.display.set_mode(
                         (event.w, new_h), pygame.RESIZABLE
                     )
+                    sz = screen.get_size()  # update after resize
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_q:
                         log.info("[q] Quit")
@@ -158,7 +158,6 @@ def main() -> None:
                         log.info("[c] Canvas cleared")
                     else:
                         renderer.handle_key(event.key)
-                sz = screen.get_size()
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1:
                         cap.on_mouse_down(event.pos, sz)
@@ -211,10 +210,13 @@ def main() -> None:
                     last_raw_surface.get_height() / last_raw_surface.get_width()
                 )
                 raw_h = round(w * raw_aspect)
-                screen.blit(
-                    pygame.transform.smoothscale(last_raw_surface, (w, raw_h)),
-                    (0, 0),
+                raw_target = (w, raw_h)
+                blit_raw = (
+                    last_raw_surface
+                    if last_raw_surface.get_size() == raw_target
+                    else pygame.transform.smoothscale(last_raw_surface, raw_target)
                 )
+                screen.blit(blit_raw, (0, 0))
                 board_y = raw_h
             else:
                 board_y = 0
@@ -223,10 +225,13 @@ def main() -> None:
                     last_board_surface.get_height() / last_board_surface.get_width()
                 )
                 board_h = round(w * board_aspect)
-                screen.blit(
-                    pygame.transform.smoothscale(last_board_surface, (w, board_h)),
-                    (0, board_y),
+                board_target = (w, board_h)
+                blit_board = (
+                    last_board_surface
+                    if last_board_surface.get_size() == board_target
+                    else pygame.transform.smoothscale(last_board_surface, board_target)
                 )
+                screen.blit(blit_board, (0, board_y))
             if last_raw_surface is not None or last_board_surface is not None:
                 fps_surf = fps_font.render(
                     f"{clock.get_fps():.1f} fps", True, (0, 255, 0)
